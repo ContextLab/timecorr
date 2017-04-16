@@ -3,3 +3,4 @@ sphinx
 numpy
 pandas
 hypertools
+scipy

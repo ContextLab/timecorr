@@ -1,13 +1,8 @@
 import numpy as np
-# cimport numpy as np
-from scipy.stats.stats import pearsonr
-from scipy.io import loadmat
-import sys
 from math import exp, sqrt, pi
-import matplotlib.pyplot as plt
 from scipy.spatial.distance import squareform
 
-def correlation_calculation_single(activations, gaussian_variance, estimation_range):
+def wcorr(activations, gaussian_variance, estimation_range):
     # cdef np.ndarray gaussian_array, covariances, covariances_vector
     # cdef np.ndarray activations_shifted, covariance_fragments
     # cdef int timepoint, i, half_range
@@ -36,7 +31,7 @@ def correlation_calculation_single(activations, gaussian_variance, estimation_ra
     return covariances_vector
 
 
-def ISFC(activations, gaussian_variance, estimation_range):
+def isfc(activations, gaussian_variance, estimation_range):
     #cython variable declaration
     # cdef int time_len, activations_len, subj_num, timepoint, subject
     # cdef double val

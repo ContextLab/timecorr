@@ -37,7 +37,7 @@ def levelup(x0, var=100, wlen=3):
     return hyp.tools.reduce(c, ndims=V)
 
 
-def timepoint_decoder(x, var=100, wlen=3, nfolds=2, cfun=isfc):
+def timepoint_decoder(data, var=100, wlen=3, nfolds=2, cfun=isfc):
     """
     :param data: a number-of-observations by number-of-features matrix
     :param var: Gaussian variance of kernel for computing timepoint correlations
@@ -53,7 +53,7 @@ def timepoint_decoder(x, var=100, wlen=3, nfolds=2, cfun=isfc):
     def get_xval_assignments(ndata, nfolds):
         group_assignments = np.zeros(ndata)
         groupsize = int(np.ceil(ndata / nfolds))
-
+        
         # group assignments
         for i in range(1, nfolds):
             inds = np.arange(i * groupsize, np.min([(i + 1) * groupsize, ndata]))

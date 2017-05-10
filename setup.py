@@ -11,13 +11,12 @@ with open('LICENSE') as f:
 
 setup(
     name='timecorr',
-    version='0.1.0',
-    description='Sample package for Python-Guide.org',
-    long_description=readme,
+    version='0.1.1',
+    description='Compute moment-by-moment correlations in timeseries data',
+    long_description='Write this...',
     author='Contextual Dynamics Laboratory',
     author_email='contextualdynamics@gmail.com',
     url='https://github.com/ContextLab/timecorr',
     license=license,
     packages=find_packages(exclude=('tests', 'docs'))
 )
-

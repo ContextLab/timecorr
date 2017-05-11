@@ -1,6 +1,6 @@
 import numpy as np
 from math import exp, sqrt, pi
-from scipy.spatial.distance import squareform
+from scipy.spatial.distance import squareform,cdist
 
 def wcorr(activations, gaussian_variance, estimation_range):
     # cdef np.ndarray gaussian_array, covariances, covariances_vector
@@ -13,10 +13,9 @@ def wcorr(activations, gaussian_variance, estimation_range):
     covariances = covariance_fragments = np.zeros([time_len, activations_len, activations_len])
     covariances_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
     activations_shifted = activations
-    # - np.concatenate((np.zeros([activations_len,1]),activations[:,:-1]),1)
 
     for timepoint in range(half_range,time_len-half_range):
-        covariance_fragments[timepoint,:,:] = np.cov(activations_shifted[:,(timepoint-1):(timepoint+2)])
+        covariance_fragments[timepoint,:,:] = np.corrcoef(activations_shifted[:,(timepoint-1):(timepoint+2)])
     covariance_fragments[range(half_range),:,:], covariance_fragments[range(time_len-half_range, time_len),:,:] = covariance_fragments[1,:,:], covariance_fragments[time_len-2,:,:]
 
     for timepoint in range(time_len):
@@ -55,7 +54,6 @@ def isfc(activations, gaussian_variance, estimation_range):
 
     #generate the activation matrix by finding difference between consecutive datapoints
     activations_shifted = activations
-    #  - np.concatenate((np.zeros([subj_num,activations_len,1]),activations[:,:,:-1]),2)
 
     #create a matrix that, for each subject, contains the sum of the data for all other subjects
     activations_sum = (np.tile(np.sum(activations_shifted,0),[subj_num,1,1]) - activations_shifted)/(subj_num-1)
@@ -64,8 +62,10 @@ def isfc(activations, gaussian_variance, estimation_range):
     for subj in range(subj_num):
         #calculate covariance fragments for each timepoint using 3 consecutive timepoints
         for timepoint in range(1,time_len-1):
-            covariance_fragments[subj,timepoint,:,:] = np.cov(activations_shifted[subj,:,(timepoint-1):(timepoint+2)],\
-                                                            activations_sum[subj,:,(timepoint-1):(timepoint+2)])[:activations_len,activations_len:]
+            # covariance_fragments[subj,timepoint,:,:] = np.cov(activations_shifted[subj,:,(timepoint-1):(timepoint+2)],\
+            #                                                 activations_sum[subj,:,(timepoint-1):(timepoint+2)])[:activations_len,activations_len:]
+            covariance_fragments[subj,timepoint,:,:] = cdist(activations_shifted[subj,:,(timepoint-1):(timepoint+2)],\
+                                                            activations_sum[subj,:,(timepoint-1):(timepoint+2)],'correlation')
         #the first and last timepoint of the covariance fragments are equal to the second and second to last fragments
         covariance_fragments[subj,0,:,:], covariance_fragments[subj,time_len-1,:,:] = covariance_fragments[subj,1,:,:], covariance_fragments[subj,time_len-2,:,:]
 

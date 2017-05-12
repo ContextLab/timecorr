@@ -71,9 +71,7 @@ def timepoint_decoder(data, var=100, wlen=3, nfolds=2, cfun=isfc):
     results = copy(results_template)
     for i in range(0, nfolds):
         shuffle(subj_indices)
-        print(subj_indices[:(subj_num/2)])
-        # print(np.squeeze(np.argwhere(group_assignments == i)).astype(int))
-        in_fold_corrs = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=var, wlen=wlen, cfun=cfun, mode="across")
+        in_fold_corrs = timecorr([data[z] for z in subj_indices[:(subj_num/2)]]t, var=var, wlen=wlen, cfun=cfun, mode="across")
         out_fold_corrs = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=var, wlen=wlen, cfun=cfun, mode="across")
         corrs = 1 - sd.cdist(in_fold_corrs, out_fold_corrs, 'correlation')
 

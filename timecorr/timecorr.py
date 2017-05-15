@@ -50,28 +50,13 @@ def timepoint_decoder(data, var=100, wlen=3, nfolds=2, cfun=isfc):
        'error': mean estimation error (across all timepoints and folds) between the decoded and actual window numbers,
                 expressed as a percentage of the total number of windows
     """
-    # def get_xval_assignments(ndata, nfolds):
-    #     group_assignments = np.zeros(ndata)
-    #     groupsize = int(np.ceil(ndata / nfolds))
-    #
-    #     # group assignments
-    #     for i in range(1, nfolds):
-    #         inds = np.arange(i * groupsize, np.min([(i + 1) * groupsize, ndata]))
-    #         group_assignments[inds] = i
-    #     np.random.shuffle(group_assignments)
-    #     return group_assignments
-    #
-    # group_assignments = get_xval_assignments(len(data), nfolds).astype(int)
-    # print(group_assignments)
-
-    # fill in results
     subj_num=len(data)
     subj_indices = range(subj_num)
     results_template = {'rank': 0, 'accuracy': 0, 'error': 0}
     results = copy(results_template)
     for i in range(0, nfolds):
         shuffle(subj_indices)
-        in_fold_corrs = timecorr([data[z] for z in subj_indices[:(subj_num/2)]]t, var=var, wlen=wlen, cfun=cfun, mode="across")
+        in_fold_corrs = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=var, wlen=wlen, cfun=cfun, mode="across")
         out_fold_corrs = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=var, wlen=wlen, cfun=cfun, mode="across")
         corrs = 1 - sd.cdist(in_fold_corrs, out_fold_corrs, 'correlation')
 
@@ -80,7 +65,8 @@ def timepoint_decoder(data, var=100, wlen=3, nfolds=2, cfun=isfc):
         #timepoint_dists = la.toeplitz(np.arange(corrs.shape[0]))
         for t in range(0, corrs.shape[0]):
 
-            include_inds = np.unique(np.append(np.where(timepoint_dists[t, :] > 0), np.array(t)))
+            include_inds = np.arange(corrs.shape[0])
+            # include_inds = np.unique(np.append(np.where(timepoint_dists[t, :] > 0), np.array(t)))
             #include_inds = np.unique(np.append(np.where(timepoint_dists[t, :] > windowsize), np.array(t))) # more liberal test
 
             decoded_inds = include_inds[np.where(corrs[t, include_inds] == np.max(corrs[t, include_inds]))]

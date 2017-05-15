@@ -4,5 +4,5 @@ import numpy
 setup(
   name = 'timecorr helper',
   include_dirs=[numpy.get_include()],
-  ext_modules = cythonize("corr_helper.pyx"),
+  ext_modules = cythonize("helpers.pyx"),
 )

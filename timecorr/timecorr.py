@@ -6,9 +6,9 @@ import scipy.spatial.distance as sd
 from _shared.helpers import isfc, wcorr
 
 
-def timecorr(x, var=100, wlen=3, mode="within", cfun=isfc):
+def timecorr(x, var=100, mode="within", cfun=isfc):
     if (not type(x) == list) and (len(x.shape)==2):
-        return wcorr(x.T, var, wlen)
+        return wcorr(x.T, var)
     else:
         # the data file is expected to be of dimensions [subject number, time length, activations length]
         # and converted to dimensions [subject number, activations length, time length]
@@ -20,28 +20,27 @@ def timecorr(x, var=100, wlen=3, mode="within", cfun=isfc):
             V, T = x[0].shape
             result = np.zeros([S, T, (V * (V - 1) / 2)])
             for i in range(S):
-                result[i] = wcorr(x[i], var, wlen)
+                result[i] = wcorr(x[i], var)
             return result
         elif mode=="across":
-            return cfun(x, var, wlen)
+            return cfun(x, var)
         else:
             raise NameError('Mode unknown or not supported: ' + mode)
 
 
-def levelup(x0, var=100, wlen=3):
+def levelup(x0, var=100):
     if type(x0) == list:
         V = np.max(np.array(map(lambda x: x.shape[1], x0)))
     else:
         V = x0.shape[1]
-    c = timecorr(x0, var=var, wlen=wlen, mode="within")
+    c = timecorr(x0, var=var, mode="within")
     return hyp.tools.reduce(c, ndims=V)
 
 
-def timepoint_decoder(data, var=100, wlen=3, nfolds=2, cfun=isfc):
+def timepoint_decoder(data, var=100, nfolds=2, cfun=isfc):
     """
     :param data: a number-of-observations by number-of-features matrix
     :param var: Gaussian variance of kernel for computing timepoint correlations
-    :param wlen: length of envelope for estimating local covariance structure
     :param nfolds: number of cross-validation folds (train using out-of-fold data; test using in-fold data)
     :param cfun: function for transforming the group data (default: isfc)
     :return: results dictionary with the following keys:
@@ -56,8 +55,8 @@ def timepoint_decoder(data, var=100, wlen=3, nfolds=2, cfun=isfc):
     results = copy(results_template)
     for i in range(0, nfolds):
         shuffle(subj_indices)
-        in_fold_corrs = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=var, wlen=wlen, cfun=cfun, mode="across")
-        out_fold_corrs = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=var, wlen=wlen, cfun=cfun, mode="across")
+        in_fold_corrs = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=var, cfun=cfun, mode="across")
+        out_fold_corrs = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=var, cfun=cfun, mode="across")
         corrs = 1 - sd.cdist(in_fold_corrs, out_fold_corrs, 'correlation')
 
         next_results = copy(results_template)

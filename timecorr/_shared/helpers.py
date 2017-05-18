@@ -1,14 +1,8 @@
 import numpy as np
-cimport numpy as np
 from math import exp, sqrt, pi
 from scipy.spatial.distance import squareform, cdist
 
 def wcorr(activations, gaussian_variance):
-    # #cython variable declaration
-    cdef int time_len, activations_len, timepoint, i, j, index
-    cdef np.ndarray[double, ndim=2] correlations_vector, coefficient_tiled
-    cdef np.ndarray gaussian_array, sigma, coefficient
-
     #assign initial parameters
     activations_len, time_len= activations.shape
     correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
@@ -25,17 +19,9 @@ def wcorr(activations, gaussian_variance):
             for j in range(i+1, activations_len):
                 correlations_vector[timepoint, index] = np.sum(np.multiply(np.multiply(coefficient, normalized_activations[i]), normalized_activations[j]))/(sigma[i]*sigma[j]*coefficient_sum)
                 index+=1
-
     return correlations_vector
 
-def isfc(double[:,:,:] activations, int gaussian_variance):
-    #cython variable declaration
-    cdef int time_len, activations_len, subj_num, timepoint, subj
-    cdef np.ndarray[double, ndim=2] correlations_vector, normalized_activations, coefficients,normalized_sum_activations
-    cdef np.ndarray[double, ndim=3] c_activations, activations_sum, correlations_mean
-    cdef np.ndarray[double, ndim=4] correlations
-    cdef np.ndarray gaussian_array, coefficients_sum, coefficient, sigma_activations, sigma_activations_sum
-
+def isfc(activations, gaussian_variance):
     #assign initial parameters
     subj_num, activations_len, time_len= activations.shape[0],activations.shape[1],activations.shape[2]
     coefficients_sum = np.zeros(time_len)
@@ -61,14 +47,14 @@ def isfc(double[:,:,:] activations, int gaussian_variance):
             sigma_activations  = np.sqrt(np.sum(np.multiply(coefficients[timepoint], np.square(normalized_activations)),1)/coefficients_sum[timepoint])
             sigma_activations_sum = np.sqrt(np.sum(np.multiply(coefficients[timepoint], np.square(normalized_sum_activations)),1)/coefficients_sum[timepoint])
 
-            for i in range(activations_len-1):
+            for i in range(activations_len):
                 for j in range(activations_len):
-                    correlations[subj, timepoint, i,j] = np.sum(np.multiply(np.multiply(coefficients[timepoint], normalized_activations[i]), normalized_sum_activations[j]))/(sigma_activations[i]*sigma_activations_sum[j]*coefficients_sum[timepoint])
-
+                    correlations[subj, timepoint, i,j] = np.sum(np.multiply(np.multiply(coefficients[timepoint,0], normalized_activations[i]), normalized_sum_activations[j]))/(sigma_activations[i]*sigma_activations_sum[j]*coefficients_sum[timepoint])
 
     #normalize and average the correlation matrix
     correlations_mean = np.mean(0.5*(np.log(1+correlations) - np.log(1-correlations)),0)/2
-    correlations_mean =  (np.exp(correlations_mean+correlations_mean.T) - 1)/(np.exp(correlations_mean+correlations_mean.T) + 1)
+    correlations_mean = correlations_mean+np.swapaxes(correlations_mean,1,2)
+    correlations_mean =  (np.exp(correlations_mean) - 1)/(np.exp(correlations_mean) + 1)
 
 
     for i in range(time_len):
@@ -79,9 +65,6 @@ def isfc(double[:,:,:] activations, int gaussian_variance):
 
 
 def sliding_window(activations, estimation_range):
-    cdef np.ndarray correlations_vector, correlations
-    cdef int timepoint, time_len, activations_len
-
     activations_len, time_len = activations.shape
     time_len -= estimation_range-1
     correlations = np.zeros([time_len,activations_len,activations_len])

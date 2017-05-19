@@ -16,8 +16,7 @@ def timecorr(x, var=100, mode="within", cfun=isfc):
         x = np.swapaxes(x, 1, 2)
         # Calculate correlation for activations within each subject
         if mode=="within":
-            S = len(x)
-            V, T = x[0].shape
+            S, V, T = x.shape
             result = np.zeros([S, T, (V * (V - 1) / 2)])
             for i in range(S):
                 result[i] = wcorr(x[i], var)

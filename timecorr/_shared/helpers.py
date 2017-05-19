@@ -52,7 +52,7 @@ def isfc(activations, gaussian_variance):
                     correlations[subj, timepoint, i,j] = np.sum(np.multiply(np.multiply(coefficients[timepoint,0], normalized_activations[i]), normalized_sum_activations[j]))/(sigma_activations[i]*sigma_activations_sum[j]*coefficients_sum[timepoint])
 
     #normalize and average the correlation matrix
-    correlations_mean = np.mean(0.5*(np.log(1+correlations) - np.log(1-correlations)),0)/2
+    correlations_mean = np.mean(0.5*(np.log(1+correlations) - np.log(1-correlations)),0)
     correlations_mean = correlations_mean+np.swapaxes(correlations_mean,1,2)
     correlations_mean =  (np.exp(correlations_mean) - 1)/(np.exp(correlations_mean) + 1)
 

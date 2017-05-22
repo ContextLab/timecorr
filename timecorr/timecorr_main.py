@@ -6,7 +6,7 @@ import scipy.spatial.distance as sd
 from _shared.helpers import isfc, wcorr
 
 
-def timecorr(x, var=100, mode="within", cfun=isfc):
+def timecorr(x, var=1000, mode="within", cfun=isfc):
     if (not type(x) == list) and (len(x.shape)==2):
         return wcorr(x.T, var)
     else:
@@ -27,7 +27,7 @@ def timecorr(x, var=100, mode="within", cfun=isfc):
             raise NameError('Mode unknown or not supported: ' + mode)
 
 
-def levelup(x0, var=100):
+def levelup(x0, var=1000):
     if type(x0) == list:
         V = np.max(np.array(map(lambda x: x.shape[1], x0)))
     else:
@@ -36,7 +36,7 @@ def levelup(x0, var=100):
     return hyp.tools.reduce(c, ndims=V)
 
 
-def timepoint_decoder(data, var=100, nfolds=2, cfun=isfc):
+def timepoint_decoder(data, var=1000, nfolds=2, cfun=isfc):
     """
     :param data: a number-of-observations by number-of-features matrix
     :param var: Gaussian variance of kernel for computing timepoint correlations

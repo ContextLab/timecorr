@@ -71,8 +71,8 @@ def wcorr(activations, gaussian_variance):
         normalized_activations = activations - np.tile(np.reshape(np.sum(np.multiply(coefficient_tiled,activations),1),[activations_len,1]),[1,time_len])/coefficient_sum
         sigma  = np.sqrt(np.sum(np.multiply(coefficient_tiled, np.square(normalized_activations)),1)/coefficient_sum)
         index = 0
-        for i in range(activations_len):
-            for j in range(activations_len):
+        for i in range(activations_len-1):
+            for j in range(i+1,activations_len):
                 correlations_vector[timepoint, index] = np.sum(np.multiply(np.multiply(coefficient, normalized_activations[i]), normalized_activations[j]))/(sigma[i]*sigma[j]*coefficient_sum)
                 index+=1
 

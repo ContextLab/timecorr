@@ -1,17 +1,13 @@
-#cython
-cimport cython
 import numpy as np
 cimport numpy as np
 from math import exp, sqrt, pi
 from scipy.spatial.distance import squareform, cdist
 
-@cython.boundscheck(False)
-@cython.wraparound(False)
-def isfc(multi_activations, int gaussian_variance):
+def isfc(double[:,:,:] multi_activations, int gaussian_variance):
     #cython variable declaration
     cdef int time_len, activations_len, subj_num, timepoint, subj
-    cdef np.ndarray[double, ndim=2] correlations_vector, normalized_activations, coefficients,normalized_sum_activations
-    cdef np.ndarray[double, ndim=3] c_activations, activations_sum, correlations_mean
+    cdef np.ndarray[double, ndim=2] correlations_vector, normalized_activations,normalized_sum_activations
+    cdef np.ndarray[double, ndim=3] c_activations, activations_sum, correlations_mean, coefficients
     cdef np.ndarray[double, ndim=4] correlations
     cdef np.ndarray gaussian_array, coefficients_sum, coefficient, sigma_activations, sigma_activations_sum
 
@@ -45,7 +41,7 @@ def isfc(multi_activations, int gaussian_variance):
                     correlations[subj, timepoint, i,j] = np.sum(np.multiply(np.multiply(coefficients[timepoint,0], normalized_activations[i]), normalized_sum_activations[j]))/(sigma_activations[i]*sigma_activations_sum[j]*coefficients_sum[timepoint])
 
     #normalize and average the correlation matrix
-    correlations_mean = np.mean(0.5*(np.log(1+correlations) - np.log(1-correlations)),0)/2
+    correlations_mean = np.mean(0.5*(np.log(1+correlations) - np.log(1-correlations)),0)
     correlations_mean = correlations_mean+np.swapaxes(correlations_mean,1,2)
     correlations_mean =  (np.exp(correlations_mean) - 1)/(np.exp(correlations_mean) + 1)
 
@@ -54,6 +50,8 @@ def isfc(multi_activations, int gaussian_variance):
         correlations_vector[i] = squareform(correlations_mean[i,:,:],checks=False)
 
     return correlations_vector
+
+
 
 def wcorr(activations, gaussian_variance):
     # #cython variable declaration
@@ -73,14 +71,12 @@ def wcorr(activations, gaussian_variance):
         normalized_activations = activations - np.tile(np.reshape(np.sum(np.multiply(coefficient_tiled,activations),1),[activations_len,1]),[1,time_len])/coefficient_sum
         sigma  = np.sqrt(np.sum(np.multiply(coefficient_tiled, np.square(normalized_activations)),1)/coefficient_sum)
         index = 0
-        for i in range(activations_len-1):
-            for j in range(i+1, activations_len):
+        for i in range(activations_len):
+            for j in range(activations_len):
                 correlations_vector[timepoint, index] = np.sum(np.multiply(np.multiply(coefficient, normalized_activations[i]), normalized_activations[j]))/(sigma[i]*sigma[j]*coefficient_sum)
                 index+=1
 
     return correlations_vector
-
-
 
 
 

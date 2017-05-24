@@ -1,3 +1,3 @@
 #!/usr/bin/env python
 
-from timecorr_main import timecorr, levelup, timepoint_decoder
+from .timecorr import timecorr, levelup, timepoint_decoder

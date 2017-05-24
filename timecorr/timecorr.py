@@ -3,11 +3,12 @@ import hypertools as hyp
 from copy import copy
 from random import shuffle
 import scipy.spatial.distance as sd
-from _shared.helpers import isfc, wcorr
+from _shared.helpers import isfc, wcorr, sliding_window, sliding_window_isfc
 
 
-def timecorr(x, var=1000, mode="within", cfun=isfc):
+def timecorr(x, mode="within", cfun=isfc):
     if (not type(x) == list) and (len(x.shape)==2):
+        var = min(1000, x.shape[0])
         return wcorr(x.T, var)
     else:
         # the data file is expected to be of dimensions [subject number, time length, activations length]
@@ -15,8 +16,9 @@ def timecorr(x, var=1000, mode="within", cfun=isfc):
         x = np.array(x)
         x = np.swapaxes(x, 1, 2)
         # Calculate correlation for activations within each subject
+        S, V, T = x.shape
+        var = min(T, 1000)
         if mode=="within":
-            S, V, T = x.shape
             result = np.zeros([S, T, (V * (V - 1) / 2)])
             for i in range(S):
                 result[i] = wcorr(x[i], var)
@@ -27,16 +29,36 @@ def timecorr(x, var=1000, mode="within", cfun=isfc):
             raise NameError('Mode unknown or not supported: ' + mode)
 
 
-def levelup(x0, var=1000):
-    if type(x0) == list:
+def levelup(x0, mode = "within"):
+    print(mode)
+    if type(x0) == list or len(x0.shape)>2:
         V = np.max(np.array(map(lambda x: x.shape[1], x0)))
+        T = np.min(np.array(map(lambda x: x.shape[0], x0)))
     else:
-        V = x0.shape[1]
-    c = timecorr(x0, var=var, mode="within")
+        T, V = x0.shape
+    var = min(T, 1000)
+    c = timecorr(x0, mode=mode)
+    print(len(c),c[0].shape)
+    return hyp.tools.reduce(c, ndims=V)
+
+def sliding_window_levelup(x0, estimation_range=51, mode = "within"):
+    if type(x0) == list or len(x0.shape)>2:
+        c=[]
+        V = np.max(np.array(map(lambda x: x.shape[1], x0)))
+        T = np.min(np.array(map(lambda x: x.shape[0], x0)))
+        if mode=="within":
+            for i in range(len(x0)):
+                c.append(sliding_window(x0[i],estimation_range))
+        else:
+            x0=np.array(x0)
+            c = sliding_window_isfc(x0,estimation_range)
+    else:
+        T, V = x0.shape
+        c = sliding_window(x0, estimation_range)
     return hyp.tools.reduce(c, ndims=V)
 
 
-def timepoint_decoder(data, var=1000, nfolds=2, cfun=isfc):
+def timepoint_decoder(data, nfolds=2, cfun=isfc):
     """
     :param data: a number-of-observations by number-of-features matrix
     :param var: Gaussian variance of kernel for computing timepoint correlations
@@ -52,10 +74,10 @@ def timepoint_decoder(data, var=1000, nfolds=2, cfun=isfc):
     subj_indices = range(subj_num)
     results_template = {'rank': 0, 'accuracy': 0, 'error': 0}
     results = copy(results_template)
-    for i in range(0, nfolds):
+    for i in range(nfolds):
         shuffle(subj_indices)
-        in_fold_corrs = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=var, cfun=cfun, mode="across")
-        out_fold_corrs = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=var, cfun=cfun, mode="across")
+        in_fold_corrs = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], cfun=cfun, mode="across")
+        out_fold_corrs = timecorr([data[z] for z in subj_indices[(subj_num/2):]], cfun=cfun, mode="across")
         corrs = 1 - sd.cdist(in_fold_corrs, out_fold_corrs, 'correlation')
 
         next_results = copy(results_template)

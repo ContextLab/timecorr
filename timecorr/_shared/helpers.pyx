@@ -77,3 +77,44 @@ def wcorr(activations, gaussian_variance):
                 index+=1
 
     return correlations_vector
+
+def sliding_window(activations, estimation_range):
+    cdef np.ndarray correlations_vector, correlations
+    cdef int timepoint, time_len, activations_len
+
+    activations_len, time_len = activations.shape
+    time_len -= estimation_range-1
+    correlations = np.zeros([time_len,activations_len,activations_len])
+    correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
+
+    for timepoint in range(time_len):
+        correlations[timepoint] = np.corrcoef(activations[:,timepoint:(timepoint+estimation_range)])
+        correlations_vector[timepoint] = squareform(correlations[timepoint,:,:],checks=False)
+
+    return correlations_vector
+
+
+def sliding_window_isfc(activations, estimation_range):
+    cdef int time_len, activations_len, subj_num, timepoint, subj
+    cdef np.ndarray[double, ndim=3] c_activations, activations_sum, correlations_mean, coefficients
+    cdef np.ndarray[double, ndim=4] correlations
+    cdef np.ndarray[double, ndim=2] correlations_vector
+
+    subj_num, activations_len, time_len= activations.shape[0],activations.shape[1],activations.shape[2]
+    correlations= np.zeros([subj_num, time_len,activations_len,activations_len])
+    correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
+    c_activations = np.array(activations)
+    activations_sum = (np.tile(np.sum(c_activations,0),[subj_num,1,1]) - c_activations)/(subj_num-1.0)
+    for subj in range(subj_num):
+        for timepoint in range(time_len):
+            correlations[subj, timepoint] = 1-cdist(c_activations[subj,:,timepoint:(timepoint+estimation_range)],activations_sum[subj,:,timepoint:(timepoint+estimation_range)],"correlation")
+
+    #normalize and average the correlation matrix
+    correlations_mean = np.mean(0.5*(np.log(1+correlations) - np.log(1-correlations)),0)
+    correlations_mean = correlations_mean+np.swapaxes(correlations_mean,1,2)
+    correlations_mean =  (np.exp(correlations_mean) - 1)/(np.exp(correlations_mean) + 1)
+
+    for i in range(time_len):
+        correlations_vector[i] = squareform(correlations_mean[i,:,:],checks=False)
+
+    return correlations_vector

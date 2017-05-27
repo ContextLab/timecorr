@@ -11,16 +11,52 @@ To install the TimeCorr toolbox, type `pip install .` from within the TimeCorr f
 
 ## Basic usage ##
 ### `timecorr` "within" mode ###
-(add instructions for timecorr within mode)
+Example command: timecorr(x0, mode="within")
+
+The "within" mode of `timecorr` is available for single subject and multiple subject inputs:
+Single subject:
+  Input x0:
+      A T x V dimensional Numpy matrix, where T and V represent the number of timepoints and the number of voxels in the dataset, respectively.
+  Return:
+      A T x (V^2 - V)/2 dimensional Numpy matrix, where each row is the reverse square form of the correlation matrix at each timepoint.
+Multiple subjects:
+  Input x0:
+      A list of T x V dimensional Numpy matrices, where each matrix represents the activations of a single subject. T and V represent the number of timepoints and the number of voxels in the dataset, respectively.
+  Return:
+      A list of T x (V^2 - V)/2 dimensional Numpy matrices, where each matrix is the represents the correlation patterns for a single subject. Within each matrix, each row is the reverse square form of the correlation matrix at each timepoint.
 
 ### `timecorr` "across" mode ###
-(add instructions for timecorr across mode)
+Example command: timecorr(x0, mode="across")
+
+The "across" mode of `timecorr` is only available for multiple subject inputs:
+  Input x0:
+      A list of T x V dimensional Numpy matrices, where each matrix represents the activations of a single subject. T and V represent the number of timepoints and the number of voxels in the dataset, respectively.
+  Return:
+      A T x (V^2 - V)/2 dimensional Numpy matrix, where each row is the reverse square form of the inter-subject Functional Connectivity matrix at each timepoint.
 
 ### `levelup` "within" mode ###
-(add instructions for levelup within mode)
+Example command: levelup(x0, mode="within")
+
+The "within" mode of `levelup` is available for single subject and multiple subject inputs:
+Single subject:
+  Input x0:
+      A T x V dimensional Numpy matrix, where T and V represent the number of timepoints and the number of voxels in the dataset, respectively.
+  Return:
+      A T x V dimensional Numpy matrix, where each row is the PCA reduced reverse square form of the correlation matrix at each timepoint.
+Multiple subjects:
+  Input x0:
+      A list of T x V dimensional Numpy matrices, where each matrix represents the activations of a single subject. T and V represent the number of timepoints and the number of voxels in the dataset, respectively.
+  Return:
+      A list of T x V dimensional Numpy matrices, where each matrix is the represents the correlation patterns for a single subject. Within each matrix, each row is the PCA reduced reverse square form of the correlation matrix at each timepoint.
 
 ### `levelup` "across" mode ###
-(add instructions for levelup across mode)
+Example command: levelup(x0, mode="across")
+
+The "across" mode of `levelup` is only available for multiple subject inputs:
+  Input x0:
+      A list of T x V dimensional Numpy matrices, where each matrix represents the activations of a single subject. T and V represent the number of timepoints and the number of voxels in the dataset, respectively.
+  Return:
+      A T x V dimensional Numpy matrix, where each row is the PCA reduced reverse square form of the inter-subject Functional Connectivity matrix at each timepoint.
 
 ## Citing this toolbox ##
 (add citation information)

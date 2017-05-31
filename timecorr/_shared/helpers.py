@@ -41,7 +41,7 @@ def isfc(multi_activations, gaussian_variance):
 
     #calculate the correlations for each timepoint for each subject
     p = Pool(cpu_count()-1)
-    correlations = np.array(map(isfc_helper,range(subj_num)))
+    correlations = np.array(p.map(isfc_helper,range(subj_num)))
     p.terminate()
 
     #normalize and average the correlation matrix

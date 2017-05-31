@@ -2,7 +2,7 @@ import numpy as np
 from math import exp, sqrt, pi
 from scipy.spatial.distance import squareform, cdist
 import dill
-from multiprocessing import Pool
+from multiprocessing import Pool,cpu_count
 coefficients, activations_sum, coefficients_sum, c_activations=0,0,0,0
 time_len, subj_num, activations_len = 0,0,0
 def isfc_helper(subj):
@@ -40,7 +40,7 @@ def isfc(multi_activations, gaussian_variance):
     activations_sum = (np.tile(np.sum(c_activations,0),[subj_num,1,1]) - c_activations)/(subj_num-1.0)
 
     #calculate the correlations for each timepoint for each subject
-    p = Pool(10)
+    p = Pool(cpu_count()-1)
     correlations = np.array(map(isfc_helper,range(subj_num)))
     p.terminate()
 

@@ -6,7 +6,7 @@ import scipy.spatial.distance as sd
 from _shared.helpers import isfc, wcorr, sliding_window, sliding_window_isfc
 
 
-def timecorr(x, mode="within", cfun=isfc):
+def timecorr(x, var=None, mode="within", cfun=isfc):
     """
     Performs the timecorr operation on a brain dynamics dataset
 
@@ -64,7 +64,7 @@ def timecorr(x, mode="within", cfun=isfc):
 
     """
     if (not type(x) == list) and (len(x.shape)==2):
-        return wcorr(x.T)
+        return wcorr(x.T, var=var)
     else:
         # the data file is expected to be of dimensions [subject number, time length, activations length]
         # and converted to dimensions [subject number, activations length, time length]
@@ -75,15 +75,15 @@ def timecorr(x, mode="within", cfun=isfc):
         if mode=="within":
             result = []
             for i in range(S):
-                result.append(wcorr(x[i]))
+                result.append(wcorr(x[i], var=var))
             return result
         elif mode=="across":
-            return cfun(x)
+            return cfun(x, var=var)
         else:
             raise NameError('Mode unknown or not supported: ' + mode)
 
 
-def levelup(x0, mode = "within"):
+def levelup(x0, var=None, mode = "within"):
     """
     This function applies timecorr function on a brain activation dataset and
     uses PCA to reduce the output to the original dimensions as representation
@@ -137,11 +137,11 @@ def levelup(x0, mode = "within"):
         T = np.min(np.array(map(lambda x: x.shape[0], x0)))
     else:
         T, V = x0.shape
-    c = timecorr(x0, mode=mode)
+    c = timecorr(x0, var = var, mode=mode)
     return hyp.tools.reduce(c, ndims=V)
 
 
-def timepoint_decoder(data, nfolds=2, cfun=isfc):
+def decode(data, var=None, nfolds=2, cfun=isfc):
     """
     :param data: a number-of-observations by number-of-features matrix
     :param nfolds: number of cross-validation folds (train using out-of-fold data; test using in-fold data)
@@ -153,8 +153,8 @@ def timepoint_decoder(data, nfolds=2, cfun=isfc):
     accuracy = 0
     for i in range(nfolds):
         shuffle(subj_indices)
-        in_fold_corrs = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], cfun=cfun, mode="across")
-        out_fold_corrs = timecorr([data[z] for z in subj_indices[(subj_num/2):]], cfun=cfun, mode="across")
+        in_fold_corrs = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=var, cfun=cfun, mode="across")
+        out_fold_corrs = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=var, cfun=cfun, mode="across")
         corrs = 1 - sd.cdist(in_fold_corrs, out_fold_corrs, 'correlation')
         accuracy_temp = 0
 

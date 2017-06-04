@@ -144,14 +144,9 @@ def levelup(x0, mode = "within"):
 def timepoint_decoder(data, nfolds=2, cfun=isfc):
     """
     :param data: a number-of-observations by number-of-features matrix
-    :param var: Gaussian variance of kernel for computing timepoint correlations
     :param nfolds: number of cross-validation folds (train using out-of-fold data; test using in-fold data)
     :param cfun: function for transforming the group data (default: isfc)
-    :return: results dictionary with the following keys:
-       'rank': mean percentile rank (across all timepoints and folds) in the decoding distribution of the true timepoint
-       'accuracy': mean percent accuracy (across all timepoints and folds)
-       'error': mean estimation error (across all timepoints and folds) between the decoded and actual window numbers,
-                expressed as a percentage of the total number of windows
+    :return: mean percent accuracy (across all timepoints and folds)
     """
     subj_num=len(data)
     subj_indices = range(subj_num)

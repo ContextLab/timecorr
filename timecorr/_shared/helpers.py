@@ -26,13 +26,13 @@ def isfc(multi_activations, var):
     # reference global variables to be used in multiprocessing helper functions
     global coefficients, activations_sum, coefficients_sum, activations
     global gaussian_array, time_len, subj_num, activations_len
-
     # assign initial parameters
     subj_num, activations_len, time_len = multi_activations.shape[0],multi_activations.shape[1],multi_activations.shape[2]
-    if var==None:
+    if var is None:
         gaussian_variance = min(time_len, 1000)
     else:
         gaussian_variance = var
+
     coefficients_sum = np.zeros(time_len)
     correlations= np.zeros([subj_num, time_len,activations_len,activations_len])
     correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
@@ -81,14 +81,13 @@ def wcorr_helper(timepoint):
 
     return squareform(np.dot(np.multiply(coefficient_tiled,normalized_activations),normalized_activations.T)/coefficient_sum, checks=False)
 
-def wcorr(single_activations, var=None):
+def wcorr(single_activations, var):
     # reference global paramters for multiprocessing
     global gaussian_array, activations, time_len, activations_len
-
     # assign initial parameters
     activations = single_activations
     activations_len, time_len= activations.shape
-    if var==None:
+    if var is None:
         gaussian_variance = min(time_len, 1000)
     else:
         gaussian_variance = var

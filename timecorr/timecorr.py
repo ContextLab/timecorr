@@ -167,7 +167,7 @@ def decode(data, var=None, nfolds=2, cfun=isfc):
     accuracy /= nfolds
     return accuracy
 
-def decode_raw_data(data, nfolds, , cfun=isfc):
+def decode_raw_data(data, nfolds=2, cfun=isfc):
     """
     This function applies decoding analysis across multi-subject fMRI dataset to find the decoding accuracy of the dataset, a parameter describing timepoint similarity between subjects. The process is described in more detail in the following paper: http://biorxiv.org/content/early/2017/02/07/106690
 

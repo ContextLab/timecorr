@@ -119,7 +119,7 @@ def levelup(data, var=None, mode = "within"):
 
 def decode(data, var=None, nfolds=2, cfun=isfc):
     """
-    This function applies decoding analysis across multi-subject fMRI dataset to find the decoding accuracy of the dataset, a parameter describing timepoint similarity between subjects. The process is described in more detail in the following paper: http://biorxiv.org/content/early/2017/02/07/106690
+    This function applies decoding analysis across multi-subject fMRI dataset to find the decoding accuracy of the dynamic correlations, a parameter describing timepoint similarity between subjects. The process is described in more detail in the following paper: http://biorxiv.org/content/early/2017/02/07/106690
 
     Parameters
     ----------
@@ -143,7 +143,7 @@ def decode(data, var=None, nfolds=2, cfun=isfc):
     ----------
     Results: float
 
-        The decoding accurcy of the input fRMI matrix
+        The decoding accurcy of the dynamic correlations of the input fRMI matrix
     """
     subj_num=len(data)
     subj_indices = range(subj_num)
@@ -164,5 +164,49 @@ def decode(data, var=None, nfolds=2, cfun=isfc):
         accuracy_temp /= corrs.shape[0]
         accuracy += accuracy_temp
 
+    accuracy /= nfolds
+    return accuracy
+
+def decode_raw_data(data, nfolds, , cfun=isfc):
+    """
+    This function applies decoding analysis across multi-subject fMRI dataset to find the decoding accuracy of the dataset, a parameter describing timepoint similarity between subjects. The process is described in more detail in the following paper: http://biorxiv.org/content/early/2017/02/07/106690
+
+    Parameters
+    ----------
+    data: a list of Numpy matrices
+
+        When calculating temporal brain activation correlation for multiple subjects, x should be a list of Numpy matrices, each containing the brain activations for a single subject. The Numpy matrix for each subject should be of dimensions T x V, where T represents the number of timepoints and V represents the number of voxels in the dataset
+
+    nfolds: int, defaults to 2
+
+        The number of decoding analysis repetitions to perform to obtin stability
+
+    cfunc: isfc, defaults to isfc
+
+        This parameter specifies the type of operation for to calculate the correlation matrix. Currently, only ISFC is available.
+
+    Returns
+    ----------
+    Results: float
+
+        The decoding accurcy of the input fRMI matrix
+    """
+    subj_num=len(data)
+    subj_indices = range(subj_num)
+    accuracy = 0
+    for i in range(nfolds):
+        shuffle(subj_indices)
+        in_fold_corrs = np.mean(data[subj_indices[:(subj_num/2)]],0)
+        out_fold_corrs = np.mean(data[subj_indices[(subj_num/2):]],0)
+        corrs = 1 - sd.cdist(in_fold_corrs, out_fold_corrs, 'correlation')
+        accuracy_temp = 0
+
+        #timepoint_dists = la.toeplitz(np.arange(corrs.shape[0]))
+        for t in range(0, corrs.shape[0]):
+            include_inds = np.arange(corrs.shape[0])
+            decoded_inds = include_inds[np.where(corrs[t, include_inds] == np.max(corrs[t, include_inds]))]
+            accuracy_temp += np.mean(decoded_inds == np.array(t))
+        accuracy_temp /= corrs.shape[0]
+        accuracy += accuracy_temp
     accuracy /= nfolds
     return accuracy

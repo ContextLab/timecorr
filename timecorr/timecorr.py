@@ -107,13 +107,15 @@ def levelup(data, var=None, mode = "within"):
         If x is a list of Numpy matrices and mode="across", this function will return a T x V dimensional matrix containing the representation of the ISFC patterns across the subjects at a higher level.
 
     """
+    v = 0.5 * (sqrt(8 * data[0].shape[1] + 1) - 1)
+
     if type(data) == list or len(data.shape)>2:
         V = np.max(np.array(map(lambda x: x.shape[1], data)))
-        T = np.min(np.array(map(lambda x: x.shape[0], data)))
     else:
-        T, V = data.shape
-    c = timecorr(data, var = var, mode=mode)
-    return hyp.tools.reduce(c, ndims=V)
+        V = data.shape[1]
+    v = 0.5 * (sqrt(8 * V + 1) - 1)
+    hyp.tools.reduce(c, ndims=v)
+    return timecorr(data, var = var, mode=mode)
 
 
 def decode(data, var=None, nfolds=2, cfun=isfc):

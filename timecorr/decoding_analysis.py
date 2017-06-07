@@ -43,7 +43,6 @@ def leveling(activations, nlevels):
     '''
     subject_num = len(activations)
     time_len, voxel_num = activations[0].shape
-    print(subject_num, time_len, voxel_num)
     all_activations = np.zeros([(nlevels+1),subject_num,time_len,voxel_num])
     all_activations[0] = np.array(activations)
     for l in range(nlevels):
@@ -77,7 +76,7 @@ def decoding_analysis(directory, nvoxels, nlevels, var=None, nfolds=3):
     # leveling(activations, nlevels)
     all_activations = np.load("./all_level_activations.npy")
     decoding_accuracy = np.zeros(nlevels+2)
-    decoding_accuracy[0] += decode_raw_data(all_activations[0],nfolds=nfolds)
+    decoding_accuracy[0] = decode_raw_data(all_activations[0],nfolds=nfolds)
     for l in range(nlevels):
         decoding_accuracy[l+1]=decode(all_activations[l],nfolds=nfolds)
     print decoding_accuracy

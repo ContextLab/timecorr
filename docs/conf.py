@@ -12,7 +12,8 @@
 # serve to show the default.
 
 import sys, os
-
+import sphinx_bootstrap_theme
+sys.path.insert(0,os.path.abspath('../'))
 # If extensions (or modules to document with autodoc) are in another directory,
 # add these directories to sys.path here. If the directory is relative to the
 # documentation root, use os.path.abspath to make it absolute, like shown here.
@@ -25,13 +26,25 @@ import sys, os
 
 # Add any Sphinx extension module names here, as strings. They can be extensions
 # coming with Sphinx (named 'sphinx.ext.*') or your custom ones.
-extensions = []
+extensions = ['sphinx.ext.autodoc',
+    'numpydoc',
+    'sphinx.ext.autosummary',
+    'sphinx.ext.viewcode',
+    'nbsphinx']
+    # 'sphinx_gallery.gen_gallery',
+
+
+# do not allow nbsphinx errors
+nbsphinx_allow_errors = False
+
+# Generate the API documentation when building
+# autosummary_generate = True
 
 # Add any paths that contain templates here, relative to this directory.
 templates_path = ['_templates']
 
 # The suffix of source filenames.
-source_suffix = '.rst'
+source_suffix = ['.rst', '.md']
 
 # The encoding of source files.
 #source_encoding = 'utf-8-sig'
@@ -91,7 +104,7 @@ pygments_style = 'sphinx'
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-html_theme = 'default'
+html_theme = 'bootstrap'
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
@@ -120,8 +133,26 @@ html_theme = 'default'
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
-html_static_path = ['_static']
+extlinks = {'github':"https://github.com/ContextLab/timecorr"}
+html_theme_options = {
+    'source_link_position': "footer",
+    'bootswatch_theme': "yeti",
+    'navbar_sidebarrel': False,
+    'bootstrap_version': "3",
+    'navbar_links': [("API", "api")],
 
+    }
+# ,
+#                  ("Gallery", "auto_examples/index"),
+#                  ("Tutorials", "tutorial"),
+#                  ("Download", "http://www.github.com/ContextLab/quail", True)
+# Add any paths that contain custom themes here, relative to this directory.
+html_theme_path = sphinx_bootstrap_theme.get_html_theme_path()
+
+# -- Options for HTMLHelp output ------------------------------------------
+
+# Output file base name for HTML help builder.
+htmlhelp_basename = 'timecorrdoc'
 # If not '', a 'Last updated on:' timestamp is inserted at every page bottom,
 # using the given strftime format.
 #html_last_updated_fmt = '%b %d, %Y'
@@ -216,7 +247,6 @@ man_pages = [
     ('index', 'timecorr', u'timecorr Documentation',
      [u'Contextual Dynamics Laboratory'], 1)
 ]
-
 # If true, show URL addresses after external links.
 #man_show_urls = False
 
@@ -240,3 +270,6 @@ texinfo_documents = [
 
 # How to display URL addresses: 'footnote', 'no', or 'inline'.
 #texinfo_show_urls = 'footnote'
+source_parsers = {
+   '.md': 'recommonmark.parser.CommonMarkParser',
+}

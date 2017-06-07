@@ -15,7 +15,6 @@ def timecorr(data, var=None, mode="within", cfun=isfc):
     Parameters
     ----------
     data: Numpy matrix or a list of Numpy matrices
-
         When calculating temporal brain activation correlation for a single subject, x should be a single Numpy matrix of dimensions T x V, where T represents the number of timepoints and V represents the number of voxels in the dataset. When calculating temporal brain
         activation correlation for multiple subjects, x should be a list of Numpy matrices, each containing the brain activations for a single subject. The Numpy matrix for each subject should be of dimensions T x V, where T represents the number of timepoints and V represents
         the number of voxels in the dataset

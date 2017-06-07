@@ -24,10 +24,17 @@ def load_fmri_data(directory, nvoxels):
         if '.nii' in fname:
             temp = ln(directory+fname)
             temp = hyp.tools.reduce(temp.Y,nvoxels)
-            data.append(temp)
-    return data
+        elif '.npy' in fname:
+            temp = np.load(directory+fname)
+            temp = hyp.tools.reduce(temp,nvoxels)
+        else:
+            continue
 
-def leveling(activations, nlevels):
+        data.append(temp)
+    # np.save(directory+"/raw_data", np.array(data))
+    return np.array(data)
+
+def leveling(directory,activations, nlevels):
     '''
     Level up fRMI activations to the specified number of levels using levelup function from timecorr and store all level activations in a temporary file
 
@@ -41,13 +48,13 @@ def leveling(activations, nlevels):
     Return:
         None
     '''
-    subject_num = len(activations)
-    time_len, voxel_num = activations[0].shape
+    # activations = np.load(directory+"/raw_data.npy")
+    subject_num, time_len, voxel_num = activations.shape
     all_activations = np.zeros([(nlevels+1),subject_num,time_len,voxel_num])
-    all_activations[0] = np.array(activations)
+    all_activations[0] = activations
     for l in range(nlevels):
         all_activations[(l+1)] = np.array(levelup(all_activations[(l)],mode="within"))
-    np.save("./all_level_activations", all_activations)
+    np.save(directory+"/all_level_activations", all_activations)
 
 def decoding_analysis(directory, nvoxels, nlevels, var=None, nfolds=3):
     '''
@@ -73,9 +80,9 @@ def decoding_analysis(directory, nvoxels, nlevels, var=None, nfolds=3):
         A numpy array with the decoding accuracy at each level
     '''
     activations = load_fmri_data(directory, nvoxels)
-    leveling(activations, nlevels)
-    all_activations = np.load("./all_level_activations.npy")
-    decoding_accuracy = np.zeros(nlevels+2)
+    leveling(directory, activations, nlevels)
+    all_activations = np.load(directory+"/all_level_activations.npy")
+    decoding_accuracy = np.zeros(nlevels+1)
     decoding_accuracy[0] = decode_raw_data(all_activations[0],nfolds=nfolds)
     for l in range(nlevels):
         decoding_accuracy[l+1]=decode(all_activations[l],nfolds=nfolds)

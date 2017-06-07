@@ -72,8 +72,8 @@ def decoding_analysis(directory, nvoxels, nlevels, var=None, nfolds=3):
     Return:
         A numpy array with the decoding accuracy at each level
     '''
-    # activations = load_fmri_data(directory, nvoxels)
-    # leveling(activations, nlevels)
+    activations = load_fmri_data(directory, nvoxels)
+    leveling(activations, nlevels)
     all_activations = np.load("./all_level_activations.npy")
     decoding_accuracy = np.zeros(nlevels+2)
     decoding_accuracy[0] = decode_raw_data(all_activations[0],nfolds=nfolds)

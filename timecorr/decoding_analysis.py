@@ -4,6 +4,8 @@ from os import listdir
 from os.path import isfile, join
 from loadnii import loadnii as ln
 from timecorr import levelup, decode, decode_raw_data
+from sklearn.decomposition import IncrementalPCA
+np.seterr(all='ignore')
 
 def load_fmri_data(directory, nvoxels):
     '''
@@ -20,13 +22,14 @@ def load_fmri_data(directory, nvoxels):
     directory = directory+"/"
     onlyfiles = [f for f in listdir(directory) if isfile(join(directory, f))]
     data = []
+    ipca = IncrementalPCA(n_components=nvoxels, batch_size=nvoxels)
     for fname in onlyfiles:
         if '.nii' in fname:
             temp = ln(directory+fname)
-            temp = hyp.tools.reduce(temp.Y,nvoxels)
+            temp = ipca.fit_transform(temp.Y)
         elif '.npy' in fname:
             temp = np.load(directory+fname)
-            temp = hyp.tools.reduce(temp,nvoxels)
+            temp = ipca.fit_transform(temp)
         else:
             continue
 
@@ -34,7 +37,7 @@ def load_fmri_data(directory, nvoxels):
     # np.save(directory+"/raw_data", np.array(data))
     return np.array(data)
 
-def leveling(directory,activations, nlevels):
+def leveling(directory,activations, nlevels,noise=0):
     '''
     Level up fRMI activations to the specified number of levels using levelup function from timecorr and store all level activations in a temporary file
 
@@ -51,12 +54,12 @@ def leveling(directory,activations, nlevels):
     # activations = np.load(directory+"/raw_data.npy")
     subject_num, time_len, voxel_num = activations.shape
     all_activations = np.zeros([(nlevels+1),subject_num,time_len,voxel_num])
-    all_activations[0] = activations
+    all_activations[0] = activations + np.random.normal(0,noise,activations.shape)
     for l in range(nlevels):
         all_activations[(l+1)] = np.array(levelup(all_activations[(l)],mode="within"))
-    np.save(directory+"/all_level_activations", all_activations)
+    np.save("./all_level_activations", all_activations)
 
-def decoding_analysis(directory, nvoxels, nlevels, var=None, nfolds=3):
+def decoding_analysis(directory, nvoxels, nlevels, var=None, nfolds=3, noise=0):
     '''
     Performs decoding analysis
 
@@ -80,10 +83,11 @@ def decoding_analysis(directory, nvoxels, nlevels, var=None, nfolds=3):
         A numpy array with the decoding accuracy at each level
     '''
     activations = load_fmri_data(directory, nvoxels)
-    leveling(directory, activations, nlevels)
-    all_activations = np.load(directory+"/all_level_activations.npy")
+    leveling(directory, activations, nlevels,noise=noise)
+    all_activations = np.load("./all_level_activations.npy")
     decoding_accuracy = np.zeros(nlevels+1)
     decoding_accuracy[0] = decode_raw_data(all_activations[0],nfolds=nfolds)
     for l in range(nlevels):
+        print(np.sum(np.absolute(all_activations[l])))
         decoding_accuracy[l+1]=decode(all_activations[l],nfolds=nfolds)
     print decoding_accuracy

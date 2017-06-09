@@ -4,7 +4,8 @@ from copy import copy
 from random import shuffle
 import scipy.spatial.distance as sd
 from _shared.helpers import isfc, wcorr, sliding_window, sliding_window_isfc
-
+from sklearn.decomposition import IncrementalPCA
+np.seterr(all='ignore')
 
 def timecorr(data, var=None, mode="within", cfun=isfc):
     """
@@ -112,8 +113,17 @@ def levelup(data, var=None, mode = "within"):
         T = np.min(np.array(map(lambda x: x.shape[0], data)))
     else:
         T, V = data.shape
+    ipca = IncrementalPCA(n_components=V, batch_size=V)
     c = timecorr(data, var = var, mode=mode)
-    return hyp.tools.reduce(c, ndims=V)
+    if mode == "within" and (type(data) == list or len(data.shape)>2):
+        stacked_data = np.concatenate(c,0)
+        pca_reduced = ipca.fit_transform(stacked_data)
+        result = []
+        for subject in range(len(c)):
+            result.append(pca_reduced[subject*T:(subject+1)*T])
+    else:
+        result = ipca.fit_transform(c)
+    return result
 
 
 def decode(data, var=None, nfolds=2, cfun=isfc):

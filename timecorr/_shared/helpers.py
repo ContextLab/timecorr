@@ -40,7 +40,7 @@ def isfc_helper(subj):
 
     return np.array(map(isfc_timepoint_helper, range(time_len)))
 
-def isfc(multi_activations, var):
+def isfc(multi_activations, var=None):
     '''
     Function to calculate the ISFC for a multi-subject fRMI dataset
 
@@ -113,7 +113,7 @@ def wcorr_helper(timepoint):
 
     return squareform(np.dot(np.multiply(coefficient_tiled,normalized_activations),normalized_activations.T)/coefficient_sum, checks=False)
 
-def wcorr(single_activations, var):
+def wcorr(single_activations, var=None):
     '''
     Function to calculate the ISFC for a single-subject fRMI dataset
 

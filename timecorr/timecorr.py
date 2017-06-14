@@ -1,10 +1,9 @@
 import numpy as np
-import hypertools as hyp
 from copy import copy
 from random import shuffle
 import scipy.spatial.distance as sd
 from _shared.helpers import isfc, wcorr, sliding_window, sliding_window_isfc
-from sklearn.decomposition import IncrementalPCA
+from sklearn import decomposition
 np.seterr(all='ignore')
 
 def timecorr(data, var=None, mode="within", cfun=isfc):
@@ -113,7 +112,7 @@ def levelup(data, var=None, mode = "within"):
         T = np.min(np.array(map(lambda x: x.shape[0], data)))
     else:
         T, V = data.shape
-    ipca = IncrementalPCA(n_components=V, batch_size=V)
+    ipca = decomposition.IncrementalPCA(n_components=V, batch_size=V)
     c = timecorr(data, var = var, mode=mode)
     if mode == "within" and (type(data) == list or len(data.shape)>2):
         stacked_data = np.concatenate(c,0)
@@ -218,4 +217,39 @@ def decode_raw_data(data, nfolds=2, cfun=isfc):
         accuracy_temp /= corrs.shape[0]
         accuracy += accuracy_temp
     accuracy /= nfolds
+    return accuracy
+
+def decode_pair(arr1, arr2, cfun=isfc):
+    """
+    This function finds the decoding accuracy between two given matrices
+
+    Parameters
+    ----------
+    arr1: a Numpy matrices
+
+        The array to decode
+
+    arr2: a Numpy matrices
+
+        The array to decode with, must have same dimension as the first numpy matrix
+
+    cfunc: isfc, defaults to isfc
+
+        This parameter specifies the type of operation for to calculate the correlation matrix. Currently, only ISFC is available.
+
+    Returns
+    ----------
+    Results: float
+
+        The decoding accurcy of the input fRMI matrix
+    """
+    accuracy = 0
+    corrs = 1 - sd.cdist(arr1, arr2, 'correlation')
+
+    for t in range(0, corrs.shape[0]):
+        include_inds = np.arange(corrs.shape[0])
+        decoded_inds = include_inds[np.where(corrs[t, include_inds] == np.max(corrs[t, include_inds]))]
+        accuracy += np.mean(decoded_inds == np.array(t))
+
+    accuracy /= corrs.shape[0]
     return accuracy

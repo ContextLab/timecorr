@@ -1,0 +1,344 @@
+\documentclass[12pt]{article}
+\usepackage[utf8]{inputenc}
+\usepackage{tikz}
+\usepackage{amsmath,amsfonts,amssymb}
+\usepackage[vlined, ruled]{algorithm2e}
+\usepackage[sort]{natbib}
+\usepackage{geometry}
+\usetikzlibrary{bayesnet}
+\setlength{\parskip}{1em}
+\geometry{letterpaper,left=1.5in,right=1in,top=1in,bottom=1in}
+\setlength\parindent{0pt}
+\linespread{1.5}
+\begin{document}
+\pagenumbering{gobble}
+{\centering
+  \textbf{Dynamic Correlations in Time Sequence Data}\par
+  A Thesis\par
+  Submitted to the Faculty\par
+  in partial fulfillment of the requirements for the\par
+  degree of\par
+  Master of Science\par
+  in\par
+  Computer Science\par
+  by\par
+  Hao Chang\par
+  DARTMOUTH COLLEGE\par
+  Hanover, New Hampshire\par
+  May, 2017\par
+}
+\vspace{5mm}
+\setlength{\parskip}{0em}
+\begin{flushright}
+Examining Committee:\par
+\vspace{5mm}
+$\rule{5cm}{0.15mm}$\par
+Hany Farid\par
+\vspace{5mm}
+$\rule{5cm}{0.15mm}$\par
+Qiang Liu\par
+\vspace{5mm}
+$\rule{5cm}{0.25mm}$\par
+Jeremy Manning\par
+\end{flushright}
+\setlength{\parskip}{1em}
+\newpage
+
+
+ \null\par
+\newpage
+\pagenumbering{roman}
+\section{Abstract}
+Recent works indicate that the functional magnetic resonance imaging (fMRI) data of the human brain displays very similar behavior to that of a multivariate gaussian process, with the changes in the covariance structure over time---commonly described as functional connectivity---reflecting patterns in the cognitive state of the subject. In addition, the inter-subject functional correlation (ISFC) method also uses the dynamic correlation between brain data of subjects exposed to the same stimulus to highlight stimulus-dependent cognitive patterns in the brain. In order to more accurately recover the dynamic correlation structure from our brain data sequence for further application, we present the Time Sequence Correlation Recovery (TimeCorr) method. TimeCorr first approximates correlation fragments at each time point using a fixed range of neighboring time points, then calculates the correlation at each time point $t$ by multiplying all the correlation fragments by a gaussian distribution centering at $t$. To illustrate the effectiveness of TimeCorr, we compare its performance with our implementations of the more probabilistic Gaussian Process approach and other deterministic correlation calculation techniques, and show that TimeCorr produces more accurate and more stable results across all of our test cases. Further, we show that the TimeCorr can be effectively applied to the task of correlation recovery for ISFC and for brain time sequence data, and produces very interesting results 
+\newpage
+\section{Acknowledgements}
+I would first like to thank my mentors Professor Qiang Liu of the Computer Science Department at Dartmouth College and Professor Jeremy Manning of the Psychological and Brain Sciences Department at Dartmouth College. Professor Liu and Professor Manning were great inspirations for me throughout this project. Their deep understanding of their respective fields and constant flow of bright ideas really expanded my understanding of what it means to love and excel at what I want to do. Professor Liu and Professor Manning provided timely guidance whenever I was in need and constantly encouraged me to try out new ideas and to reach for higher standards. \par
+
+I would also like to thank Professor Hany Farid of the Computer Science Department at Dartmouth College. Professor Farid kindled my first spark of interest in computer science and pushed me to pursue graduate eduction at Dartmouth. He has been a role model for me throughout my education at Dartmouth and will always be an inspiration for me in my future pursuits in life.\par
+
+I would also like to acknowledge Dilin Wang, Jun Han and Yihao Feng in the DartML lab of the Computer Science Department at Dartmouth College. Their door were always open whenever I ran into a trouble spot or had a question about my research or writing.\par
+
+Finally, I must express my very profound gratitude to my parents for providing me with unfailing support and continuous encouragement throughout my years of study and through the process of researching and writing this thesis. This accomplishment would not have been possible without them. Thank you.
+\newpage
+\tableofcontents
+\newpage
+\pagenumbering{arabic}
+\section{Introduction}
+When we record from brains, the resulting data can appear incredibly
+complex.  But brain data are far from random: rather, the dynamic
+patterns of activity our brains exhibit are highly structured.
+Presumably this mirrors the complex but highly structured nature of
+our internal thoughts and experiences.  For example, neuroscientists
+have begun to use functional magnetic resonance imaging (fMRI) to
+obtain high resolution 3D snapshots of brain activity
+approximately once per second during cognitive experiments.  By
+treating each brain image as a feature vector, machine learning
+algorithms trained on a subset of the images may be used to decode
+cognitive information (e.g. which part of a movie someone is watching)
+from the held-out images~\citep{NormEtal06b}.  These approaches
+typically treat each brain image in isolation, and attempt to identify
+patterns of activity associated with each of several candidate brain states.
+
+Recently, it has become clear that important cognitive information is
+contained in higher-order brain patterns, such as the correlational
+structure of the data.  Functional connectivity analyses entail
+computing the correlations between the time series of activations each
+pair of brain regions exhibits.  One can then examine how (or whether)
+the correlational structure of these activity patterns (across a given
+set of brain regions) varies according to the cognitive task an
+experimental participant is performing~\citep{Turk13}.
+
+Despite a recent surge of interest in functional connectivity analyses
+of brain data, there are two fundamental limitations to analyzing
+brain data in this way:
+\begin{enumerate}
+\item \textbf{Correlation matrices are not scalable.}  Examining
+  pairwise correlations in brain data produces a correlation matrix
+  with $O(n^2)$ entries (where $n$ is the number of brain regions).
+  When $n$ is large (e.g. the number of voxels in an fMRI volume), the
+  full correlation matrix can become unwieldy to compute with.
+  Further, if one wishes to examine higher-order patterns (e.g. how
+  correlations between correlations change over time), the storage
+  requirements of the resulting patterns increase exponentially.
+\item \textbf{Correlation matrices are not well suited to studying
+    dynamic activity.}  Computing correlations requires a time
+  series.  Therefore, studying how correlations change over time
+  requires using sliding time windows and examining correlations
+  within each window.  In addition to adding another free parameter to
+  the analysis (window duration), the sliding window approach provides
+  only a poor approximation of the moment-by-moment patterns at the
+  heart of these representations.
+\end{enumerate}
+
+Here we propose the \textit{high-order brain dynamics} (HOBD) model.
+We designed the HOBD model to address the above limitations of
+standard correlation-based analyses.  First, HOBD provides an
+efficient (scalable) means of describing and computing with high-order
+patterns of brain activity.  Within the model space, activity-based
+patterns requires the same amount of memory as correlation-based
+patterns, which require the same amount of memory as higher-order
+patterns.  Second, HOBD provides moment-by-moment estimates of
+(lower-order and higher-order) brain patterns.  For example, HOBD
+incorporates representations of interactions between brain regions
+(analogous to functional connectivity) at each moment during an
+experiment.  In turn, this allows one to examine interactions between
+brain regions (or higher-order patterns such as interactions between
+interactions between brain regions) at each moment during an
+experiment (rather than relying on sliding window-based analyses).
+
+\section{Model description}
+HOBD is a hierarchical factor analysis model: each brain image in a
+dataset is represented in the model as a weighted sum of $K$
+\textit{factors}.  A formal description of the model may be found in
+Algorithm~\ref{alg:genproc} (generative process) and
+Figure~\ref{fig:gm} (graphical model).  Here we also provide a
+high-level description of the model along with intuitions for its
+various components.
+
+Drawing inspiration from another factor analysis
+model of brain data, Topographic Factor Analysis~\citep{MannEtal14b},
+each factor in HOBD is constrained in shape according to a
+pre-specified spatial function.  In the current formulation, each
+factor is a Gaussian Radial Basis Function (RBF) parameterized by a
+center parameter, $c_k$ and a width parameter, $w_k$.  In multi-person
+datasets, the center and width parameters of each factor are
+constrained within the model to be similar across people.
+
+To obtain each factor image, that factor's RBF is evaluated at the
+location of each voxel.  Given the factor images (which are held fixed
+for all time), each brain image is described as a weighted sum of the
+factor images (i.e., a vector of $K$ weights).  Since $K$ is typically
+much less than the number of voxels in the images ($V$), the weight
+matrix provides a low-dimensional embedding of the original data that
+is efficient to compute with~\citep{MannEtal14b}.
+
+The ``trick'' in HOBD that allows for efficient representations of
+higher-order brain patterns comes from how the per-timepoint factor
+weights are defined.  Specifically, each factor is associated with a set of $N$
+\textit{feature vectors} (corresponding to activity patterns at $N$
+``levels'').  These $N$ feature vectors change over time, such that
+each of $T$ timepoints are each associated with $N$ feature vectors ($\beta^{1...N}_{(1...T)ks}$).  At the
+lowest level ($n = 0$), the feature vectors are mapped directly to the
+factor weights $\omega_{(1...T)ks}$ via a subject-specific mapping vector, $\pi^0_s$:
+\begin{align}
+\omega_{tks} = \pi^0_s\left(\beta^0_{tks}\right)'.
+\end{align}
+
+As $n$ increases, each level's feature vectors are determined using a
+similar mapping procedure applied to the next-highest level's feature
+vectors:
+\begin{align}
+\beta^n_{tks} \sim \mathcal{N}\left(\phi^n_s\beta^{n+1}_{tks}, \kappa_{\beta_s}\right),
+\end{align}
+where $\phi^n_s$ is a subject-specific mapping matrix that is learned
+for each feature level.
+
+Each level of feature vector corresponds to brain activity at a
+different order of analysis.  For example, we may compute the degree
+to which different factors ($i$ and $j$) relate to each other (within
+the feature space) at a given timepoint:
+\begin{align}
+\gamma^n_{i,j}(t) = \eta\left(\beta^n_{tjs}\left(\beta^n_{tis}\right)'\right),
+\end{align}
+where the function $\eta(\cdot)$ maps its real-valued argument onto
+the interval $[-1, 1]$:
+\begin{align}
+\eta(x) = \frac{2}{1 + e^{-mx}} - 1,
+\end{align}
+where $m \in \mathcal{R}^+$ is a constant (hyperparameter) that
+determines how steeply the off-zero values go towards -1 or 1.
+
+When these mapping functions are evaluated at $n = 0$ (i.e.,
+$\gamma^0_{i,j}$), this yields the analog of the functional
+connectivity (correlation) between $i$ and $j$.  Similarly,
+$\gamma^1_{p,q}$ is analogous to the correlation between the
+\textit{correlations} $p$ and $q$ (which in turn each correspond to
+the correlations between some pair of factors at the lowest-level
+representation of the data).  The products between feature vectors at
+higher values of $n$ reflect the analog of correlations between the
+corresponding feature vectors at the next-highest level ($n - 1$).
+
+
+
+
+\begin{algorithm}
+\SetAlgoLined
+\SetKwFunction{RBF}{RBF}
+\For{$k = 1$ \KwTo $K$}{
+Draw global center $\bar{c}_k \sim \mathcal{N}\left(\mu_c, \kappa_c
+\right)$\;
+Draw global log width $\bar{w}_k \sim \mathcal{N}\left(\mu_w,
+  \sigma^2_w\right)$\;
+Draw global features for first timepoint $\bar{\beta}^N_{1k} \sim \mathcal{N}\left(\mu_\beta, \kappa_{\beta} \right)$\;
+}
+\For{$s = 1$ \KwTo $S$}{
+\For{$k = 1$ \KwTo $K$}{
+Draw subject center $c_{ks} \sim \mathcal{N}\left( \bar{c}_k,
+  \kappa_{c}\right)$\;
+Draw subject log width $w_{ks} \sim \mathcal{N}\left( \bar{w}_k,
+  \sigma^2_{w}\right)$\;
+Draw subject features $\beta^N_{1ks} \sim \mathcal{N}\left(
+  \bar{\beta}^N_{1k}, \kappa_{\beta}\right)$\;
+\For{$n = (N-1)$ \KwTo $0$}{
+Draw subject mapping matrix $\phi^n_s \sim \mathcal{W}(\mathbf{I}^F, F)$\;
+Draw subject features $\beta^n_{1ks} \sim \mathcal{N}\left(
+  \beta^{n+1}_{1ks}\phi^n_s,
+  \kappa_{\beta}\right)$\;
+\For{$t = 2$ \KwTo $(T-1)$}{
+Draw subject features $\beta^n_{tks} \sim
+\mathcal{N}\left(\rho\left( \beta^{n+1}_{tks}\phi^n_s \right) +
+  (1-\rho)\left( \beta^n_{(t-1)ks} \right), \kappa_{\beta} \right)$\;
+}
+}
+Draw subject mapping vector $\pi^0_s \sim
+\mathrm{Dir}\left(\alpha_\pi\right)$\;
+Draw subject noise parameter $\sigma^2_{y_s} \sim
+\mathrm{Gam}\left(a_{\sigma_y}, b_{\sigma_y} \right)$\;
+\For{$t = 1$ \KwTo $T$}{
+Draw brain image $y_{ts} \sim \mathcal{N}\left(
+  \sum_k \left(\pi^0_s\left(\beta^0_{tks}\right)' \RBF_s(c_{ks}, \exp(w_{ks}))\right), \sigma^2_{ys}\mathbf{I}^V\right)$\;
+}
+}
+}
+\caption{\textbf{Generative process.}  Here $F$ is the number of
+  dimensions (features) in the feature vectors, and $\mathbf{I}^x$ is
+  the $x$-dimensional identity matrix.  The function \texttt{RBF}$_s(c, w)$
+  returns a $V$-dimensional vector corresponding to an RBF evaluated
+  at the location of each voxel in subject $s$'s imaged brain volume.
+All other non-standard symbols are defined in the text or in the
+algorithm itself.}
+\label{alg:genproc}
+\end{algorithm}
+
+
+\begin{figure}
+\centering
+\begin{tikzpicture}
+  \node[obs] (y_ts) {$y_{ts}$};
+  \node[latent, right=of y_ts, yshift=1.75cm] (pi0_s) {$\pi^0_s$};
+  \node[latent, above=of pi0_s] (phin_s) {$\phi^n_s$};
+  \node[latent, above=of phin_s, xshift=2cm] (w_ks) {$w_{ks}$};
+  \node[latent, above=of w_ks] (c_ks) {$c_{ks}$};
+  \node[latent, right=of w_ks, xshift=.75cm] (bar_w_k) {$\bar{w}_k$};
+  \node[latent, above=of bar_w_k] (bar_c_k) {$\bar{c}_k$};
+  \node[latent, left=of pi0_s] (sigma2_ys) {$\sigma^2_{y_s}$};
+  \node[latent, right=of pi0_s, yshift=-1.75cm, xshift=.75cm] (beta0_tks) {$\beta^0_{tks}$};  
+  \node[latent, below=of beta0_tks] (betan_tks) {$\beta^n_{tks}$}; 
+  \node[sim, below=of betan_tks, xshift=.65cm] (betan1_tks)
+  {$\beta^{n+1}_{tks}$};
+  \node[sim, below=of betan_tks, xshift=-.55cm] (betan_t1ks) {$\beta^n_{(t-1)ks}$};
+  \node[latent, right=of betan_tks] (bar_betaN_1k) 
+  {$\bar{\beta}^N_{1k}$};
+\node[sim, left=of betan_tks, xshift=.85cm](beta0_t1ks){$\beta^0_{(t-1)ks}$};
+
+  \edge{sigma2_ys}{y_ts};
+  \edge{beta0_tks}{y_ts};
+  \edge{c_ks}{y_ts};
+  \edge{w_ks}{y_ts};
+  \edge{pi0_s}{y_ts};
+  \edge{betan_tks}{beta0_tks};
+  \edge{bar_c_k}{c_ks};
+  \edge{bar_w_k}{w_ks};
+  \edge{phin_s}{beta0_tks};
+  \edge{phin_s}{betan_tks};
+  \edge[draw=gray!50]{beta0_t1ks}{beta0_tks};
+  \edge[draw=gray!50]{betan1_tks}{betan_tks};
+  \edge[draw=gray!50]{betan_t1ks}{betan_tks};
+  \edge[draw=gray!50]{bar_betaN_1k}{betan_tks};
+
+  \node[const, right=of bar_c_k, yshift=0.5cm](mu_c){$\mu_c$};
+  \node[const, right=of bar_c_k, yshift=-0.5cm](kappa_c){$\kappa_c$};
+  \node[const, right=of bar_w_k, yshift=0.5cm](mu_w){$\mu_w$};
+  \node[const, right=of bar_w_k, yshift=-0.5cm](sigma2_w){$\sigma^2_w$};
+  \node[const, right=of bar_betaN_1k, yshift=1.5cm](rho){$\rho$};
+  \node[const, right=of bar_betaN_1k,
+  yshift=0.5cm](mu_beta){$\mu_\beta$};
+  \node[const, right=of bar_betaN_1k,
+  yshift=-0.5cm](kappa_beta){$\kappa_\beta$};
+   \node[const, left=of sigma2_ys, yshift=2.5cm](F){$F$};
+  \node[const, left=of sigma2_ys,
+  yshift=1.5cm](alpha_pi){$\alpha_\pi$};
+  \node[const, left=of sigma2_ys,
+  yshift=.5cm](a_sigmay){$a_{\sigma_y}$};
+  \node[const, left=of sigma2_ys, yshift=-.5cm](b_sigmay){$b_{\sigma_y}$};
+  
+  \edge{mu_c}{bar_c_k};
+  \edge{kappa_c}{bar_c_k};
+  \edge{mu_w}{bar_w_k};
+  \edge{sigma2_w}{bar_w_k};
+  \edge{rho}{betan_tks};
+  \edge{mu_beta}{bar_betaN_1k};
+  \edge{kappa_beta}{bar_betaN_1k};
+  \edge{kappa_beta}{betan_tks};
+  \edge{F}{phin_s};
+  \edge{alpha_pi}{pi0_s};
+  \edge{a_sigmay}{sigma2_ys};
+  \edge{b_sigmay}{sigma2_ys};
+
+  \plate{K}{
+    (beta0_tks)(c_ks)(w_ks)(betan_tks)(bar_c_k)(bar_w_k)(betan1_tks)(bar_betaN_1k)(betan_t1ks)(beta0_t1ks)
+  }{K};
+  \swplate{T}{
+    (y_ts)(beta0_tks)(betan_tks)(betan1_tks)(betan_t1ks)(beta0_t1ks)
+  }{T};
+  \neplate{N}{
+    (phin_s)(beta0_tks)(betan_tks)(betan1_tks)(betan_t1ks)(beta0_t1ks)
+  }{N};
+  \nwplate{S}{
+    (y_ts)(sigma2_ys)(pi0_s)(beta0_tks)(c_ks)(w_ks)(betan_tks)(phin_s)(betan1_tks)(betan_t1ks)(beta0_t1ks)
+  }{S};
+\end{tikzpicture}
+\caption{\textbf{Graphical model.}  See Algorithm~\ref{alg:genproc}
+  for additional details.  The
+gray latent variable and arrow denote (unobserved) higher order
+relations in the model (i.e. self references across levels within the
+same plate).  Arrows to the gray latent variables 
+are omitted, since they are redundant with arrows to the
+self-referenced node they point to.}
+\label{fig:gm}
+\end{figure}
+
+\newpage
+\bibliographystyle{apa}
+\bibliography{memlab}{}
+\end{document}

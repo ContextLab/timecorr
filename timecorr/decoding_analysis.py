@@ -7,6 +7,7 @@ from timecorr import levelup, decode, decode_raw_data, timecorr, decode_pair
 from sklearn import decomposition
 from scipy.io import loadmat
 from scipy import optimize
+from time import time
 np.seterr(all='ignore')
 
 def load_and_levelup(directory, nvoxels, nlevels):
@@ -112,8 +113,8 @@ def optimal_level_weights(corr1,corr2):
 
     Returns optimal weights array
     '''
-    corr1 = 0.5*(np.log(1e-5+1+corr1) - np.log(1e-5+1-corr1))
-    corr2 = 0.5*(np.log(1e-5+1+corr2) - np.log(1e-5+1-corr2))
+#    corr1 = 0.5*(np.log(1e-5+1+corr1) - np.log(1e-5+1-corr1))
+ #   corr2 = 0.5*(np.log(1e-5+1+corr2) - np.log(1e-5+1-corr2))
     nlevels = len(corr1)
     def weighted_decoding_analysis(w):
         '''
@@ -130,6 +131,7 @@ def optimal_level_weights(corr1,corr2):
         weighted1 =  (np.exp(2*weighted1) - 1)/(np.exp(2*weighted1) + 1)
         weighted2 =  (np.exp(2*weighted2) - 1)/(np.exp(2*weighted2) + 1)
         a = -1*decode_pair(weighted1,weighted2)
+        print(w,-1*a)
         return a
 
     def constraint1(x):
@@ -139,7 +141,7 @@ def optimal_level_weights(corr1,corr2):
 
     w = np.absolute(np.random.normal(0,1,nlevels))
     w = w/np.sum(w)
-    weights = optimize.minimize(weighted_decoding_analysis, w, method="COBYLA", constraints = ({'type': 'ineq', 'fun': constraint1},{'type': 'ineq', 'fun': constraint2}),tol=1e-5)["x"]
+    weights = optimize.minimize(weighted_decoding_analysis, w, method="COBYLA", constraints = ({'type': 'ineq', 'fun': constraint1},{'type': 'ineq', 'fun': constraint2}),tol=1e-4)["x"]
     return np.absolute(weights)/np.sum(np.absolute(weights))
 
 def optimal_decoding_accuracy(directory, repetition_index):
@@ -156,6 +158,7 @@ def optimal_decoding_accuracy(directory, repetition_index):
     Returns None
     '''
     activations = np.load(directory+"/results/isfc_"+str(repetition_index)+".npy")
+    print("Load data complete")
     nlevels = activations.shape[1]
 
     activations = 0.5*(np.log(1e-5+1+activations) - np.log(1e-5+1-activations))
@@ -166,9 +169,9 @@ def optimal_decoding_accuracy(directory, repetition_index):
     weighted2 = np.sum(map(lambda x: activations[3,x]*weights[x],range(nlevels)),axis=0)
     weighted1 =  (np.exp(2*weighted1) - 1)/(np.exp(2*weighted1) + 1)
     weighted2 =  (np.exp(2*weighted2) - 1)/(np.exp(2*weighted2) + 1)
-
+    print("Optimization Complete")
     accuracy = decode_pair(weighted1,weighted2)
-    out_file=directory+"/results/optimal_weights_and_accuracy_"+repetition_index
+    out_file=directory+"/results/optimal_weights_and_accuracy_"+str(repetition_index)
     np.savez(out_file,weights,accuracy)
     print(weights,accuracy)
     print("saved to "+out_file)
@@ -176,5 +179,5 @@ def optimal_decoding_accuracy(directory, repetition_index):
 if __name__== '__main__':
 #    load_and_levelup(sys.argv[1],int(sys.argv[2]),int(sys.argv[3]))
  #   decoding_analysis(sys.argv[1],int(sys.argv[2]),sys.argv[3])
-#    divide_and_timecorr(sys.argv[1],sys.argv[2])
-    optimal_decoding_accuracy(sys.argv[1],sys.argv[2])
+    divide_and_timecorr(sys.argv[1],sys.argv[2])
+#    optimal_decoding_accuracy(sys.argv[1],sys.argv[2])

@@ -126,6 +126,7 @@ def optimal_level_weights(corr1,corr2):
 
         Returns decoding accuracy between the two groups after summing each level by the corresponding weights
         '''
+        w = w/np.sum(w)
         weighted1 = np.sum(map(lambda x: corr1[x]*w[x],range(nlevels)),axis=0)
         weighted2 = np.sum(map(lambda x: corr2[x]*w[x],range(nlevels)),axis=0)
         weighted1 =  (np.exp(2*weighted1) - 1)/(np.exp(2*weighted1) + 1)

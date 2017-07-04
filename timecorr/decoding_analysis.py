@@ -1,3 +1,4 @@
+import scipy.spatial.distance as sd
 import numpy as np
 import sys
 from random import shuffle
@@ -100,7 +101,7 @@ def divide_and_timecorr(directory, repetition_index):
             isfc[group, level] = timecorr(activations[level, groups[group]],mode = "across")
     np.save(directory+"/results/isfc_"+str(repetition_index), isfc)
 
-def optimal_level_weights(corr1,corr2):
+def optimal_level_weights(correlations):
     '''
     Find the weights array for each level that returns the highest decoding accuracy
 
@@ -113,9 +114,7 @@ def optimal_level_weights(corr1,corr2):
 
     Returns optimal weights array
     '''
-#    corr1 = 0.5*(np.log(1e-5+1+corr1) - np.log(1e-5+1-corr1))
- #   corr2 = 0.5*(np.log(1e-5+1+corr2) - np.log(1e-5+1-corr2))
-    nlevels = len(corr1)
+    nlevels, ntimepoints = correlations.shape[0], correlations.shape[1]
     def weighted_decoding_analysis(w):
         '''
         Find the decoding accuracy of the weighted sum of correlations at each level
@@ -126,14 +125,18 @@ def optimal_level_weights(corr1,corr2):
 
         Returns decoding accuracy between the two groups after summing each level by the corresponding weights
         '''
+        w = np.absolute(w)
         w = w/np.sum(w)
-        weighted1 = np.sum(map(lambda x: corr1[x]*w[x],range(nlevels)),axis=0)
-        weighted2 = np.sum(map(lambda x: corr2[x]*w[x],range(nlevels)),axis=0)
-        weighted1 =  (np.exp(2*weighted1) - 1)/(np.exp(2*weighted1) + 1)
-        weighted2 =  (np.exp(2*weighted2) - 1)/(np.exp(2*weighted2) + 1)
-        a = -1*decode_pair(weighted1,weighted2)
-        print(w,-1*a)
-        return a
+        accuracy=0
+        weighted = np.sum(map(lambda x: correlations[x]*w[x],range(nlevels)),axis=0)
+        weighted =  (np.exp(2*weighted) - 1)/(np.exp(2*weighted) + 1)
+        include_inds = np.arange(ntimepoints)
+        for t in range(0, ntimepoints):
+            decoded_inds = include_inds[np.where(weighted[t, include_inds] == np.max(weighted[t, include_inds]))]
+            accuracy += np.mean(decoded_inds == np.array(t))
+        accuracy/=float(ntimepoints)
+        print(accuracy,w)
+        return -1*accuracy
 
     def constraint1(x):
         return 1-np.max(x)
@@ -142,6 +145,7 @@ def optimal_level_weights(corr1,corr2):
 
     w = np.absolute(np.random.normal(0,1,nlevels))
     w = w/np.sum(w)
+  #  w = np.array([1,0])
     weights = optimize.minimize(weighted_decoding_analysis, w, method="COBYLA", constraints = ({'type': 'ineq', 'fun': constraint1},{'type': 'ineq', 'fun': constraint2}),tol=1e-4)["x"]
     return np.absolute(weights)/np.sum(np.absolute(weights))
 
@@ -158,20 +162,36 @@ def optimal_decoding_accuracy(directory, repetition_index):
 
     Returns None
     '''
-    activations = np.load(directory+"/results/isfc_"+str(repetition_index)+".npy")
+    isfc = np.load(directory+"/results/isfc_"+str(repetition_index)+".npy")
+    group_assignments = np.load(directory+"/results/group_assignment_"+str(repetition_index)+".npy")
+    group_size = int(len(group_assignments)/4)
+    group_assignments = [[group_assignments[0:group_size]],[group_assignments[group_size:2*(group_size)]],[group_assignments[2*group_size:3*(group_size)]], [group_assignments[3*(group_size):]]]
+    raw_activation = np.load(directory+"/results/all_level_activations.npy")[0]
     print("Load data complete")
-    nlevels = activations.shape[1]
+    nlevels, ntimepoints = isfc.shape[1]+1, isfc.shape[2]
+    A_correlations, B_correlations = np.zeros([nlevels, ntimepoints, ntimepoints]),  np.zeros([nlevels, ntimepoints, ntimepoints])
+    A_correlations[0] = 1 - sd.cdist(np.mean(raw_activation[group_assignments[0]],axis=0), np.mean(raw_activation[group_assignments[1]],axis=0), 'correlation')
+    B_correlations[0] = 1 - sd.cdist(np.mean(raw_activation[group_assignments[2]],axis=0), np.mean(raw_activation[group_assignments[3]],axis=0), 'correlation')
+    for i in range(0,nlevels-1):
+        A_correlations[i+1] = 1 - sd.cdist(isfc[0,i], isfc[1,i], 'correlation')
+        B_correlations[i+1] = 1 - sd.cdist(isfc[2,i], isfc[3,i], 'correlation')
+    print("Correlation calculation complete")
+    A_correlations = 0.5*(np.log(1e-5+1+A_correlations) - np.log(1e-5+1-A_correlations))
+    B_correlations = 0.5*(np.log(1e-5+1+B_correlations) - np.log(1e-5+1-B_correlations))
 
-    activations = 0.5*(np.log(1e-5+1+activations) - np.log(1e-5+1-activations))
-
-    weights = optimal_level_weights(activations[0],activations[1])
-
-    weighted1 = np.sum(map(lambda x: activations[2,x]*weights[x],range(nlevels)),axis=0)
-    weighted2 = np.sum(map(lambda x: activations[3,x]*weights[x],range(nlevels)),axis=0)
-    weighted1 =  (np.exp(2*weighted1) - 1)/(np.exp(2*weighted1) + 1)
-    weighted2 =  (np.exp(2*weighted2) - 1)/(np.exp(2*weighted2) + 1)
+    weights = optimal_level_weights(A_correlations)
     print("Optimization Complete")
-    accuracy = decode_pair(weighted1,weighted2)
+
+    weighted = np.sum(map(lambda x: B_correlations[x]*weights[x],range(nlevels)),axis=0)
+    weighted =  (np.exp(2*weighted) - 1)/(np.exp(2*weighted) + 1)
+    accuracy = 0
+    include_inds = np.arange(ntimepoints)
+    for t in range(0, ntimepoints):
+        decoded_inds = include_inds[np.where(weighted[t, include_inds] == np.max(weighted[t, include_inds]))]
+        accuracy += np.mean(decoded_inds == np.array(t))
+    accuracy/=ntimepoints
+    print(weights,accuracy)
+
     out_file=directory+"/results/optimal_weights_and_accuracy_"+str(repetition_index)
     np.savez(out_file,weights,accuracy)
     print(weights,accuracy)
@@ -180,5 +200,5 @@ def optimal_decoding_accuracy(directory, repetition_index):
 if __name__== '__main__':
 #    load_and_levelup(sys.argv[1],int(sys.argv[2]),int(sys.argv[3]))
  #   decoding_analysis(sys.argv[1],int(sys.argv[2]),sys.argv[3])
-    divide_and_timecorr(sys.argv[1],sys.argv[2])
-#    optimal_decoding_accuracy(sys.argv[1],sys.argv[2])
+#    divide_and_timecorr(sys.argv[1],sys.argv[2])
+    optimal_decoding_accuracy(sys.argv[1],sys.argv[2])

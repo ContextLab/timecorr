@@ -6,7 +6,7 @@ from _shared.helpers import isfc, wcorr, sliding_window, sliding_window_isfc, ti
 from sklearn import decomposition
 np.seterr(all='ignore')
 
-def smoothing(data, varr, mode = "timecorr"):
+def smoothing(data, varr=5, mode = "timecorr"):
     if mode == "timecorr":
         cfunc = timecorr_smoothing
     else:
@@ -219,6 +219,7 @@ def decode_raw_data(data, nfolds=2, cfun=isfc):
 
         The decoding accurcy of the input fRMI matrix
     """
+    data = smoothing(data)
     subj_num=len(data)
     subj_indices = range(subj_num)
     accuracy = 0

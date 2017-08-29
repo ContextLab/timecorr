@@ -4,7 +4,7 @@ import sys
 from random import shuffle
 from os import listdir,getcwd
 from os.path import isfile, join
-from timecorr import levelup, decode, decode_raw_data, timecorr, decode_pair
+from timecorr import levelup, decode, decode_raw_data, timecorr, decode_pair,smoothing
 from sklearn import decomposition
 from scipy.io import loadmat
 from scipy import optimize
@@ -166,6 +166,7 @@ def optimal_decoding_accuracy(directory, repetition_index):
     group_assignments = np.load(directory+"/results/group_assignment_"+str(repetition_index)+".npy")
     group_size = int(len(group_assignments)/4)
     group_assignments = [[group_assignments[0:group_size]],[group_assignments[group_size:2*(group_size)]],[group_assignments[2*group_size:3*(group_size)]], [group_assignments[3*(group_size):]]]
+    # raw_activation = smoothing(np.load(directory+"/results/all_level_activations.npy")[0])
     raw_activation = np.load(directory+"/results/all_level_activations.npy")[0]
     print("Load data complete")
     nlevels, ntimepoints = isfc.shape[1]+1, isfc.shape[2]

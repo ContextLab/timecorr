@@ -2,9 +2,29 @@ import numpy as np
 from copy import copy
 from random import shuffle
 import scipy.spatial.distance as sd
-from _shared.helpers import isfc, wcorr, sliding_window, sliding_window_isfc
+from _shared.helpers import isfc, wcorr, sliding_window, sliding_window_isfc, timecorr_smoothing, sliding_window_smoothing
 from sklearn import decomposition
 np.seterr(all='ignore')
+
+def smoothing(data, varr, mode = "timecorr"):
+    if mode == "timecorr":
+        cfunc = timecorr_smoothing
+    else:
+        cfunc = sliding_window_smoothing
+    if (not type(data) == list) and (len(data.shape)==2):
+        return cfunc(data.T, varr)
+    else:
+        # the data file is expected to be of dimensions [subject number, time length, activations length]
+        # and converted to dimensions [subject number, activations length, time length]
+        data = np.array(data)
+        data = np.swapaxes(data, 1, 2)
+        # Calculate correlation for activations within each subject
+        S, V, T = data.shape
+        result = []
+        for i in range(S):
+            result.append(cfunc(data[i], varr))
+        return result
+
 
 def timecorr(data, var=None, mode="within", cfun=isfc):
     """

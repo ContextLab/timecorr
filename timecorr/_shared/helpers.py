@@ -145,6 +145,23 @@ def wcorr(single_activations, var=None):
 
     return correlations_vectors
 
+def timecorr_smoothing(single_activations, var=None):
+    global gaussian_array, activations, time_len, activations_len
+    activations = single_activations
+    activations_len, time_len= activations.shape
+    smoothed_activations = np.zeros([time_len,activations_len])
+    if var is None:
+        gaussian_variance = min(time_len, 1000)
+    else:
+        gaussian_variance = var
+    # generate gaussian coefficients
+    gaussian_array = np.array([exp(-timepoint**2/2/gaussian_variance)/sqrt(2*pi*gaussian_variance) for timepoint in range(-time_len+1,time_len)])
+    for timepoint in range(time_len):
+        coefficient_tiled, coefficient_sum = coefficient_generation(timepoint)
+        smoothed_activations[timepoint,:] = np.sum(np.multiply(coefficient_tiled,activations),1)/coefficient_sum
+
+    return smoothed_activations
+
 def sliding_window(activations, window_length):
     '''
     Sliding window approach to calculate dynamic correlations for single subject
@@ -168,6 +185,14 @@ def sliding_window(activations, window_length):
 
     return correlations_vector
 
+def sliding_window_smoothing(activations, window_length):
+    activations_len, time_len = activations.shape
+    time_len -= window_length-1
+    smoothed_activations = np.zeros([time_len,activations_len])
+    for timepoint in range(time_len):
+        smoothed_activations[timepoint,:] = np.mean(activations[:,timepoint:(timepoint+window_length)],1)
+
+    return smoothed_activations
 
 def sliding_window_isfc(activations, window_length):
     '''
@@ -181,7 +206,8 @@ def sliding_window_isfc(activations, window_length):
     Return:
         A time_len x (voxel_num^2-voxel_num)/2 dimension matrix containing the ISFC of the input fRMI dataset
     '''
-    subj_num, activations_len, time_len= activations.shape[0],activations.shape[1],activations.shape[2]
+    activations = np.array(activations)
+    subj_num, activations_len, time_len= activations.shape[0],activations.shape[1],activations.shape[2]-window_length+1
     correlations= np.zeros([subj_num, time_len,activations_len,activations_len])
     correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
     activations = np.array(activations)

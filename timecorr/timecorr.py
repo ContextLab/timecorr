@@ -2,7 +2,7 @@ import numpy as np
 from copy import copy
 from random import shuffle
 import scipy.spatial.distance as sd
-from _shared.helpers import isfc, wcorr, sliding_window, sliding_window_isfc, timecorr_smoothing, sliding_window_smoothing
+from ._shared.helpers import isfc, wcorr, sliding_window, sliding_window_isfc, timecorr_smoothing, sliding_window_smoothing
 from sklearn import decomposition
 np.seterr(all='ignore')
 

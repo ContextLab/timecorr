@@ -1,9 +1,6 @@
 #!/usr/bin/python
 
 # create a bunch of job scripts
-from builtins import zip
-from builtins import str
-from builtins import range
 from config import config
 from subprocess import call
 import os
@@ -16,7 +13,7 @@ import datetime as dt
 # each job command should be formatted as a string
 job_script = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'decoding_analysis.py')
 
-job_commands = [x[0]+" "+str(x[1])+" "+str(x[2]) for x in zip([job_script]*600,['../../pieman-paragraph/']*100+['../../pieman-resting/']*100+['../../pieman-intact/']*100+['../../pieman-word/']*100+['../../sherlock/']*100+['../../forrest/']*100,list(range(100))*6)]
+job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+str(x[2]), zip([job_script]*600,['../../pieman-paragraph/']*100+['../../pieman-resting/']*100+['../../pieman-intact/']*100+['../../pieman-word/']*100+['../../sherlock/']*100+['../../forrest/']*100,range(100)*6))
 
 #job_commands = [job_script+' ../../forrest/ 100 10']
 
@@ -27,7 +24,7 @@ job_commands = [x[0]+" "+str(x[1])+" "+str(x[2]) for x in zip([job_script]*600,[
 #job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+x[2]+" "+str(x[3]), zip([job_script]*500,['../../pieman-paragraph/']*100+['../../pieman-resting/']*100+['../../pieman-intact/']*100+['../../pieman-word/']*100+['../../sherlock/']*100,['10']*500,range(100)*5))
 
 # job_names should specify the file name of each script (as a list, of the same length as job_commands)
-job_names = [str(x)+'_levelup.sh' for x in range(len(job_commands))]
+job_names = map(lambda x: str(x)+'_levelup.sh', range(len(job_commands)))
 # ====== MODIFY ONLY THE CODE BETWEEN THESE LINES ======
 
 assert(len(job_commands) == len(job_names))
@@ -83,7 +80,7 @@ def lock(lockfile):
         fd.writelines('HOST: ' + socket.gethostname() + '\n')
         fd.writelines('USER: ' + getpass.getuser() + '\n')
         fd.writelines('\n-----\nCONFIG\n-----\n')
-        for k in list(config.keys()):
+        for k in config.keys():
             fd.writelines(k.upper() + ': ' + str(config[k]) + '\n')
         fd.close()
         return True

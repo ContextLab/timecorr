@@ -64,7 +64,7 @@ def isfc(multi_activations, var=None):
 
     coefficients_sum = np.zeros(time_len)
     correlations= np.zeros([subj_num, time_len,activations_len,activations_len])
-    correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
+    correlations_vector = np.zeros([int(time_len), int(((activations_len ** 2 - activations_len) / 2))])
     coefficients = np.zeros([time_len, activations_len,time_len])
     gaussian_array = np.array([exp(-timepoint**2/2/gaussian_variance)/sqrt(2*pi*gaussian_variance) for timepoint in range(-time_len+1,time_len)])
     activations = np.array(multi_activations)

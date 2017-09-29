@@ -95,11 +95,11 @@ def divide_and_timecorr(directory, repetition_index):
     '''
     activations = np.load(directory+"/results/all_level_activations.npy")
     nlevels, nsubjects, ntimepoints, nvoxels = activations.shape
-    group_size, subjects = int(old_div(nsubjects,4)), list(range(nsubjects)) # do we really want floor division here?
+    group_size, subjects = int(np.divide(nsubjects,4)), list(range(nsubjects)) 
     shuffle(subjects)
     groups = [subjects[0:group_size],subjects[group_size:2*(group_size)],subjects[2*group_size:3*(group_size)], subjects[3*(group_size):]]
     np.save(directory+"/results/group_assignment_"+str(repetition_index), subjects)
-    isfc = np.zeros([4,nlevels, ntimepoints,old_div((nvoxels**2-nvoxels),2)]) # do we really want floor division here?
+    isfc = np.zeros([4,nlevels, ntimepoints,np.divide((nvoxels**2-nvoxels),2)])
     for level in range(nlevels):
         for group in range(4):
             isfc[group, level] = timecorr(activations[level, groups[group]],mode = "across")

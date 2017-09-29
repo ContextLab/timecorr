@@ -8,7 +8,7 @@ import sys
 from random import shuffle
 from os import listdir,getcwd
 from os.path import isfile, join
-#from timecorr import levelup, decode, decode_raw_data, timecorr, decode_pair 
+from timecorr import levelup, decode, decode_raw_data, timecorr, decode_pair 
 from sklearn import decomposition
 from scipy.io import loadmat
 from scipy import optimize

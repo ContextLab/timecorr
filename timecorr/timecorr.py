@@ -227,8 +227,8 @@ def decode_raw_data(data, nfolds=2, cfun=isfc):
     accuracy = 0
     for i in range(nfolds):
         shuffle(subj_indices)
-        in_fold_corrs = np.mean(data[subj_indices[:(old_div(subj_num,2))]],0) # do we really want floor division here?
-        out_fold_corrs = np.mean(data[subj_indices[(old_div(subj_num,2)):]],0) # do we really want floor division here?
+        in_fold_corrs = np.mean(data[subj_indices[:(np.divide(subj_num,2))]],0) 
+        out_fold_corrs = np.mean(data[subj_indices[(np.divide(subj_num,2)):]],0)
         corrs = 1 - sd.cdist(in_fold_corrs, out_fold_corrs, 'correlation')
         accuracy_temp = 0
 

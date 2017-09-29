@@ -130,10 +130,10 @@ def optimal_level_weights(correlations):
         Returns decoding accuracy between the two groups after summing each level by the corresponding weights
         '''
         w = np.absolute(w)
-        w = old_div(w,np.sum(w)) # # do we really want floor division here?
+        w = old_div(w,np.sum(w)) 
         accuracy=0
         weighted = np.sum([correlations[x]*w[x] for x in range(nlevels)],axis=0)
-        weighted =  old_div((np.exp(2*weighted) - 1),(np.exp(2*weighted) + 1)) # do we really want floor division here?
+        weighted =  np.divide((np.exp(2*weighted) - 1),(np.exp(2*weighted) + 1))
         include_inds = np.arange(ntimepoints)
         for t in range(0, ntimepoints):
             decoded_inds = include_inds[np.where(weighted[t, include_inds] == np.max(weighted[t, include_inds]))]
@@ -148,10 +148,10 @@ def optimal_level_weights(correlations):
         return np.min(x)
 
     w = np.absolute(np.random.normal(0,1,nlevels))
-    w = old_div(w,np.sum(w)) # do we really want floor division here?
+    w = np.divide(w,np.sum(w)) 
   #  w = np.array([1,0])
     weights = optimize.minimize(weighted_decoding_analysis, w, method="COBYLA", constraints = ({'type': 'ineq', 'fun': constraint1},{'type': 'ineq', 'fun': constraint2}),tol=1e-4)["x"]
-    return old_div(np.absolute(weights),np.sum(np.absolute(weights))) # do we really want floor division here?
+    return np.divide(np.absolute(weights),np.sum(np.absolute(weights))) 
 
 def optimal_decoding_accuracy(directory, repetition_index):
     '''
@@ -168,7 +168,7 @@ def optimal_decoding_accuracy(directory, repetition_index):
     '''
     isfc = np.load(directory+"/results/isfc_"+str(repetition_index)+".npy")
     group_assignments = np.load(directory+"/results/group_assignment_"+str(repetition_index)+".npy")
-    group_size = int(old_div(len(group_assignments),4)) # do we really want floor division here?
+    group_size = int(np.divide(len(group_assignments),4)) 
     group_assignments = [[group_assignments[0:group_size]],[group_assignments[group_size:2*(group_size)]],[group_assignments[2*group_size:3*(group_size)]], [group_assignments[3*(group_size):]]]
     raw_activation = np.load(directory+"/results/all_level_activations.npy")[0]
     print("Load data complete")
@@ -187,7 +187,7 @@ def optimal_decoding_accuracy(directory, repetition_index):
     print("Optimization Complete")
 
     weighted = np.sum([B_correlations[x]*weights[x] for x in range(nlevels)],axis=0)
-    weighted =  old_div((np.exp(2*weighted) - 1),(np.exp(2*weighted) + 1)) # do we really want floor division here?
+    weighted =  np.divide((np.exp(2*weighted) - 1),(np.exp(2*weighted) + 1)) 
     accuracy = 0
     include_inds = np.arange(ntimepoints)
     for t in range(0, ntimepoints):

@@ -4,12 +4,104 @@ import sys
 from random import shuffle
 from os import listdir,getcwd
 from os.path import isfile, join
-from timecorr import levelup, decode, decode_raw_data, timecorr, decode_pair,smoothing
+from timecorr import levelup, decode, decode_raw_data, timecorr, decode_pair,smoothing, decode_comp
+from _shared.helpers import isfc, wcorr, sliding_window, sliding_window_isfc, timecorr_smoothing, sliding_window_smoothing
 from sklearn import decomposition
 from scipy.io import loadmat
 from scipy import optimize
 from time import time
 np.seterr(all='ignore')
+
+def decode_circular(directory, nfolds=100, repetition_index):
+    """
+    This function applies decoding analysis across multi-subject fMRI dataset to find the decoding accuracy of the dynamic correlations, a parameter describing timepoint similarity between subjects. The process is described in more detail in the following paper: http://biorxiv.org/content/early/2017/02/07/106690
+
+    Parameters
+    ----------
+    data: a list of Numpy matrices
+
+        When calculating temporal brain activation correlation for multiple subjects, x should be a list of Numpy matrices, each containing the brain activations for a single subject. The Numpy matrix for each subject should be of dimensions T x V, where T represents the number of timepoints and V represents the number of voxels in the dataset
+
+    var: int, defaults to the minimum between time length and 1000
+
+        The variance of the Gaussian distribution used to represent the influence of neighboring timepoints on calculation of correlation at the current timepoint in timecorr
+
+    nfolds: int, defaults to 2
+
+        The number of decoding analysis repetitions to perform to obtin stability
+
+    cfunc: isfc, defaults to isfc
+
+        This parameter specifies the type of operation for to calculate the correlation matrix. Currently, only ISFC is available.
+
+    Returns
+    ----------
+    Results: float
+
+        The decoding accurcy of the dynamic correlations of the input fRMI matrix
+    """
+    activations_file=directory+"/results/all_level_activations.npy"
+    data = np.load(activations_file)[:,:,:10]
+    subj_num = len(data)
+    time_len = len(data[0])
+    subj_indices = range(subj_num)
+    tc_var = [10,75,300]
+    sw_len = [21,51,101]
+    timecorr_diag = np.zeros([len(tc_var),time_len])
+    sliding_diag = np.zeros([len(tc_var),time_len])
+    timecorr_accuracy = np.zeros(len(tc_var))
+    sliding_accuracy = np.zeros(len(tc_var))
+    shuffle(subj_indices)
+
+    def circle_helper(timecorr_var, sliding_window_len):
+        accuracy_tc, accuracy_sw = 0.0,0.0
+        in_fold_corrs_tc = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=timecorr_var, cfun=isfc, mode="across")
+        out_fold_corrs_tc = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=timecorr_var, cfun=isfc, mode="across")
+        in_fold_corrs_sw = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=sliding_window_len, cfun=sliding_window_isfc, mode="across")
+        out_fold_corrs_sw = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=sliding_window_len, cfun=sliding_window_isfc, mode="across")
+        corrs_tc = 1 - sd.cdist(in_fold_corrs_tc, out_fold_corrs_tc, 'correlation')
+        corrs_sw = 1 - sd.cdist(in_fold_corrs_sw, out_fold_corrs_sw, 'correlation')
+
+        # save first uncut diagonal for plotting
+        tc_diag = np.diagonal(corrs_tc)
+        sw_diag = np.diagonal(corrs_sw)
+
+        #record mean of cut diagonal for base
+        trace_tc = np.mean(tc_diag[int(sliding_window_len/2):-int(sliding_window_len/2)])
+        trace_sw = np.mean(sw_diag)
+
+        #cut timecorr results length to match sliding window results
+        in_fold_corrs_tc = in_fold_corrs_tc[int(sliding_window_len/2):-int(sliding_window_len/2)]
+        out_fold_corrs_tc = out_fold_corrs_tc[int(sliding_window_len/2):-int(sliding_window_len/2)]
+
+        for i in range(nfolds):
+            out_fold_corrs_tc = np.roll(out_fold_corrs_tc,1,0)
+            out_fold_corrs_sw = np.roll(out_fold_corrs_sw,1,0)
+
+            corrs_tc = 1 - sd.cdist(in_fold_corrs_tc, out_fold_corrs_tc, 'correlation')
+            corrs_sw = 1 - sd.cdist(in_fold_corrs_sw, out_fold_corrs_sw, 'correlation')
+
+            tc_trace_temp = np.mean(np.diagonal(corrs_tc))
+            sw_trace_temp = np.mean(np.diagonal(corrs_sw))
+
+            if trace_tc>tc_trace_temp:
+                accuracy_tc+=1
+
+            if trace_sw>sw_trace_temp:
+                accuracy_sw+=1
+
+        accuracy_tc /= nfolds
+        accuracy_sw /= nfolds
+        print(accuracy_tc,accuracy_sw)
+        print(tc_diag,sw_diag)
+        return (tc_diag,sw_diag,accuracy_tc,accuracy_sw)
+
+    for i in range(len(tc_var)):
+        timecorr_diag[i],sliding_diag[i,int(sw_len[i]/2):-int(sw_len[i]/2)],timecorr_accuracy[i],sliding_accuracy[i]=circle_helper(tc_var[i],sw_len[i])
+
+    out_file=directory+"/results/circle_data_"+str(repetition_index)
+    np.savez(out_file,timecorr_diag,sliding_diag,timecorr_accuracy,sliding_accuracy)
+    print("Saved to "+out_file)
 
 def load_and_levelup(directory, nvoxels, nlevels):
     '''
@@ -70,10 +162,10 @@ def decoding_analysis(directory, nlevels, repetition_index, nfolds=1, noise=0):
     activations_file=directory+"/results/all_level_activations.npy"
     accuracy_file=directory+"/results/decoding_accuracy_"+str(repetition_index)
     all_activations = np.load(activations_file)
-    decoding_accuracy = np.zeros(nlevels+1)
-    decoding_accuracy[0] = decode_raw_data(all_activations[0],nfolds=nfolds)
+    decoding_accuracy = np.zeros([nlevels+1,4])
+    decoding_accuracy[0,0] = decode_raw_data(all_activations[0],nfolds=nfolds)
     for l in range(int(nlevels)):
-        decoding_accuracy[l+1]=decode(all_activations[l],nfolds=nfolds)
+        decoding_accuracy[l+1]=decode_comp(all_activations[l],nfolds=nfolds)
     accuracy = np.save(accuracy_file, decoding_accuracy)
     print("saved to "+accuracy_file)
 

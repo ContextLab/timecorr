@@ -3,6 +3,23 @@ from os import listdir
 from os.path import join, isfile
 import sys
 
+def circular_decoding_summary(directory):
+    directory = directory+"/results/"
+    onlyfiles = [f for f in listdir(directory) if (isfile(join(directory, f)) and "circle_data_" in f)]
+    print(len(onlyfiles))
+    config_num,time_len=np.load(join(directory,onlyfiles[0]))['arr_0'].shape
+    tc_diag,sw_diag = np.zeros([len(onlyfiles),config_num,time_len]), np.zeros([len(onlyfiles),config_num,time_len])
+    timecorr_accuracy,sliding_accuracy = np.zeros([len(onlyfiles),config_num]),np.zeros([len(onlyfiles),config_num])
+    for index,fname in enumerate(onlyfiles):
+        data=np.load(join(directory,fname))
+        tc_diag[index],sw_diag[index],timecorr_accuracy[index],sliding_accuracy[index]=data['arr_0'],data['arr_1'],data['arr_2'],data['arr_3']
+        print(timecorr_accuracy[index],sliding_accuracy[index])
+    tc_mean, sw_mean = np.mean(tc_diag,0),np.mean(sw_diag,0)
+    tc_std, sw_std = np.std(tc_diag,0)/10, np.std(sw_diag,0)/10
+    timecorr_accuracy,sliding_accuracy = np.mean(timecorr_accuracy,0),np.mean(sliding_accuracy,0)
+    np.savez(directory+"/circular_decoding_analysis",tc_mean, sw_mean,tc_std,sw_std,timecorr_accuracy,sliding_accuracy)
+    print("Saved to "+directory+"/circular_decoding_analysis"2)
+
 def decoding_accuracy(directory,nlevels=11):
     directory = directory+"/results/"
     onlyfiles = [f for f in listdir(directory) if (isfile(join(directory, f)) and "decoding_accuracy" in f)]

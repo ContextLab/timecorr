@@ -162,7 +162,7 @@ def timecorr_smoothing(single_activations, var=None):
 
     return smoothed_activations
 
-def sliding_window(activations, window_length):
+def sliding_window(activations, var):
     '''
     Sliding window approach to calculate dynamic correlations for single subject
 
@@ -174,6 +174,7 @@ def sliding_window(activations, window_length):
     Return:
         A time_len x (voxel_num^2-voxel_num)/2 dimension matrix containing the dynamic correlations of the input fRMI dataset
     '''
+    window_length = var
     activations_len, time_len = activations.shape
     time_len -= window_length-1
     correlations = np.zeros([time_len,activations_len,activations_len])
@@ -185,7 +186,8 @@ def sliding_window(activations, window_length):
 
     return correlations_vector
 
-def sliding_window_smoothing(activations, window_length):
+def sliding_window_smoothing(activations, var):
+    window_length = var
     activations_len, time_len = activations.shape
     time_len -= window_length-1
     smoothed_activations = np.zeros([time_len,activations_len])
@@ -194,7 +196,7 @@ def sliding_window_smoothing(activations, window_length):
 
     return smoothed_activations
 
-def sliding_window_isfc(activations, window_length):
+def sliding_window_isfc(activations, var):
     '''
     Sliding window approach to calculate dynamic correlations for multiple subjects
 
@@ -206,6 +208,7 @@ def sliding_window_isfc(activations, window_length):
     Return:
         A time_len x (voxel_num^2-voxel_num)/2 dimension matrix containing the ISFC of the input fRMI dataset
     '''
+    window_length = var
     activations = np.array(activations)
     subj_num, activations_len, time_len= activations.shape[0],activations.shape[1],activations.shape[2]-window_length+1
     correlations= np.zeros([subj_num, time_len,activations_len,activations_len])

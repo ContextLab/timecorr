@@ -195,6 +195,74 @@ def decode(data, var=None, nfolds=2, cfun=isfc):
     accuracy /= nfolds
     return accuracy
 
+def decode_comp(data, var=None, nfolds=2, cfun=isfc):
+    """
+    This function applies decoding analysis across multi-subject fMRI dataset to find the decoding accuracy of the dynamic correlations, a parameter describing timepoint similarity between subjects. The process is described in more detail in the following paper: http://biorxiv.org/content/early/2017/02/07/106690
+
+    Parameters
+    ----------
+    data: a list of Numpy matrices
+
+        When calculating temporal brain activation correlation for multiple subjects, x should be a list of Numpy matrices, each containing the brain activations for a single subject. The Numpy matrix for each subject should be of dimensions T x V, where T represents the number of timepoints and V represents the number of voxels in the dataset
+
+    var: int, defaults to the minimum between time length and 1000
+
+        The variance of the Gaussian distribution used to represent the influence of neighboring timepoints on calculation of correlation at the current timepoint in timecorr
+
+    nfolds: int, defaults to 2
+
+        The number of decoding analysis repetitions to perform to obtin stability
+
+    cfunc: isfc, defaults to isfc
+
+        This parameter specifies the type of operation for to calculate the correlation matrix. Currently, only ISFC is available.
+
+    Returns
+    ----------
+    Results: float
+
+        The decoding accurcy of the dynamic correlations of the input fRMI matrix
+    """
+    subj_num=len(data)
+    time_len = len(data[0])
+    subj_indices = range(subj_num)
+    accuracy_tc, accuracy_sw = 0,0
+    tc_diag, sw_diag = np.zeros((time_len-10)*2),np.zeros((time_len-10)*2)
+    for i in range(nfolds):
+        shuffle(subj_indices)
+        in_fold_corrs_tc = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=5, cfun=isfc, mode="across")[5:-5]
+        out_fold_corrs_tc = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=5, cfun=isfc, mode="across")[5:-5]
+        in_fold_corrs_sw = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=11, cfun=sliding_window_isfc, mode="across")
+        out_fold_corrs_sw = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=11, cfun=sliding_window_isfc, mode="across")
+
+        corrs_tc = 1 - sd.cdist(in_fold_corrs_tc, out_fold_corrs_tc, 'correlation')
+        corrs_sw = 1 - sd.cdist(in_fold_corrs_sw, out_fold_corrs_sw, 'correlation')
+        time_len =  corrs_tc.shape[0]
+        accuracy_temp_tc = 0
+        accuracy_temp_sw = 0
+        tc_diag[i*time_len:((i+1)*time_len)] = np.diagonal(corrs_tc)
+        sw_diag[i*time_len:((i+1)*time_len)] = np.diagonal(corrs_sw)
+
+        #timepoint_dists = la.toeplitz(np.arange(corrs.shape[0]))
+        for t in range(0, time_len):
+            include_inds = np.arange(time_len)
+            decoded_inds_tc = include_inds[np.where(corrs_tc[t, include_inds] == np.max(corrs_tc[t, include_inds]))]
+            accuracy_temp_tc += np.mean(decoded_inds_tc == np.array(t))
+            decoded_inds_sw = include_inds[np.where(corrs_sw[t, include_inds] == np.max(corrs_sw[t, include_inds]))]
+            accuracy_temp_sw += np.mean(decoded_inds_sw == np.array(t))
+
+        accuracy_temp_tc /= time_len
+        accuracy_temp_sw /= time_len
+        accuracy_tc += accuracy_temp_tc
+        accuracy_sw += accuracy_temp_sw
+
+    accuracy_tc /= nfolds
+    accuracy_sw /= nfolds
+    trace_tc,trace_tc_std = np.mean(tc_diag), np.std(tc_diag)/nfolds/time_len
+    trace_sw,trace_sw_std = np.mean(sw_diag), np.std(sw_diag)/nfolds/time_len
+    return np.array([accuracy_tc, accuracy_sw, trace_tc, trace_tc_std, trace_sw, trace_sw_std])
+
+
 def decode_raw_data(data, nfolds=2, cfun=isfc):
     """
     This function applies decoding analysis across multi-subject fMRI dataset to find the decoding accuracy of the dataset, a parameter describing timepoint similarity between subjects. The process is described in more detail in the following paper: http://biorxiv.org/content/early/2017/02/07/106690
@@ -219,7 +287,7 @@ def decode_raw_data(data, nfolds=2, cfun=isfc):
 
         The decoding accurcy of the input fRMI matrix
     """
-    data = smoothing(data)
+    # data = smoothing(data)
     subj_num=len(data)
     subj_indices = range(subj_num)
     accuracy = 0

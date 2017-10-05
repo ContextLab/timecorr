@@ -1,16 +1,16 @@
 #!/usr/bin/python
 
 # create a bunch of job scripts
+from __future__ import absolute_import
 from builtins import zip
 from builtins import str
 from builtins import range
-from config import config
+from .config import config
 from subprocess import call
 import os
 import socket
 import getpass
 import datetime as dt
-
 
 # ====== MODIFY ONLY THE CODE BETWEEN THESE LINES ======
 # each job command should be formatted as a string

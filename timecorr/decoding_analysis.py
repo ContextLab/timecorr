@@ -1,4 +1,6 @@
 from __future__ import division
+from __future__ import print_function
+from __future__ import absolute_import
 from builtins import str
 from builtins import range
 from past.utils import old_div
@@ -8,7 +10,7 @@ import sys
 from random import shuffle
 from os import listdir,getcwd
 from os.path import isfile, join
-from timecorr import levelup, decode, decode_raw_data, timecorr, decode_pair 
+from .timecorr import levelup, decode, decode_raw_data, timecorr, decode_pair 
 from sklearn import decomposition
 from scipy.io import loadmat
 from scipy import optimize
@@ -139,7 +141,7 @@ def optimal_level_weights(correlations):
             decoded_inds = include_inds[np.where(weighted[t, include_inds] == np.max(weighted[t, include_inds]))]
             accuracy += np.mean(decoded_inds == np.array(t))
         accuracy/=float(ntimepoints)
-        print(accuracy,w)
+        print((accuracy,w))
         return -1*accuracy
 
     def constraint1(x):

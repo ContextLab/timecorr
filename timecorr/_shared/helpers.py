@@ -162,7 +162,7 @@ def timecorr_smoothing(single_activations, var=None):
 
     return smoothed_activations
 
-def sliding_window(activations, var):
+def sliding_window(activations, window_length):
     '''
     Sliding window approach to calculate dynamic correlations for single subject
 
@@ -174,7 +174,6 @@ def sliding_window(activations, var):
     Return:
         A time_len x (voxel_num^2-voxel_num)/2 dimension matrix containing the dynamic correlations of the input fRMI dataset
     '''
-    window_length = var
     activations_len, time_len = activations.shape
     time_len -= window_length-1
     correlations = np.zeros([time_len,activations_len,activations_len])
@@ -186,8 +185,7 @@ def sliding_window(activations, var):
 
     return correlations_vector
 
-def sliding_window_smoothing(activations, var):
-    window_length = var
+def sliding_window_smoothing(activations, window_length):
     activations_len, time_len = activations.shape
     time_len -= window_length-1
     smoothed_activations = np.zeros([time_len,activations_len])
@@ -196,7 +194,7 @@ def sliding_window_smoothing(activations, var):
 
     return smoothed_activations
 
-def sliding_window_isfc(activations, var):
+def sliding_window_isfc(activations, window_length):
     '''
     Sliding window approach to calculate dynamic correlations for multiple subjects
 
@@ -208,8 +206,6 @@ def sliding_window_isfc(activations, var):
     Return:
         A time_len x (voxel_num^2-voxel_num)/2 dimension matrix containing the ISFC of the input fRMI dataset
     '''
-    window_length = var
-    activations = np.array(activations)
     subj_num, activations_len, time_len= activations.shape[0],activations.shape[1],activations.shape[2]-window_length+1
     correlations= np.zeros([subj_num, time_len,activations_len,activations_len])
     correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
@@ -218,7 +214,6 @@ def sliding_window_isfc(activations, var):
     for subj in range(subj_num):
         for timepoint in range(time_len):
             correlations[subj, timepoint] = 1-cdist(activations[subj,:,timepoint:(timepoint+window_length)],activations_sum[subj,:,timepoint:(timepoint+window_length)],"correlation")
-
     #normalize and average the correlation matrix
     correlations_mean = np.mean(0.5*(np.log(1e-5+1+correlations) - np.log(1e-5+1-correlations)),0)
     correlations_mean = correlations_mean+np.swapaxes(correlations_mean,1,2)

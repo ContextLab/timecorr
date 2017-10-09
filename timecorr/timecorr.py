@@ -4,9 +4,10 @@ from random import shuffle
 import scipy.spatial.distance as sd
 from _shared.helpers import isfc, wcorr, sliding_window, sliding_window_isfc, timecorr_smoothing, sliding_window_smoothing
 from sklearn import decomposition
+from hypertools import tools
 np.seterr(all='ignore')
 
-def smoothing(data, varr=5, mode = "timecorr"):
+def smoothing(data, varr, mode = "timecorr"):
     if mode == "timecorr":
         cfunc = timecorr_smoothing
     else:
@@ -25,8 +26,7 @@ def smoothing(data, varr=5, mode = "timecorr"):
             result.append(cfunc(data[i], varr))
         return result
 
-
-def timecorr(data, var=None, mode="within", cfun=isfc):
+def timecorr(data, var=5, mode="within", cfun=isfc):
     """
     Performs the timecorr operation on a brain dynamics dataset
 
@@ -80,10 +80,12 @@ def timecorr(data, var=None, mode="within", cfun=isfc):
         if mode=="within":
             result = []
             for i in range(S):
-                result.append(wcorr(data[i], var=var))
+#                result.append(sliding_window(data[i], var))
+                result.append(wcorr(data[i],var=var))
             return result
         elif mode=="across":
-            return cfun(data, var=var)
+#            return sliding_window_isfc(data, var)
+            return cfun(data,var)
         else:
             raise NameError('Mode unknown or not supported: ' + mode)
 
@@ -134,6 +136,8 @@ def levelup(data, var=None, mode = "within"):
         T, V = data.shape
     ipca = decomposition.IncrementalPCA(n_components=V, batch_size=V)
     c = timecorr(data, var = var, mode=mode)
+    #np.save("temp",c)
+    #result = tools.reduce(c,model="IncrementalPCA",ndims=V)
     if mode == "within" and (type(data) == list or len(data.shape)>2):
         stacked_data = np.concatenate(c,0)
         pca_reduced = ipca.fit_transform(stacked_data)
@@ -145,7 +149,7 @@ def levelup(data, var=None, mode = "within"):
     return result
 
 
-def decode(data, var=None, nfolds=2, cfun=isfc):
+def decode(data, var=3, nfolds=2, cfun=isfc):
     """
     This function applies decoding analysis across multi-subject fMRI dataset to find the decoding accuracy of the dynamic correlations, a parameter describing timepoint similarity between subjects. The process is described in more detail in the following paper: http://biorxiv.org/content/early/2017/02/07/106690
 
@@ -230,8 +234,8 @@ def decode_comp(data, var=None, nfolds=2, cfun=isfc):
     tc_diag, sw_diag = np.zeros((time_len-10)*2),np.zeros((time_len-10)*2)
     for i in range(nfolds):
         shuffle(subj_indices)
-        in_fold_corrs_tc = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=5, cfun=isfc, mode="across")[5:-5]
-        out_fold_corrs_tc = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=5, cfun=isfc, mode="across")[5:-5]
+        in_fold_corrs_tc = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=8, cfun=isfc, mode="across")[5:-5]
+        out_fold_corrs_tc = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=8, cfun=isfc, mode="across")[5:-5]
         in_fold_corrs_sw = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=11, cfun=sliding_window_isfc, mode="across")
         out_fold_corrs_sw = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=11, cfun=sliding_window_isfc, mode="across")
 
@@ -262,7 +266,6 @@ def decode_comp(data, var=None, nfolds=2, cfun=isfc):
     trace_sw,trace_sw_std = np.mean(sw_diag), np.std(sw_diag)/nfolds/time_len
     return np.array([accuracy_tc, accuracy_sw, trace_tc, trace_tc_std, trace_sw, trace_sw_std])
 
-
 def decode_raw_data(data, nfolds=2, cfun=isfc):
     """
     This function applies decoding analysis across multi-subject fMRI dataset to find the decoding accuracy of the dataset, a parameter describing timepoint similarity between subjects. The process is described in more detail in the following paper: http://biorxiv.org/content/early/2017/02/07/106690
@@ -287,7 +290,7 @@ def decode_raw_data(data, nfolds=2, cfun=isfc):
 
         The decoding accurcy of the input fRMI matrix
     """
-    # data = smoothing(data)
+#    data=smoothing(data)
     subj_num=len(data)
     subj_indices = range(subj_num)
     accuracy = 0

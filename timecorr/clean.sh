@@ -1,0 +1,1 @@
+rm *levelup.sh tc_jobs.* *pyc *~ *# *LOCK

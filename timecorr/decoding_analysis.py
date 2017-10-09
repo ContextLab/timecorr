@@ -4,7 +4,7 @@ import sys
 from random import shuffle
 from os import listdir,getcwd
 from os.path import isfile, join
-from timecorr import levelup, decode, decode_raw_data, timecorr, decode_pair,smoothing, decode_comp
+from timecorr import levelup, decode, decode_raw_data, timecorr, decode_pair, decode_comp
 from _shared.helpers import isfc, wcorr, sliding_window, sliding_window_isfc, timecorr_smoothing, sliding_window_smoothing
 from sklearn import decomposition
 from scipy.io import loadmat
@@ -12,7 +12,8 @@ from scipy import optimize
 from time import time
 np.seterr(all='ignore')
 
-def decode_circular(directory, nfolds=100, repetition_index):
+
+def decode_circular(directory, repetition_index, nfolds=100):
     """
     This function applies decoding analysis across multi-subject fMRI dataset to find the decoding accuracy of the dynamic correlations, a parameter describing timepoint similarity between subjects. The process is described in more detail in the following paper: http://biorxiv.org/content/early/2017/02/07/106690
 
@@ -41,7 +42,7 @@ def decode_circular(directory, nfolds=100, repetition_index):
         The decoding accurcy of the dynamic correlations of the input fRMI matrix
     """
     activations_file=directory+"/results/all_level_activations.npy"
-    data = np.load(activations_file)[:,:,:10]
+    data = np.load(activations_file)[0]
     subj_num = len(data)
     time_len = len(data[0])
     subj_indices = range(subj_num)
@@ -162,10 +163,14 @@ def decoding_analysis(directory, nlevels, repetition_index, nfolds=1, noise=0):
     activations_file=directory+"/results/all_level_activations.npy"
     accuracy_file=directory+"/results/decoding_accuracy_"+str(repetition_index)
     all_activations = np.load(activations_file)
-    decoding_accuracy = np.zeros([nlevels+1,4])
+#    decoding_accuracy = np.zeros(nlevels+1)
+#    decoding_accuracy[0] = decode_raw_data(all_activations[0],nfolds=nfolds)
+    decoding_accuracy = np.zeros([nlevels+1,6])
     decoding_accuracy[0,0] = decode_raw_data(all_activations[0],nfolds=nfolds)
     for l in range(int(nlevels)):
+#        decoding_accuracy[l+1]=decode(all_activations[l],nfolds=nfolds)
         decoding_accuracy[l+1]=decode_comp(all_activations[l],nfolds=nfolds)
+    print(decoding_accuracy)
     accuracy = np.save(accuracy_file, decoding_accuracy)
     print("saved to "+accuracy_file)
 
@@ -188,6 +193,7 @@ def divide_and_timecorr(directory, repetition_index):
     groups = [subjects[0:group_size],subjects[group_size:2*(group_size)],subjects[2*group_size:3*(group_size)], subjects[3*(group_size):]]
     np.save(directory+"/results/group_assignment_"+str(repetition_index), subjects)
     isfc = np.zeros([4,nlevels, ntimepoints,(nvoxels**2-nvoxels)/2])
+#    isfc = np.zeros([4,nlevels, ntimepoints-10,(nvoxels**2-nvoxels)/2])
     for level in range(nlevels):
         for group in range(4):
             isfc[group, level] = timecorr(activations[level, groups[group]],mode = "across")
@@ -258,8 +264,9 @@ def optimal_decoding_accuracy(directory, repetition_index):
     group_assignments = np.load(directory+"/results/group_assignment_"+str(repetition_index)+".npy")
     group_size = int(len(group_assignments)/4)
     group_assignments = [[group_assignments[0:group_size]],[group_assignments[group_size:2*(group_size)]],[group_assignments[2*group_size:3*(group_size)]], [group_assignments[3*(group_size):]]]
-    # raw_activation = smoothing(np.load(directory+"/results/all_level_activations.npy")[0])
     raw_activation = np.load(directory+"/results/all_level_activations.npy")[0]
+    # raw_activation = smoothing(np.load(directory+"/results/all_level_activations.npy")[0])
+    #raw_activation = np.load(directory+"/results/all_level_activations.npy")[0][:,5:-5,:]
     print("Load data complete")
     nlevels, ntimepoints = isfc.shape[1]+1, isfc.shape[2]
     A_correlations, B_correlations = np.zeros([nlevels, ntimepoints, ntimepoints]),  np.zeros([nlevels, ntimepoints, ntimepoints])
@@ -282,7 +289,7 @@ def optimal_decoding_accuracy(directory, repetition_index):
     for t in range(0, ntimepoints):
         decoded_inds = include_inds[np.where(weighted[t, include_inds] == np.max(weighted[t, include_inds]))]
         accuracy += np.mean(decoded_inds == np.array(t))
-    accuracy/=ntimepoints
+    accuracy/=ntimepoints    
     print(weights,accuracy)
 
     out_file=directory+"/results/optimal_weights_and_accuracy_"+str(repetition_index)
@@ -292,6 +299,7 @@ def optimal_decoding_accuracy(directory, repetition_index):
 
 if __name__== '__main__':
 #    load_and_levelup(sys.argv[1],int(sys.argv[2]),int(sys.argv[3]))
- #   decoding_analysis(sys.argv[1],int(sys.argv[2]),sys.argv[3])
+#    decoding_analysis(sys.argv[1],int(sys.argv[2]),sys.argv[3])
 #    divide_and_timecorr(sys.argv[1],sys.argv[2])
-    optimal_decoding_accuracy(sys.argv[1],sys.argv[2])
+#    optimal_decoding_accuracy(sys.argv[1],sys.argv[2])
+    decode_circular(sys.argv[1],sys.argv[2])

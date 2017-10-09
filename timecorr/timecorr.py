@@ -1,8 +1,12 @@
+from __future__ import absolute_import
+from __future__ import division
+from builtins import range
+from past.utils import old_div
 import numpy as np
 from copy import copy
 from random import shuffle
 import scipy.spatial.distance as sd
-from _shared.helpers import isfc, wcorr, sliding_window, sliding_window_isfc, timecorr_smoothing, sliding_window_smoothing
+from ._shared.helpers import isfc, wcorr, sliding_window, sliding_window_isfc, timecorr_smoothing, sliding_window_smoothing
 from sklearn import decomposition
 from hypertools import tools
 np.seterr(all='ignore')
@@ -130,8 +134,8 @@ def levelup(data, var=None, mode = "within"):
 
     """
     if type(data) == list or len(data.shape)>2:
-        V = np.max(np.array(map(lambda x: x.shape[1], data)))
-        T = np.min(np.array(map(lambda x: x.shape[0], data)))
+        V = np.max(np.array([x.shape[1] for x in data]))
+        T = np.min(np.array([x.shape[0] for x in data]))
     else:
         T, V = data.shape
     ipca = decomposition.IncrementalPCA(n_components=V, batch_size=V)
@@ -178,12 +182,12 @@ def decode(data, var=3, nfolds=2, cfun=isfc):
         The decoding accurcy of the dynamic correlations of the input fRMI matrix
     """
     subj_num=len(data)
-    subj_indices = range(subj_num)
+    subj_indices = list(range(subj_num))
     accuracy = 0
     for i in range(nfolds):
         shuffle(subj_indices)
-        in_fold_corrs = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=var, cfun=cfun, mode="across")
-        out_fold_corrs = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=var, cfun=cfun, mode="across")
+        in_fold_corrs = timecorr([data[z] for z in subj_indices[:(old_div(subj_num,2))]], var=var, cfun=cfun, mode="across")
+        out_fold_corrs = timecorr([data[z] for z in subj_indices[(old_div(subj_num,2)):]], var=var, cfun=cfun, mode="across")
         corrs = 1 - sd.cdist(in_fold_corrs, out_fold_corrs, 'correlation')
         accuracy_temp = 0
 
@@ -229,15 +233,15 @@ def decode_comp(data, var=None, nfolds=2, cfun=isfc):
     """
     subj_num=len(data)
     time_len = len(data[0])
-    subj_indices = range(subj_num)
+    subj_indices = list(range(subj_num))
     accuracy_tc, accuracy_sw = 0,0
     tc_diag, sw_diag = np.zeros((time_len-10)*2),np.zeros((time_len-10)*2)
     for i in range(nfolds):
         shuffle(subj_indices)
-        in_fold_corrs_tc = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=8, cfun=isfc, mode="across")[5:-5]
-        out_fold_corrs_tc = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=8, cfun=isfc, mode="across")[5:-5]
-        in_fold_corrs_sw = timecorr([data[z] for z in subj_indices[:(subj_num/2)]], var=11, cfun=sliding_window_isfc, mode="across")
-        out_fold_corrs_sw = timecorr([data[z] for z in subj_indices[(subj_num/2):]], var=11, cfun=sliding_window_isfc, mode="across")
+        in_fold_corrs_tc = timecorr([data[z] for z in subj_indices[:(old_div(subj_num,2))]], var=8, cfun=isfc, mode="across")[5:-5]
+        out_fold_corrs_tc = timecorr([data[z] for z in subj_indices[(old_div(subj_num,2)):]], var=8, cfun=isfc, mode="across")[5:-5]
+        in_fold_corrs_sw = timecorr([data[z] for z in subj_indices[:(old_div(subj_num,2))]], var=11, cfun=sliding_window_isfc, mode="across")
+        out_fold_corrs_sw = timecorr([data[z] for z in subj_indices[(old_div(subj_num,2)):]], var=11, cfun=sliding_window_isfc, mode="across")
 
         corrs_tc = 1 - sd.cdist(in_fold_corrs_tc, out_fold_corrs_tc, 'correlation')
         corrs_sw = 1 - sd.cdist(in_fold_corrs_sw, out_fold_corrs_sw, 'correlation')
@@ -292,12 +296,12 @@ def decode_raw_data(data, nfolds=2, cfun=isfc):
     """
 #    data=smoothing(data)
     subj_num=len(data)
-    subj_indices = range(subj_num)
+    subj_indices = list(range(subj_num))
     accuracy = 0
     for i in range(nfolds):
         shuffle(subj_indices)
-        in_fold_corrs = np.mean(data[subj_indices[:(subj_num/2)]],0)
-        out_fold_corrs = np.mean(data[subj_indices[(subj_num/2):]],0)
+        in_fold_corrs = np.mean(data[subj_indices[:(old_div(subj_num,2))]],0)
+        out_fold_corrs = np.mean(data[subj_indices[(old_div(subj_num,2)):]],0)
         corrs = 1 - sd.cdist(in_fold_corrs, out_fold_corrs, 'correlation')
         accuracy_temp = 0
 

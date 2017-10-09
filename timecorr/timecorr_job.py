@@ -1,7 +1,11 @@
 #!/usr/bin/python
 
 # create a bunch of job scripts
-from config import config
+from __future__ import absolute_import
+from builtins import zip
+from builtins import str
+from builtins import range
+from .config import config
 from subprocess import call
 import os
 import socket
@@ -20,7 +24,7 @@ job_script = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'decoding
 
 #job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+x[2]+" "+str(x[3]), zip([job_script]*100,['../../pieman-paragraph/']*100,['1']*100,range(100)))
 
-job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+str(x[2]), zip([job_script]*10,['../../sherlock/']*5+['../../forrest/']*5,[32,97,66,86,95,99,58,79,98,15]))
+job_commands = [x[0]+" "+str(x[1])+" "+str(x[2]) for x in zip([job_script]*10,['../../sherlock/']*5+['../../forrest/']*5,[32,97,66,86,95,99,58,79,98,15])]
 
 #job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+str(x[2]), zip([job_script]*400,['../../pieman-paragraph/']*100+['../../pieman-resting/']*100+['../../pieman-intact/']*100+['../../pieman-word/']*100,range(100)*4))
 
@@ -39,7 +43,7 @@ job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+str(x[2]), zip([job_script]*
 
 
 # job_names should specify the file name of each script (as a list, of the same length as job_commands)
-job_names = map(lambda x: str(x)+'_levelup.sh', range(len(job_commands)))
+job_names = [str(x)+'_levelup.sh' for x in range(len(job_commands))]
 # ====== MODIFY ONLY THE CODE BETWEEN THESE LINES ======
 
 assert(len(job_commands) == len(job_names))
@@ -95,7 +99,7 @@ def lock(lockfile):
         fd.writelines('HOST: ' + socket.gethostname() + '\n')
         fd.writelines('USER: ' + getpass.getuser() + '\n')
         fd.writelines('\n-----\nCONFIG\n-----\n')
-        for k in config.keys():
+        for k in list(config.keys()):
             fd.writelines(k.upper() + ': ' + str(config[k]) + '\n')
         fd.close()
         return True

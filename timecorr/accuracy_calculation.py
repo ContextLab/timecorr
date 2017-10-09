@@ -22,7 +22,7 @@ def circular_decoding_summary(directory,extra):
         data=np.load(join(directory,fname))
         tc_diag[index],sw_diag[index],timecorr_accuracy[index],sliding_accuracy[index]=data['arr_0'],data['arr_1'],data['arr_2'],data['arr_3']
     tc_mean, sw_mean = np.mean(tc_diag,0),np.mean(sw_diag,0)
-    tc_std, sw_std = old_div(np.std(tc_diag,0),10), old_div(np.std(sw_diag,0),10)
+    tc_std, sw_std = np.divide(np.std(tc_diag,0),10), old_div(np.std(sw_diag,0),10)
     timecorr_accuracy,sliding_accuracy = np.mean(timecorr_accuracy,0),np.mean(sliding_accuracy,0)
     np.savez(directory+"/circular_decoding_analysis",tc_mean, sw_mean,tc_std,sw_std,timecorr_accuracy,sliding_accuracy)
     print("Saved to "+directory+"/circular_decoding_analysis")
@@ -60,7 +60,7 @@ def mixture_level_accuracy(directory, nlevels = 11):
 
         isfc = np.load(directory+"/isfc_"+str(repetition_index)+".npy")[:,:10]
         group_assignments = np.load(directory+"/group_assignment_"+str(repetition_index)+".npy")
-        group_size = int(old_div(len(group_assignments),4))
+        group_size = int(np.divide(len(group_assignments),4))
         group_assignments = [[group_assignments[0:group_size]],[group_assignments[group_size:2*(group_size)]],[group_assignments[2*group_size:3*(group_size)]], [group_assignments[3*(group_size):]]]
         nlevels, ntimepoints = isfc.shape[1]+1, isfc.shape[2]
         include_inds = np.arange(ntimepoints)

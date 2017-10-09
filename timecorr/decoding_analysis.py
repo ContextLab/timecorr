@@ -1,6 +1,6 @@
-from __future__ import division
 from __future__ import print_function
 from __future__ import absolute_import
+from __future__ import division
 from builtins import str
 from builtins import range
 from past.utils import old_div
@@ -10,12 +10,105 @@ import sys
 from random import shuffle
 from os import listdir,getcwd
 from os.path import isfile, join
-from .timecorr import levelup, decode, decode_raw_data, timecorr, decode_pair 
+from .timecorr import levelup, decode, decode_raw_data, timecorr, decode_pair, decode_comp
+from ._shared.helpers import isfc, wcorr, sliding_window, sliding_window_isfc, timecorr_smoothing, sliding_window_smoothing
 from sklearn import decomposition
 from scipy.io import loadmat
 from scipy import optimize
 from time import time
 np.seterr(all='ignore')
+
+
+def decode_circular(directory, repetition_index, nfolds=100):
+    """
+    This function applies decoding analysis across multi-subject fMRI dataset to find the decoding accuracy of the dynamic correlations, a parameter describing timepoint similarity between subjects. The process is described in more detail in the following paper: http://biorxiv.org/content/early/2017/02/07/106690
+
+    Parameters
+    ----------
+    data: a list of Numpy matrices
+
+        When calculating temporal brain activation correlation for multiple subjects, x should be a list of Numpy matrices, each containing the brain activations for a single subject. The Numpy matrix for each subject should be of dimensions T x V, where T represents the number of timepoints and V represents the number of voxels in the dataset
+
+    var: int, defaults to the minimum between time length and 1000
+
+        The variance of the Gaussian distribution used to represent the influence of neighboring timepoints on calculation of correlation at the current timepoint in timecorr
+
+    nfolds: int, defaults to 2
+
+        The number of decoding analysis repetitions to perform to obtin stability
+
+    cfunc: isfc, defaults to isfc
+
+        This parameter specifies the type of operation for to calculate the correlation matrix. Currently, only ISFC is available.
+
+    Returns
+    ----------
+    Results: float
+
+        The decoding accurcy of the dynamic correlations of the input fRMI matrix
+    """
+    activations_file=directory+"/results/all_level_activations.npy"
+    data = np.load(activations_file)[0]
+    subj_num = len(data)
+    time_len = len(data[0])
+    subj_indices = list(range(subj_num))
+    tc_var = [10,75,300]
+    sw_len = [21,51,101]
+    timecorr_diag = np.zeros([len(tc_var),time_len])
+    sliding_diag = np.zeros([len(tc_var),time_len])
+    timecorr_accuracy = np.zeros(len(tc_var))
+    sliding_accuracy = np.zeros(len(tc_var))
+    shuffle(subj_indices)
+
+    def circle_helper(timecorr_var, sliding_window_len):
+        accuracy_tc, accuracy_sw = 0.0,0.0
+        in_fold_corrs_tc = timecorr([data[z] for z in subj_indices[:(old_div(subj_num,2))]], var=timecorr_var, cfun=isfc, mode="across")
+        out_fold_corrs_tc = timecorr([data[z] for z in subj_indices[(old_div(subj_num,2)):]], var=timecorr_var, cfun=isfc, mode="across")
+        in_fold_corrs_sw = timecorr([data[z] for z in subj_indices[:(old_div(subj_num,2))]], var=sliding_window_len, cfun=sliding_window_isfc, mode="across")
+        out_fold_corrs_sw = timecorr([data[z] for z in subj_indices[(old_div(subj_num,2)):]], var=sliding_window_len, cfun=sliding_window_isfc, mode="across")
+        corrs_tc = 1 - sd.cdist(in_fold_corrs_tc, out_fold_corrs_tc, 'correlation')
+        corrs_sw = 1 - sd.cdist(in_fold_corrs_sw, out_fold_corrs_sw, 'correlation')
+
+        # save first uncut diagonal for plotting
+        tc_diag = np.diagonal(corrs_tc)
+        sw_diag = np.diagonal(corrs_sw)
+
+        #record mean of cut diagonal for base
+        trace_tc = np.mean(tc_diag[int(old_div(sliding_window_len,2)):-int(old_div(sliding_window_len,2))])
+        trace_sw = np.mean(sw_diag)
+
+        #cut timecorr results length to match sliding window results
+        in_fold_corrs_tc = in_fold_corrs_tc[int(old_div(sliding_window_len,2)):-int(old_div(sliding_window_len,2))]
+        out_fold_corrs_tc = out_fold_corrs_tc[int(old_div(sliding_window_len,2)):-int(old_div(sliding_window_len,2))]
+
+        for i in range(nfolds):
+            out_fold_corrs_tc = np.roll(out_fold_corrs_tc,1,0)
+            out_fold_corrs_sw = np.roll(out_fold_corrs_sw,1,0)
+
+            corrs_tc = 1 - sd.cdist(in_fold_corrs_tc, out_fold_corrs_tc, 'correlation')
+            corrs_sw = 1 - sd.cdist(in_fold_corrs_sw, out_fold_corrs_sw, 'correlation')
+
+            tc_trace_temp = np.mean(np.diagonal(corrs_tc))
+            sw_trace_temp = np.mean(np.diagonal(corrs_sw))
+
+            if trace_tc>tc_trace_temp:
+                accuracy_tc+=1
+
+            if trace_sw>sw_trace_temp:
+                accuracy_sw+=1
+
+        accuracy_tc /= nfolds
+        accuracy_sw /= nfolds
+        print((accuracy_tc,accuracy_sw))
+        print((tc_diag,sw_diag))
+        return (tc_diag,sw_diag,accuracy_tc,accuracy_sw)
+
+    for i in range(len(tc_var)):
+        timecorr_diag[i],sliding_diag[i,int(old_div(sw_len[i],2)):-int(old_div(sw_len[i],2))],timecorr_accuracy[i],sliding_accuracy[i]=circle_helper(tc_var[i],sw_len[i])
+
+    out_file=directory+"/results/circle_data_"+str(repetition_index)
+    np.savez(out_file,timecorr_diag,sliding_diag,timecorr_accuracy,sliding_accuracy)
+    print("Saved to "+out_file)
 
 def load_and_levelup(directory, nvoxels, nlevels):
     '''
@@ -76,10 +169,14 @@ def decoding_analysis(directory, nlevels, repetition_index, nfolds=1, noise=0):
     activations_file=directory+"/results/all_level_activations.npy"
     accuracy_file=directory+"/results/decoding_accuracy_"+str(repetition_index)
     all_activations = np.load(activations_file)
-    decoding_accuracy = np.zeros(nlevels+1)
-    decoding_accuracy[0] = decode_raw_data(all_activations[0],nfolds=nfolds)
+#    decoding_accuracy = np.zeros(nlevels+1)
+#    decoding_accuracy[0] = decode_raw_data(all_activations[0],nfolds=nfolds)
+    decoding_accuracy = np.zeros([nlevels+1,6])
+    decoding_accuracy[0,0] = decode_raw_data(all_activations[0],nfolds=nfolds)
     for l in range(int(nlevels)):
-        decoding_accuracy[l+1]=decode(all_activations[l],nfolds=nfolds)
+#        decoding_accuracy[l+1]=decode(all_activations[l],nfolds=nfolds)
+        decoding_accuracy[l+1]=decode_comp(all_activations[l],nfolds=nfolds)
+    print(decoding_accuracy)
     accuracy = np.save(accuracy_file, decoding_accuracy)
     print("saved to "+accuracy_file)
 
@@ -97,11 +194,12 @@ def divide_and_timecorr(directory, repetition_index):
     '''
     activations = np.load(directory+"/results/all_level_activations.npy")
     nlevels, nsubjects, ntimepoints, nvoxels = activations.shape
-    group_size, subjects = int(np.divide(nsubjects,4)), list(range(nsubjects)) 
+    group_size, subjects = int(old_div(nsubjects,4)), list(range(nsubjects))
     shuffle(subjects)
     groups = [subjects[0:group_size],subjects[group_size:2*(group_size)],subjects[2*group_size:3*(group_size)], subjects[3*(group_size):]]
     np.save(directory+"/results/group_assignment_"+str(repetition_index), subjects)
-    isfc = np.zeros([4,nlevels, ntimepoints,np.divide((nvoxels**2-nvoxels),2)])
+    isfc = np.zeros([4,nlevels, ntimepoints,old_div((nvoxels**2-nvoxels),2)])
+#    isfc = np.zeros([4,nlevels, ntimepoints-10,(nvoxels**2-nvoxels)/2])
     for level in range(nlevels):
         for group in range(4):
             isfc[group, level] = timecorr(activations[level, groups[group]],mode = "across")
@@ -132,10 +230,10 @@ def optimal_level_weights(correlations):
         Returns decoding accuracy between the two groups after summing each level by the corresponding weights
         '''
         w = np.absolute(w)
-        w = old_div(w,np.sum(w)) 
+        w = old_div(w,np.sum(w))
         accuracy=0
         weighted = np.sum([correlations[x]*w[x] for x in range(nlevels)],axis=0)
-        weighted =  np.divide((np.exp(2*weighted) - 1),(np.exp(2*weighted) + 1))
+        weighted =  old_div((np.exp(2*weighted) - 1),(np.exp(2*weighted) + 1))
         include_inds = np.arange(ntimepoints)
         for t in range(0, ntimepoints):
             decoded_inds = include_inds[np.where(weighted[t, include_inds] == np.max(weighted[t, include_inds]))]
@@ -150,10 +248,10 @@ def optimal_level_weights(correlations):
         return np.min(x)
 
     w = np.absolute(np.random.normal(0,1,nlevels))
-    w = np.divide(w,np.sum(w)) 
+    w = old_div(w,np.sum(w))
   #  w = np.array([1,0])
     weights = optimize.minimize(weighted_decoding_analysis, w, method="COBYLA", constraints = ({'type': 'ineq', 'fun': constraint1},{'type': 'ineq', 'fun': constraint2}),tol=1e-4)["x"]
-    return np.divide(np.absolute(weights),np.sum(np.absolute(weights))) 
+    return old_div(np.absolute(weights),np.sum(np.absolute(weights)))
 
 def optimal_decoding_accuracy(directory, repetition_index):
     '''
@@ -170,9 +268,11 @@ def optimal_decoding_accuracy(directory, repetition_index):
     '''
     isfc = np.load(directory+"/results/isfc_"+str(repetition_index)+".npy")
     group_assignments = np.load(directory+"/results/group_assignment_"+str(repetition_index)+".npy")
-    group_size = int(np.divide(len(group_assignments),4)) 
+    group_size = int(old_div(len(group_assignments),4))
     group_assignments = [[group_assignments[0:group_size]],[group_assignments[group_size:2*(group_size)]],[group_assignments[2*group_size:3*(group_size)]], [group_assignments[3*(group_size):]]]
     raw_activation = np.load(directory+"/results/all_level_activations.npy")[0]
+    # raw_activation = smoothing(np.load(directory+"/results/all_level_activations.npy")[0])
+    #raw_activation = np.load(directory+"/results/all_level_activations.npy")[0][:,5:-5,:]
     print("Load data complete")
     nlevels, ntimepoints = isfc.shape[1]+1, isfc.shape[2]
     A_correlations, B_correlations = np.zeros([nlevels, ntimepoints, ntimepoints]),  np.zeros([nlevels, ntimepoints, ntimepoints])
@@ -189,22 +289,23 @@ def optimal_decoding_accuracy(directory, repetition_index):
     print("Optimization Complete")
 
     weighted = np.sum([B_correlations[x]*weights[x] for x in range(nlevels)],axis=0)
-    weighted =  np.divide((np.exp(2*weighted) - 1),(np.exp(2*weighted) + 1)) 
+    weighted =  old_div((np.exp(2*weighted) - 1),(np.exp(2*weighted) + 1))
     accuracy = 0
     include_inds = np.arange(ntimepoints)
     for t in range(0, ntimepoints):
         decoded_inds = include_inds[np.where(weighted[t, include_inds] == np.max(weighted[t, include_inds]))]
         accuracy += np.mean(decoded_inds == np.array(t))
     accuracy/=ntimepoints
-    print(weights,accuracy)
+    print((weights,accuracy))
 
     out_file=directory+"/results/optimal_weights_and_accuracy_"+str(repetition_index)
     np.savez(out_file,weights,accuracy)
-    print(weights,accuracy)
+    print((weights,accuracy))
     print("saved to "+out_file)
 
 if __name__== '__main__':
 #    load_and_levelup(sys.argv[1],int(sys.argv[2]),int(sys.argv[3]))
- #   decoding_analysis(sys.argv[1],int(sys.argv[2]),sys.argv[3])
+#    decoding_analysis(sys.argv[1],int(sys.argv[2]),sys.argv[3])
 #    divide_and_timecorr(sys.argv[1],sys.argv[2])
-    optimal_decoding_accuracy(sys.argv[1],sys.argv[2])
+#    optimal_decoding_accuracy(sys.argv[1],sys.argv[2])
+    decode_circular(sys.argv[1],sys.argv[2])

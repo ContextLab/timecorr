@@ -62,10 +62,10 @@ def decode_circular(directory, repetition_index, nfolds=100):
 
     def circle_helper(timecorr_var, sliding_window_len):
         accuracy_tc, accuracy_sw = 0.0,0.0
-        in_fold_corrs_tc = timecorr([data[z] for z in subj_indices[:(old_div(subj_num,2))]], var=timecorr_var, cfun=isfc, mode="across")
-        out_fold_corrs_tc = timecorr([data[z] for z in subj_indices[(old_div(subj_num,2)):]], var=timecorr_var, cfun=isfc, mode="across")
-        in_fold_corrs_sw = timecorr([data[z] for z in subj_indices[:(old_div(subj_num,2))]], var=sliding_window_len, cfun=sliding_window_isfc, mode="across")
-        out_fold_corrs_sw = timecorr([data[z] for z in subj_indices[(old_div(subj_num,2)):]], var=sliding_window_len, cfun=sliding_window_isfc, mode="across")
+        in_fold_corrs_tc = timecorr([data[z] for z in subj_indices[:(np.divide(subj_num,2))]], var=timecorr_var, cfun=isfc, mode="across")
+        out_fold_corrs_tc = timecorr([data[z] for z in subj_indices[(np.divide(subj_num,2)):]], var=timecorr_var, cfun=isfc, mode="across")
+        in_fold_corrs_sw = timecorr([data[z] for z in subj_indices[:(np.divide(subj_num,2))]], var=sliding_window_len, cfun=sliding_window_isfc, mode="across")
+        out_fold_corrs_sw = timecorr([data[z] for z in subj_indices[(np.divide(subj_num,2)):]], var=sliding_window_len, cfun=sliding_window_isfc, mode="across")
         corrs_tc = 1 - sd.cdist(in_fold_corrs_tc, out_fold_corrs_tc, 'correlation')
         corrs_sw = 1 - sd.cdist(in_fold_corrs_sw, out_fold_corrs_sw, 'correlation')
 
@@ -74,12 +74,12 @@ def decode_circular(directory, repetition_index, nfolds=100):
         sw_diag = np.diagonal(corrs_sw)
 
         #record mean of cut diagonal for base
-        trace_tc = np.mean(tc_diag[int(old_div(sliding_window_len,2)):-int(old_div(sliding_window_len,2))])
+        trace_tc = np.mean(tc_diag[int(np.divide(sliding_window_len,2)):-int(np.divide(sliding_window_len,2))])
         trace_sw = np.mean(sw_diag)
 
         #cut timecorr results length to match sliding window results
-        in_fold_corrs_tc = in_fold_corrs_tc[int(old_div(sliding_window_len,2)):-int(old_div(sliding_window_len,2))]
-        out_fold_corrs_tc = out_fold_corrs_tc[int(old_div(sliding_window_len,2)):-int(old_div(sliding_window_len,2))]
+        in_fold_corrs_tc = in_fold_corrs_tc[int(np.divide(sliding_window_len,2)):-int(np.divide(sliding_window_len,2))]
+        out_fold_corrs_tc = out_fold_corrs_tc[int(np.divide(sliding_window_len,2)):-int(np.divide(sliding_window_len,2))]
 
         for i in range(nfolds):
             out_fold_corrs_tc = np.roll(out_fold_corrs_tc,1,0)
@@ -104,7 +104,7 @@ def decode_circular(directory, repetition_index, nfolds=100):
         return (tc_diag,sw_diag,accuracy_tc,accuracy_sw)
 
     for i in range(len(tc_var)):
-        timecorr_diag[i],sliding_diag[i,int(old_div(sw_len[i],2)):-int(old_div(sw_len[i],2))],timecorr_accuracy[i],sliding_accuracy[i]=circle_helper(tc_var[i],sw_len[i])
+        timecorr_diag[i],sliding_diag[i,int(np.divide(sw_len[i],2)):-int(np.divide(sw_len[i],2))],timecorr_accuracy[i],sliding_accuracy[i]=circle_helper(tc_var[i],sw_len[i])
 
     out_file=directory+"/results/circle_data_"+str(repetition_index)
     np.savez(out_file,timecorr_diag,sliding_diag,timecorr_accuracy,sliding_accuracy)
@@ -194,11 +194,11 @@ def divide_and_timecorr(directory, repetition_index):
     '''
     activations = np.load(directory+"/results/all_level_activations.npy")
     nlevels, nsubjects, ntimepoints, nvoxels = activations.shape
-    group_size, subjects = int(old_div(nsubjects,4)), list(range(nsubjects))
+    group_size, subjects = int(np.divide(nsubjects,4)), list(range(nsubjects))
     shuffle(subjects)
     groups = [subjects[0:group_size],subjects[group_size:2*(group_size)],subjects[2*group_size:3*(group_size)], subjects[3*(group_size):]]
     np.save(directory+"/results/group_assignment_"+str(repetition_index), subjects)
-    isfc = np.zeros([4,nlevels, ntimepoints,old_div((nvoxels**2-nvoxels),2)])
+    isfc = np.zeros([4,nlevels, ntimepoints,np.divide((nvoxels**2-nvoxels),2)])
 #    isfc = np.zeros([4,nlevels, ntimepoints-10,(nvoxels**2-nvoxels)/2])
     for level in range(nlevels):
         for group in range(4):
@@ -230,10 +230,10 @@ def optimal_level_weights(correlations):
         Returns decoding accuracy between the two groups after summing each level by the corresponding weights
         '''
         w = np.absolute(w)
-        w = old_div(w,np.sum(w))
+        w = np.divide(w,np.sum(w))
         accuracy=0
         weighted = np.sum([correlations[x]*w[x] for x in range(nlevels)],axis=0)
-        weighted =  old_div((np.exp(2*weighted) - 1),(np.exp(2*weighted) + 1))
+        weighted =  np.divide((np.exp(2*weighted) - 1),(np.exp(2*weighted) + 1))
         include_inds = np.arange(ntimepoints)
         for t in range(0, ntimepoints):
             decoded_inds = include_inds[np.where(weighted[t, include_inds] == np.max(weighted[t, include_inds]))]
@@ -248,10 +248,10 @@ def optimal_level_weights(correlations):
         return np.min(x)
 
     w = np.absolute(np.random.normal(0,1,nlevels))
-    w = old_div(w,np.sum(w))
+    w = np.divide(w,np.sum(w))
   #  w = np.array([1,0])
     weights = optimize.minimize(weighted_decoding_analysis, w, method="COBYLA", constraints = ({'type': 'ineq', 'fun': constraint1},{'type': 'ineq', 'fun': constraint2}),tol=1e-4)["x"]
-    return old_div(np.absolute(weights),np.sum(np.absolute(weights)))
+    return np.divide(np.absolute(weights),np.sum(np.absolute(weights)))
 
 def optimal_decoding_accuracy(directory, repetition_index):
     '''
@@ -268,7 +268,7 @@ def optimal_decoding_accuracy(directory, repetition_index):
     '''
     isfc = np.load(directory+"/results/isfc_"+str(repetition_index)+".npy")
     group_assignments = np.load(directory+"/results/group_assignment_"+str(repetition_index)+".npy")
-    group_size = int(old_div(len(group_assignments),4))
+    group_size = int(np.divide(len(group_assignments),4))
     group_assignments = [[group_assignments[0:group_size]],[group_assignments[group_size:2*(group_size)]],[group_assignments[2*group_size:3*(group_size)]], [group_assignments[3*(group_size):]]]
     raw_activation = np.load(directory+"/results/all_level_activations.npy")[0]
     # raw_activation = smoothing(np.load(directory+"/results/all_level_activations.npy")[0])
@@ -289,7 +289,7 @@ def optimal_decoding_accuracy(directory, repetition_index):
     print("Optimization Complete")
 
     weighted = np.sum([B_correlations[x]*weights[x] for x in range(nlevels)],axis=0)
-    weighted =  old_div((np.exp(2*weighted) - 1),(np.exp(2*weighted) + 1))
+    weighted =  np.divide((np.exp(2*weighted) - 1),(np.exp(2*weighted) + 1))
     accuracy = 0
     include_inds = np.arange(ntimepoints)
     for t in range(0, ntimepoints):

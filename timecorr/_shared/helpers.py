@@ -95,7 +95,7 @@ def isfc(multi_activations, var=None):
         correlations_vector[i] = squareform(correlations_mean[i,:,:],checks=False)
 
     return correlations_vector
-
+ 
 
 def wcorr_helper(timepoint):
     '''

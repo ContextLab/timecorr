@@ -1,3 +1,5 @@
+from __future__ import print_function
+from builtins import range
 from os import listdir,getcwd
 from os.path import isfile, join
 import sys

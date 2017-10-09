@@ -40,7 +40,7 @@ def isfc_helper(subj):
 
     return np.array(map(isfc_timepoint_helper, range(time_len)))
 
-def isfc(multi_activations, var):
+def isfc(multi_activations, var=None):
     '''
     Function to calculate the ISFC for a multi-subject fRMI dataset
 
@@ -113,7 +113,7 @@ def wcorr_helper(timepoint):
 
     return squareform(np.dot(np.multiply(coefficient_tiled,normalized_activations),normalized_activations.T)/coefficient_sum, checks=False)
 
-def wcorr(single_activations, var):
+def wcorr(single_activations, var=None):
     '''
     Function to calculate the ISFC for a single-subject fRMI dataset
 
@@ -145,6 +145,23 @@ def wcorr(single_activations, var):
 
     return correlations_vectors
 
+def timecorr_smoothing(single_activations, var=None):
+    global gaussian_array, activations, time_len, activations_len
+    activations = single_activations
+    activations_len, time_len= activations.shape
+    smoothed_activations = np.zeros([time_len,activations_len])
+    if var is None:
+        gaussian_variance = min(time_len, 1000)
+    else:
+        gaussian_variance = var
+    # generate gaussian coefficients
+    gaussian_array = np.array([exp(-timepoint**2/2/gaussian_variance)/sqrt(2*pi*gaussian_variance) for timepoint in range(-time_len+1,time_len)])
+    for timepoint in range(time_len):
+        coefficient_tiled, coefficient_sum = coefficient_generation(timepoint)
+        smoothed_activations[timepoint,:] = np.sum(np.multiply(coefficient_tiled,activations),1)/coefficient_sum
+
+    return smoothed_activations
+
 def sliding_window(activations, window_length):
     '''
     Sliding window approach to calculate dynamic correlations for single subject
@@ -168,6 +185,14 @@ def sliding_window(activations, window_length):
 
     return correlations_vector
 
+def sliding_window_smoothing(activations, window_length):
+    activations_len, time_len = activations.shape
+    time_len -= window_length-1
+    smoothed_activations = np.zeros([time_len,activations_len])
+    for timepoint in range(time_len):
+        smoothed_activations[timepoint,:] = np.mean(activations[:,timepoint:(timepoint+window_length)],1)
+
+    return smoothed_activations
 
 def sliding_window_isfc(activations, window_length):
     '''
@@ -181,7 +206,7 @@ def sliding_window_isfc(activations, window_length):
     Return:
         A time_len x (voxel_num^2-voxel_num)/2 dimension matrix containing the ISFC of the input fRMI dataset
     '''
-    subj_num, activations_len, time_len= activations.shape[0],activations.shape[1],activations.shape[2]
+    subj_num, activations_len, time_len= activations.shape[0],activations.shape[1],activations.shape[2]-window_length+1
     correlations= np.zeros([subj_num, time_len,activations_len,activations_len])
     correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
     activations = np.array(activations)
@@ -189,7 +214,6 @@ def sliding_window_isfc(activations, window_length):
     for subj in range(subj_num):
         for timepoint in range(time_len):
             correlations[subj, timepoint] = 1-cdist(activations[subj,:,timepoint:(timepoint+window_length)],activations_sum[subj,:,timepoint:(timepoint+window_length)],"correlation")
-
     #normalize and average the correlation matrix
     correlations_mean = np.mean(0.5*(np.log(1e-5+1+correlations) - np.log(1e-5+1-correlations)),0)
     correlations_mean = correlations_mean+np.swapaxes(correlations_mean,1,2)

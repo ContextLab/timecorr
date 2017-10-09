@@ -12,19 +12,35 @@ import socket
 import getpass
 import datetime as dt
 
+
 # ====== MODIFY ONLY THE CODE BETWEEN THESE LINES ======
 # each job command should be formatted as a string
 job_script = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'decoding_analysis.py')
 
-job_commands = [x[0]+" "+str(x[1])+" "+str(x[2]) for x in zip([job_script]*600,['../../pieman-paragraph/']*100+['../../pieman-resting/']*100+['../../pieman-intact/']*100+['../../pieman-word/']*100+['../../sherlock/']*100+['../../forrest/']*100,list(range(100))*6)]
+#job_script = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'accuracy_calculation.py')
 
-#job_commands = [job_script+' ../../forrest/ 100 10']
+#job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+x[2]+" "+str(x[3]), zip([job_script]*600,['../../pieman-intact/']*100+['../../sherlock/']*100+['../../pieman-paragraph/']*100+['../../pieman-word/']*100+['../../pieman-resting/']*100+['../../forrest/']*100,['1']*600,range(100)*6))
+#job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+str(x[2]), zip([job_script]*100,['../../pieman-paragraph/']*100,range(100)))
 
-#job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+x[2]+" "+str(x[3]), zip([job_script]*100,['../../forrest/']*100,['10']*100,range(100)))   
+#job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+x[2]+" "+str(x[3]), zip([job_script]*100,['../../pieman-paragraph/']*100,['1']*100,range(100)))
 
-#job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+x[2]+" "+x[3], zip([job_script]*5,['../../pieman-paragraph/','../../pieman-resting/','../../pieman-intact/','../../pieman-word/','../../sherlock/'],['100']*5,['10']*5))
+job_commands = [x[0]+" "+str(x[1])+" "+str(x[2]) for x in zip([job_script]*10,['../../sherlock/']*5+['../../forrest/']*5,[32,97,66,86,95,99,58,79,98,15])]
 
-#job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+x[2]+" "+str(x[3]), zip([job_script]*500,['../../pieman-paragraph/']*100+['../../pieman-resting/']*100+['../../pieman-intact/']*100+['../../pieman-word/']*100+['../../sherlock/']*100,['10']*500,range(100)*5))
+#job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+str(x[2]), zip([job_script]*400,['../../pieman-paragraph/']*100+['../../pieman-resting/']*100+['../../pieman-intact/']*100+['../../pieman-word/']*100,range(100)*4))
+
+#+['../../sherlock/']*100+['../../forrest/']*100
+
+
+#job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+str(x[2]), zip([job_script]*6,['../../pieman-paragraph/']+['../../pieman-resting/']+['../../pieman-intact/']+['../../pieman-word/']+['../../sherlock/']+['../../forrest/'],[2]*6))
+
+#job_commands = [job_script+' ../../pieman-paragraph/ 2']
+
+#job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+str(x[2]), zip([job_script]*3,['../../forrest/']*3,[24,69,86]))
+#job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+x[2]+" "+x[3], zip([job_script]*6,['../../pieman-paragraph/','../../pieman-resting/','../../pieman-intact/','../../pieman-word/','../../sherlock/','../../forrest/'],['100']*6,['0']*6))
+
+
+#job_commands = map(lambda x: x[0]+" "+str(x[1])+" "+str(x[2]), zip([job_script]*600,['../../pieman-intact/']*100+['../../pieman-resting/']*100+['../../pieman-paragraph/']*100+['../../pieman-word/']*100+['../../sherlock/']*100+['../../forrest/']*100,range(100)*6))
+
 
 # job_names should specify the file name of each script (as a list, of the same length as job_commands)
 job_names = [str(x)+'_levelup.sh' for x in range(len(job_commands))]

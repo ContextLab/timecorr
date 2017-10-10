@@ -111,7 +111,7 @@ def wcorr_helper(timepoint):
     coefficient_tiled, coefficient_sum = coefficient_generation(timepoint)
 
     # normalize activations and calculate standard deviations
-    normalized_activations = activations - old_div(np.tile(np.reshape(np.sum(np.multiply(coefficient_tiled,activations),1),[activations_len,1]),[1,time_len]),coefficient_sum)
+    normalized_activations = activations - np.divide(np.tile(np.reshape(np.sum(np.multiply(coefficient_tiled,activations),1),[activations_len,1]),[1,time_len]),coefficient_sum)
     sigma  = np.sqrt(np.divide(np.sum(np.multiply(coefficient_tiled, np.square(normalized_activations)),1),coefficient_sum))
     normalized_activations = np.divide(normalized_activations,np.tile(np.reshape(sigma,[activations_len,1]),[1,time_len]))
 

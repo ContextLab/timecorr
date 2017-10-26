@@ -181,7 +181,8 @@ def sliding_window(activations, window_length):
     activations_len, time_len = activations.shape
     time_len -= window_length-1
     correlations = np.zeros([time_len,activations_len,activations_len])
-    correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
+    correlations_vector = np.zeros([time_len, int((activations_len * ((activations_len)-1) / 2))]) 
+
 
     for timepoint in range(time_len):
         correlations[timepoint] = np.corrcoef(activations[:,timepoint:(timepoint+window_length)])

@@ -1,230 +1,175 @@
-from __future__ import division
-from builtins import map
-from builtins import range
-from past.utils import old_div
 import numpy as np
+cimport numpy as np
 from math import exp, sqrt, pi
 from scipy.spatial.distance import squareform, cdist
-from multiprocessing import Pool,cpu_count
 
-def coefficient_generation(timepoint):
-    '''
-    Given the guassian array generated in the main function, this function calculates the Gaussian coefficients for each timepoint
+def isfc(double[:,:,:] multi_activations, int gaussian_variance):
+    #cython variable declaration
+    cdef int time_len, activations_len, subj_num, timepoint, subj
+    cdef np.ndarray[double, ndim=2] correlations_vector, normalized_activations,normalized_sum_activations
+    cdef np.ndarray[double, ndim=3] c_activations, activations_sum, correlations_mean, coefficients
+    cdef np.ndarray[double, ndim=4] correlations
+    cdef np.ndarray gaussian_array, coefficients_sum, coefficient, sigma_activations, sigma_activations_sum
 
-    Input:
-        timepoint: the timepoint for which the coeficients are generated
-
-    Return:
-        The sum and a tiled version of the coefficient array
-    '''
-    coefficient = gaussian_array[(time_len-1-timepoint):(2*time_len-1-timepoint)]
-    return np.tile(coefficient,[activations_len,1]), np.sum(coefficient)
-
-def isfc_helper(subj):
-    '''
-    Helper function to calculate the dynamic correlation matrix for each subject
-
-    Input:
-        subj: the index of the subjec to calculate the dynamic correlation matrix for
-
-    Return:
-        A time_len x activations_len x activations_len matrix
-    '''
-    # helper method to calculate correlation matrices at each timepoint
-    def isfc_timepoint_helper(timepoint):
-        # normalize activations, summing  over other subjects and calcualte standard deviations
-        normalized_activations = activations[subj] - np.divide(np.tile(np.reshape(np.sum(np.multiply(coefficients[timepoint],activations[subj]),1),[activations_len,1]),[1,time_len]),coefficients_sum[timepoint])
-        normalized_sum_activations = activations_sum[subj] - np.divide(np.tile(np.reshape(np.sum(np.multiply(coefficients[timepoint],activations_sum[subj]),1),[activations_len,1]),[1,time_len]),coefficients_sum[timepoint])
-        sigma_activations  = np.sqrt(np.divide(np.sum(np.multiply(coefficients[timepoint], np.square(normalized_activations)),1),coefficients_sum[timepoint]))
-        sigma_activations_sum = np.sqrt(np.divide(np.sum(np.multiply(coefficients[timepoint], np.square(normalized_sum_activations)),1),coefficients_sum[timepoint]))
-        normalized_activations = np.divide(normalized_activations,np.tile(np.reshape(sigma_activations,[activations_len,1]),[1,time_len]))
-        normalized_sum_activations = np.divide(normalized_sum_activations,np.tile(np.reshape(sigma_activations_sum,[activations_len,1]),[1,time_len]))
-
-        return np.divide(np.dot(np.multiply(np.tile(coefficients[timepoint,0],[activations_len,1]),normalized_activations),normalized_sum_activations.T),coefficients_sum[timepoint])
-
-    return np.array(list(map(isfc_timepoint_helper, list(range(time_len)))))
-
-def isfc(multi_activations, var=None):
-    '''
-    Function to calculate the ISFC for a multi-subject fRMI dataset
-
-    Input:
-        multi_activations: a subject_num x voxel_num x time_len numpy matrix containing the fRMI data   of multiple subjects
-
-        var: The variance of the Gaussian distribution used to represent the influence of neighboring timepoints on calculation of correlation at the current timepoint in timecorr
-
-    Return:
-        A time_len x (voxel_num^2-voxel_num)/2 dimension matrix containing the ISFC of the input fRMI dataset
-    '''
-    # reference global variables to be used in multiprocessing helper functions
-    global coefficients, activations_sum, coefficients_sum, activations
-    global gaussian_array, time_len, subj_num, activations_len
-    # assign initial parameters
-    subj_num, activations_len, time_len = multi_activations.shape[0],multi_activations.shape[1],multi_activations.shape[2]
-    if var is None:
-        gaussian_variance = min(time_len, 1000)
-    else:
-        gaussian_variance = var
-
+    #assign initial parameters
+    subj_num, activations_len, time_len= multi_activations.shape[0],multi_activations.shape[1],multi_activations.shape[2]
     coefficients_sum = np.zeros(time_len)
     correlations= np.zeros([subj_num, time_len,activations_len,activations_len])
     correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
     coefficients = np.zeros([time_len, activations_len,time_len])
-    gaussian_array = np.array([np.divide(exp(-timepoint**2/2/gaussian_variance),sqrt(2*pi*gaussian_variance)) for timepoint in range(-time_len+1,time_len)])
-    activations = np.array(multi_activations)
+    gaussian_array = np.array([exp(-timepoint**2/2/gaussian_variance)/sqrt(2*pi*gaussian_variance) for timepoint in range(-time_len+1,time_len)])
+    c_activations = np.array(multi_activations)
 
-    # generate the gaussian coefficients
     for timepoint in range(time_len):
-        coefficients[timepoint], coefficients_sum[timepoint] = coefficient_generation(timepoint)
+        coefficient = gaussian_array[(time_len-1-timepoint):(2*time_len-1-timepoint)]
+        coefficients_sum[timepoint] = np.sum(coefficient)
+        coefficients[timepoint] = np.tile(coefficient,[activations_len,1])
 
-    # create a matrix that, for each subject, contains the sum of the data for all other subjects
-    activations_sum = np.divide((np.tile(np.sum(activations,0),[subj_num,1,1]) - activations),(subj_num-1.0))
+    #create a matrix that, for each subject, contains the sum of the data for all other subjects
+    activations_sum = (np.tile(np.sum(c_activations,0),[subj_num,1,1]) - c_activations)/(subj_num-1.0)
 
-    # calculate the correlations for each timepoint for each subject
-    p = Pool(min(cpu_count()-1,subj_num))
-    correlations = np.array(p.map(isfc_helper,list(range(subj_num))))
-    p.terminate()
+    #calculate the correlations for each timepoint for each subject
+    for subj in range(subj_num):
+        for timepoint in range(time_len):
+            normalized_activations = c_activations[subj] - np.tile(np.reshape(np.sum(np.multiply(coefficients[timepoint],c_activations[subj]),1),[activations_len,1]),[1,time_len])/coefficients_sum[timepoint]
+            normalized_sum_activations = activations_sum[subj] - np.tile(np.reshape(np.sum(np.multiply(coefficients[timepoint],activations_sum[subj]),1),[activations_len,1]),[1,time_len])/coefficients_sum[timepoint]
+            sigma_activations  = np.sqrt(np.sum(np.multiply(coefficients[timepoint], np.square(normalized_activations)),1)/coefficients_sum[timepoint])
+            sigma_activations_sum = np.sqrt(np.sum(np.multiply(coefficients[timepoint], np.square(normalized_sum_activations)),1)/coefficients_sum[timepoint])
 
-    # normalize and average the correlation matrix
-    correlations_mean = np.mean(0.5*(np.log(1e-5+1+correlations) - np.log(1e-5+1-correlations)),0)
+            for i in range(activations_len):
+                for j in range(activations_len):
+                    correlations[subj, timepoint, i,j] = np.sum(np.multiply(np.multiply(coefficients[timepoint,0], normalized_activations[i]), normalized_sum_activations[j]))/(sigma_activations[i]*sigma_activations_sum[j]*coefficients_sum[timepoint])
+
+    #normalize and average the correlation matrix
+    correlations_mean = np.mean(0.5*(np.log(1+correlations) - np.log(1-correlations)),0)
     correlations_mean = correlations_mean+np.swapaxes(correlations_mean,1,2)
-    correlations_mean =  np.divide((np.exp(correlations_mean) - 1),(np.exp(correlations_mean) + 1))
+    correlations_mean =  (np.exp(correlations_mean) - 1)/(np.exp(correlations_mean) + 1)
 
-    # transform into reverse squareform
+
     for i in range(time_len):
         correlations_vector[i] = squareform(correlations_mean[i,:,:],checks=False)
 
     return correlations_vector
- 
 
-def wcorr_helper(timepoint):
-    '''
-    Helper function to calculate the dynamic correlation at each timepoint
 
-    Input:
-        timepoint: the timepoint at which to calculate the correlationi matrix
 
-    Ouput:
-        A activations_len x activations_len matrix containing the correlation at the input timepoint
-    '''
-    # generate coefficients
-    coefficient_tiled, coefficient_sum = coefficient_generation(timepoint)
+def wcorr(activations, gaussian_variance):
+    # #cython variable declaration
+    cdef int time_len, activations_len, timepoint, i, j, index
+    cdef np.ndarray[double, ndim=2] correlations_vector, coefficient_tiled
+    cdef np.ndarray gaussian_array, sigma, coefficient
 
-    # normalize activations and calculate standard deviations
-    normalized_activations = activations - np.divide(np.tile(np.reshape(np.sum(np.multiply(coefficient_tiled,activations),1),[activations_len,1]),[1,time_len]),coefficient_sum)
-    sigma  = np.sqrt(np.divide(np.sum(np.multiply(coefficient_tiled, np.square(normalized_activations)),1),coefficient_sum))
-    normalized_activations = np.divide(normalized_activations,np.tile(np.reshape(sigma,[activations_len,1]),[1,time_len]))
-
-    return squareform(np.divide(np.dot(np.multiply(coefficient_tiled,normalized_activations),normalized_activations.T),coefficient_sum), checks=False)
-
-def wcorr(single_activations, var=None):
-    '''
-    Function to calculate the ISFC for a single-subject fRMI dataset
-
-    Input:
-        single_activations: a voxel_num x time_len numpy matrix containing the fRMI data of a single subject
-
-        var: The variance of the Gaussian distribution used to represent the influence of neighboring timepoints on calculation of correlation at the current timepoint in timecorr
-
-    Return:
-        A time_len x (voxel_num^2-voxel_num)/2 dimension matrix containing the ISFC of the input fRMI dataset
-    '''
-    # reference global paramters for multiprocessing
-    global gaussian_array, activations, time_len, activations_len
-    # assign initial parameters
-    activations = single_activations
+    #assign initial parameters
     activations_len, time_len= activations.shape
-    if var is None:
-        gaussian_variance = min(time_len, 1000)
-    else:
-        gaussian_variance = var
+    correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
+    gaussian_array = np.array([exp(-timepoint**2/2/gaussian_variance)/sqrt(2*pi*gaussian_variance) for timepoint in range(-time_len+1,time_len)])
 
-    # generate gaussian coefficients
-    gaussian_array = np.array([np.divide(exp(-timepoint**2/2/gaussian_variance),sqrt(2*pi*gaussian_variance)) for timepoint in range(-time_len+1,time_len)])
-
-    # using multiprocessing to calculate correlations at each timepoint
-    p = Pool(cpu_count()-1)
-    correlations_vectors = np.array(p.map(wcorr_helper, list(range(time_len))))
-    p.terminate()
-
-    return correlations_vectors
-
-def timecorr_smoothing(single_activations, var=None):
-    global gaussian_array, activations, time_len, activations_len
-    activations = single_activations
-    activations_len, time_len= activations.shape
-    smoothed_activations = np.zeros([time_len,activations_len])
-    if var is None:
-        gaussian_variance = min(time_len, 1000)
-    else:
-        gaussian_variance = var
-    # generate gaussian coefficients
-    gaussian_array = np.array([np.divide(exp(-timepoint**2/2/gaussian_variance),sqrt(2*pi*gaussian_variance)) for timepoint in range(-time_len+1,time_len)])
     for timepoint in range(time_len):
-        coefficient_tiled, coefficient_sum = coefficient_generation(timepoint)
-        smoothed_activations[timepoint,:] = np.divide(np.sum(np.multiply(coefficient_tiled,activations),1),coefficient_sum)
+        coefficient = gaussian_array[(time_len-1-timepoint):(2*time_len-1-timepoint)]
+        coefficient_tiled = np.tile(coefficient,[activations_len,1])
+        coefficient_sum = np.sum(coefficient)
+        normalized_activations = activations - np.tile(np.reshape(np.sum(np.multiply(coefficient_tiled,activations),1),[activations_len,1]),[1,time_len])/coefficient_sum
+        sigma  = np.sqrt(np.sum(np.multiply(coefficient_tiled, np.square(normalized_activations)),1)/coefficient_sum)
+        index = 0
+        for i in range(activations_len-1):
+            for j in range(i+1,activations_len):
+                correlations_vector[timepoint, index] = np.sum(np.multiply(np.multiply(coefficient, normalized_activations[i]), normalized_activations[j]))/(sigma[i]*sigma[j]*coefficient_sum)
+                index+=1
 
-    return smoothed_activations
+    return correlations_vector
 
-def sliding_window(activations, window_length):
-    '''
-    Sliding window approach to calculate dynamic correlations for single subject
 
-    Input:
-        activations: activations_len x time_len matrix containing fRMI for a single subject
 
-        window_length: length of the window to use to calculate correlation at a timepoint
+def sliding_window(activations, estimation_range):
+    cdef np.ndarray correlations_vector, correlations
+    cdef int timepoint, time_len, activations_len
 
-    Return:
-        A time_len x (voxel_num^2-voxel_num)/2 dimension matrix containing the dynamic correlations of the input fRMI dataset
-    '''
     activations_len, time_len = activations.shape
-    time_len -= window_length-1
+    time_len -= estimation_range-1
     correlations = np.zeros([time_len,activations_len,activations_len])
-    correlations_vector = np.zeros([time_len, int((activations_len * ((activations_len)-1) / 2))]) 
-
+    correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
 
     for timepoint in range(time_len):
-        correlations[timepoint] = np.corrcoef(activations[:,timepoint:(timepoint+window_length)])
+        correlations[timepoint] = np.corrcoef(activations[:,timepoint:(timepoint+estimation_range)])
         correlations_vector[timepoint] = squareform(correlations[timepoint,:,:],checks=False)
 
     return correlations_vector
 
-def sliding_window_smoothing(activations, window_length):
-    activations_len, time_len = activations.shape
-    time_len -= window_length-1
-    smoothed_activations = np.zeros([time_len,activations_len])
-    for timepoint in range(time_len):
-        smoothed_activations[timepoint,:] = np.mean(activations[:,timepoint:(timepoint+window_length)],1)
+# def wcorr(activations, gaussian_variance, estimation_range):
+#     cdef np.ndarray gaussian_array, correlations, correlations_vector
+#     cdef np.ndarray c_activations, correlation_fragments
+#     cdef int timepoint, i, half_range, time_len
+#
+#     half_range = int((estimation_range-1)/2)
+#     activations_len, time_len = activations.shape[0], activations.shape[1]
+#     gaussian_array = np.array([exp(-timepoint**2/2/gaussian_variance)/sqrt(2*pi*gaussian_variance) for timepoint in range(-time_len+1,time_len)])
+#     correlations = correlation_fragments = np.zeros([time_len, activations_len, activations_len])
+#     correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
+#     c_activations = activations
+#
+#     for timepoint in range(half_range,time_len-half_range):
+#         correlation_fragments[timepoint,:,:] = np.corrcoef(c_activations[:,(timepoint-1):(timepoint+2)])
+#     correlation_fragments[range(half_range),:,:], correlation_fragments[range(time_len-half_range, time_len),:,:] = correlation_fragments[1,:,:], correlation_fragments[time_len-2,:,:]
+#
+#     for timepoint in range(time_len):
+#         coefficients = gaussian_array[(time_len-1-timepoint):(2*time_len-1-timepoint)]
+#         coefficients = coefficients/np.sum(coefficients)
+#         coefficients = np.swapaxes(np.tile(np.tile(coefficients,[activations_len,1]),[activations_len,1,1]),2,0)
+#         correlations[timepoint,:,:] = np.sum(np.multiply(coefficients, correlation_fragments),0)
+#
+#     for i in range(time_len):
+#         correlations_vector[i] = squareform(correlations[i,:,:],checks=False)
+#
+#     return correlations_vector
 
-    return smoothed_activations
 
-def sliding_window_isfc(activations, window_length):
-    '''
-    Sliding window approach to calculate dynamic correlations for multiple subjects
-
-    Input:
-        activations: subject_num x activations_len x time_len matrix containing fRMI for a multiple subjects
-
-        window_length: length of the window to use to calculate correlation at a timepoint
-
-    Return:
-        A time_len x (voxel_num^2-voxel_num)/2 dimension matrix containing the ISFC of the input fRMI dataset
-    '''
-    subj_num, activations_len, time_len= activations.shape[0],activations.shape[1],activations.shape[2]-window_length+1
-    correlations= np.zeros([subj_num, time_len,activations_len,activations_len])
-    correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
-    activations = np.array(activations)
-    activations_sum = np.divide((np.tile(np.sum(activations,0),[subj_num,1,1]) - activations),(subj_num-1.0))
-    for subj in range(subj_num):
-        for timepoint in range(time_len):
-            correlations[subj, timepoint] = 1-cdist(activations[subj,:,timepoint:(timepoint+window_length)],activations_sum[subj,:,timepoint:(timepoint+window_length)],"correlation")
-    #normalize and average the correlation matrix
-    correlations_mean = np.mean(0.5*(np.log(1e-5+1+correlations) - np.log(1e-5+1-correlations)),0)
-    correlations_mean = correlations_mean+np.swapaxes(correlations_mean,1,2)
-    correlations_mean =  np.divide((np.exp(correlations_mean) - 1),(np.exp(correlations_mean) + 1))
-
-    for i in range(time_len):
-        correlations_vector[i] = squareform(correlations_mean[i,:,:],checks=False)
-
-    return correlations_vector
+# def isfc(activations, gaussian_variance, estimation_range):
+#     #cython variable declaration
+#     cdef int time_len, activations_len, subj_num, timepoint, subj, half_range
+#     cdef np.ndarray[double, ndim=2] correlations_vector
+#     cdef np.ndarray[double, ndim=3] c_activations, activations_sum, correlations_mean
+#     cdef np.ndarray[double, ndim=4] correlations, correlation_fragments, coefficients
+#     cdef np.ndarray gaussian_array
+#
+#     #assign initial parameters
+#     subj_num = activations.shape[0]
+#     half_range = int((estimation_range-1)/2)
+#     activations_len, time_len= activations[0].shape
+#     correlations = correlation_fragments = np.zeros([subj_num,time_len,activations_len,activations_len])
+#     correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
+#     coefficients = np.zeros([time_len,time_len,activations_len,activations_len])
+#     gaussian_array = np.array([exp(-timepoint**2/2/gaussian_variance)/sqrt(2*pi*gaussian_variance) for timepoint in range(-time_len+1,time_len)])
+#     c_activations = activations
+#
+#     for timepoint in range(time_len):
+#         coefficient = gaussian_array[(time_len-1-timepoint):(2*time_len-1-timepoint)]
+#         coefficient = coefficient/np.sum(coefficient)
+#         coefficients[timepoint] = np.swapaxes(np.tile(np.tile(coefficient,[activations_len,1]),[activations_len,1,1]),2,0)
+#
+#     #create a matrix that, for each subject, contains the sum of the data for all other subjects
+#     activations_sum = (np.tile(np.sum(c_activations,0),[subj_num,1,1]) - c_activations)/(subj_num-1.0)
+#
+#     #calculate the correlations for each timepoint for each subject
+#     for subj in range(subj_num):
+#         #calculate correlation fragments for each timepoint using 3 consecutive timepoints
+#         for timepoint in range(half_range,time_len-half_range):
+#             correlation_fragments[subj,timepoint,:,:] = np.cov(c_activations[subj,:,(timepoint-1):(timepoint+2)],\
+#                                                             activations_sum[subj,:,(timepoint-1):(timepoint+2)])[:activations_len,activations_len:]
+#             # correlation_fragments[subj,timepoint,:,:] = 1-cdist(c_activations[subj,:,(timepoint-1):(timepoint+2)],\
+#             #                                                 activations_sum[subj,:,(timepoint-1):(timepoint+2)],'correlation')
+#         #the first and last timepoint of the correlation fragments are equal to the second and second to last fragments
+#         correlation_fragments[subj,range(half_range),:,:], correlation_fragments[subj,range(time_len-half_range, time_len),:,:] = correlation_fragments[subj,half_range,:,:], correlation_fragments[subj,time_len-half_range-1,:,:]
+#
+#         #multiply the correlation fragments with the gaussian coefficients
+#         for timepoint in range(time_len):
+#             correlations[subj, timepoint,:,:] = np.sum(np.multiply(coefficients[timepoint], correlation_fragments[subj]),0)
+#
+#     #normalize and average the correlation matrix
+#     correlations_mean = np.mean(0.5*(np.log(1+correlations) - np.log(1-correlations)),0)/2
+#     correlations_mean =  (np.exp(2*correlations_mean) - 1)/(np.exp(2*correlations_mean) + 1)
+#
+#     #convert the square correlation matrices into vector form
+#     for i in range(time_len):
+#         correlations_vector[i] = squareform(correlations_mean[i,:,:],checks=False)
+#
+#     return correlations_vector

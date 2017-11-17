@@ -73,7 +73,7 @@ def timecorr(data, weight_function=gaussian_weights, weights_params=gaussian_par
         Default: A continuous verison of Inter-Subject Functional Connectivity
         (Simony et al. 2017).  If only one data array is passed (rather than a
         list), the default cfun returns the moment-by-moment correlations for
-        that array.
+        that array.  (Reference: http://www.nature.com/articles/ncomms12141)
 
     Outputs
     ----------

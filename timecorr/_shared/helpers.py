@@ -66,14 +66,33 @@ def weighted_mean(x, axis=None, weights=None):
     #multiply each slice of x by its weight and then sum along the specified dimension
     return np.sum(np.stack(list(map(lambda w, x: np.multiply(w, x), weights, np.split(x, x.shape[axis], axis=axis))), axis=axis), axis=axis)
 
+def weighted_variance(x, axis=None, weights=None):
+    if axis is None:
+        axis=len(x.shape)
+    if weights is None:
+        weights = np.ones([1, x.shape[axis]])
+
+    #remove nans and force weights to sum to 1
+    weights[np.isnan[weights]] = 0
+    if np.sum(weights) == 0:
+        dims = np.arange(len(x.shape))
+        dims = dims[dims != axis]
+        return np.zeros(dims)
+
+    diffs = x - np.tile()
+
+    #variance = mean(x - mean)
+
 #def wcorr(x, y, weights):
 #TODO: WRITE THIS
+def wcorr(x, y, weights):
+    def
 
 
 
 
 
-def wcorr(activations, gaussian_variance):
+def wcorr2(activations, gaussian_variance):
     # #cython variable declaration
     cdef int time_len, activations_len, timepoint, i, j, index
     cdef np.ndarray[double, ndim=2] correlations_vector, coefficient_tiled

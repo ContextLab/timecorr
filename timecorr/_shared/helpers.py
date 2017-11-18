@@ -27,6 +27,7 @@ def isfc(data, weights):
             sum += r2z(wcorr(data[s], other_mean, weights))
         return z2r(np.divide(sum, len(data)))
 
+
 def wisfc(data, weights):
     if (type(data) != list) or (len(data) == 1):
         return isfc(data, weights)
@@ -97,45 +98,17 @@ def wcorr(x, y, weights):
     for i in np.arange(x.shape[1]):
         if autocorr:
             stop = i
+            r[i, i] = 1
         else:
             stop = y.shape[1]
-
         a = x[:, i]
         for j in np.arange(stop):
             b = y[:, j]
-
             r[i, j] = wcorr_helper(a, b, weights)
-            #STOPPED HERE
 
-
-
-
-
-def wcorr2(activations, gaussian_variance):
-    # #cython variable declaration
-    cdef int time_len, activations_len, timepoint, i, j, index
-    cdef np.ndarray[double, ndim=2] correlations_vector, coefficient_tiled
-    cdef np.ndarray gaussian_array, sigma, coefficient
-
-    #assign initial parameters
-    activations_len, time_len= activations.shape
-    correlations_vector = np.zeros([time_len,(activations_len * (activations_len-1) / 2)])
-    gaussian_array = np.array([exp(-timepoint**2/2/gaussian_variance)/sqrt(2*pi*gaussian_variance) for timepoint in range(-time_len+1,time_len)])
-
-    for timepoint in range(time_len):
-        coefficient = gaussian_array[(time_len-1-timepoint):(2*time_len-1-timepoint)]
-        coefficient_tiled = np.tile(coefficient,[activations_len,1])
-        coefficient_sum = np.sum(coefficient)
-        normalized_activations = activations - np.tile(np.reshape(np.sum(np.multiply(coefficient_tiled,activations),1),[activations_len,1]),[1,time_len])/coefficient_sum
-        sigma  = np.sqrt(np.sum(np.multiply(coefficient_tiled, np.square(normalized_activations)),1)/coefficient_sum)
-        index = 0
-        for i in range(activations_len-1):
-            for j in range(i+1,activations_len):
-                correlations_vector[timepoint, index] = np.sum(np.multiply(np.multiply(coefficient, normalized_activations[i]), normalized_activations[j]))/(sigma[i]*sigma[j]*coefficient_sum)
-                index+=1
-
-    return correlations_vector
-
+            if autocorr:
+                r[j, i] = r[i, j]
+    return r
 
 
 def squareform(m):

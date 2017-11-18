@@ -1,8 +1,6 @@
 import numpy as np
 import scipy.spatial.distance as sd
 
-#import isfc, gaussian_weights, gaussian_params
-
 gaussian_params = {'var': 1000}
 
 def gaussian_weights(timepoints, t, params=gaussian_params):

@@ -66,7 +66,7 @@ def weighted_mean(x, axis=None, weights=None):
     #multiply each slice of x by its weight and then sum along the specified dimension
     return np.sum(np.stack(list(map(lambda w, x: np.multiply(w, x), weights, np.split(x, x.shape[axis], axis=axis))), axis=axis), axis=axis)
 
-def weighted_variance(x, axis=None, weights=None):
+def weighted_std(x, axis=None, weights=None):
     if axis is None:
         axis=len(x.shape)
     if weights is None:
@@ -79,14 +79,33 @@ def weighted_variance(x, axis=None, weights=None):
         dims = dims[dims != axis]
         return np.zeros(dims)
 
-    diffs = x - np.tile()
+    mean_x = weighted_mean(x, axis=0, weights=weights)
+    diffs = x - np.tile(weighted_mean, [x.shape[0], 1])
+    return np.sqrt(weighted_mean(np.power(diffs, 2), axis=0, weights=weights))
 
-    #variance = mean(x - mean)
-
-#def wcorr(x, y, weights):
-#TODO: WRITE THIS
 def wcorr(x, y, weights):
-    def
+    def wcorr_helper(a, b, weights):
+        ma = weighted_mean(a, axis=0, weights=weights)
+        mb = weighted_mean(b, axis=0, weights=weights)
+        sa = weighted_std(a, axis=0, weights=weights)
+        sb = weighted_std(b, axis=0, weights=weights)
+
+        return np.divide(weighted_mean((a - ma) * (b - mb), axis=0, weights=weights), sa * sb)
+
+    r = np.zeros([x.shape[1], y.shape[1]])
+    autocorr = np.close(x, y).all()
+    for i in np.arange(x.shape[1]):
+        if autocorr:
+            stop = i
+        else:
+            stop = y.shape[1]
+
+        a = x[:, i]
+        for j in np.arange(stop):
+            b = y[:, j]
+
+            r[i, j] = wcorr_helper(a, b, weights)
+            #STOPPED HERE
 
 
 

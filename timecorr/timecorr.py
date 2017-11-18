@@ -1,4 +1,6 @@
-from ._shared.helpers import isfc, gaussian_weights, gaussian_params
+# coding: utf-8
+
+from .helpers import isfc, gaussian_weights, gaussian_params
 
 #TO DO:
 # - modify isfc to accept a list OR numpy array (single-subject)
@@ -13,7 +15,7 @@ import numpy as np
 import hypertools as hyp
 import scipy.spatial.distance as sd
 
-def timecorr(data, weight_function=gaussian_weights, weights_params=gaussian_params, mode="within", cfun=isfc):
+def timecorr(data, weights_function=gaussian_weights, weights_params=gaussian_params, mode="within", cfun=isfc):
     """
     Computes dynamics correlations in single-subject or multi-subject data.
 

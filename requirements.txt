@@ -2,6 +2,7 @@ nose
 sphinx
 numpy
 pandas
-hypertools
+hypertools>=0.4.1
 scipy
 matplotlib
+numba

@@ -2,6 +2,7 @@
 
 import numpy as np
 import scipy.spatial.distance as sd
+from numba import jit
 
 gaussian_params = {'var': 1000}
 
@@ -23,7 +24,7 @@ def isfc(data, weights):
         sum = np.zeros([T, ((V ** 2) - V) / 2])
         for s in subjects:
             other_inds = subjects[subjects != s]
-            other_mean = np.mean(np.stack(data[other_inds], axis=2), axis=2)
+            other_mean = np.mean(np.stack([data[x] for x in other_inds], axis=2), axis=2)
             sum += r2z(wcorr(data[s], other_mean, weights))
         return z2r(np.divide(sum, len(data)))
 
@@ -53,12 +54,12 @@ def wisfc(data, weights):
 
 def weighted_mean(x, axis=None, weights=None):
     if axis is None:
-        axis=len(x.shape)
+        axis=len(x.shape)-1
     if weights is None:
         weights = np.ones([1, x.shape[axis]])
 
     #remove nans and force weights to sum to 1
-    weights[np.isnan[weights]] = 0
+    weights[np.isnan(weights)] = 0
     if np.sum(weights) == 0:
         return np.mean(x, axis=axis)
 
@@ -69,21 +70,16 @@ def weighted_mean(x, axis=None, weights=None):
 
 def weighted_std(x, axis=None, weights=None):
     if axis is None:
-        axis=len(x.shape)
-    if weights is None:
-        weights = np.ones([1, x.shape[axis]])
+        axis=len(x.shape)-1
 
-    #remove nans and force weights to sum to 1
-    weights[np.isnan[weights]] = 0
-    if np.sum(weights) == 0:
-        dims = np.arange(len(x.shape))
-        dims = dims[dims != axis]
-        return np.zeros(dims)
+    mean_x = weighted_mean(x, axis=axis, weights=weights)
+    dims = np.ones([1, len(x.shape)], dtype=np.int)[0]
+    dims[axis] = x.shape[axis]
 
-    mean_x = weighted_mean(x, axis=0, weights=weights)
-    diffs = x - np.tile(weighted_mean, [x.shape[0], 1])
-    return np.sqrt(weighted_mean(np.power(diffs, 2), axis=0, weights=weights))
+    diffs = x - np.tile(mean_x, dims)
+    return np.sqrt(weighted_mean(np.power(diffs, 2), axis=axis, weights=weights))
 
+@jit
 def wcorr(x, y, weights):
     def wcorr_helper(a, b, weights):
         ma = weighted_mean(a, axis=0, weights=weights)
@@ -94,7 +90,7 @@ def wcorr(x, y, weights):
         return np.divide(weighted_mean((a - ma) * (b - mb), axis=0, weights=weights), sa * sb)
 
     r = np.zeros([x.shape[1], y.shape[1]])
-    autocorr = np.close(x, y).all()
+    autocorr = np.isclose(x, y).all()
     for i in np.arange(x.shape[1]):
         if autocorr:
             stop = i
@@ -104,7 +100,7 @@ def wcorr(x, y, weights):
         a = x[:, i]
         for j in np.arange(stop):
             b = y[:, j]
-            r[i, j] = wcorr_helper(a, b, weights)
+            r[i, j] = wcorr_helper(a[:, np.newaxis], b[:, np.newaxis], weights[:, np.newaxis])
 
             if autocorr:
                 r[j, i] = r[i, j]

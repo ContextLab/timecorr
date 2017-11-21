@@ -45,38 +45,24 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     T = data[0].shape[0]
     V = data[0].shape[1]
 
-    connectomes = np.zeros([len(data), ((V ** 2) - V) / 2])
     subjects = np.arange(len(data))
 
     def get_weighted_connectome(s):
         print('computing connectome for subject ' + str(s))
         return wcorr(data[s], data[s], timepoint_weights)
 
-    #for s in subjects:
-    #    connectomes[s, :] = wcorr(data[s], data[s], timepoint_weights)
-
-    #weight subjects by how similar they are to each other
     if subject_weights is None:
-        p = Pool(len(subjects))
-        connectomes = list(p.map(get_weighted_connectome, subjects))
-        connectomes = np.vstack(connectomes)
-
+        connectomes = np.zeros([len(data), ((V ** 2) - V) / 2])
+        for s in subjects:
+            connectomes[s, :] = get_weighted_connectome(s)
         subject_weights = 1 - sd.squareform(sd.cdist(connectomes.T, metric='correlation'))
-
-    def subfun(s):
-        print('working on subject ' + str(s))
-        other_inds = subjects[subjects != s]
-        other_mean = weighted_mean(np.stack(data[other_inds], axis=2), axis=2, weights=subject_weights[s, :])
-        return r2z(wcorr(data[s], other_mean, timepoint_weights))
-
-    p = Pool(len(subjects))
-    zcorrs = list(p.map(subfun, subjects))
 
     sum = np.zeros([T, ((V ** 2) - V) / 2])
     for s in subjects:
-        #other_inds = subjects[subjects != s]
-        #other_mean = weighted_mean(np.stack(data[other_inds], axis=2), axis=2, weights=subject_weights[s, :])
-        sum += zcorrs[s] #r2z(wcorr(data[s], other_mean, timepoint_weights))
+        other_inds = subjects[subjects != s]
+        other_mean = weighted_mean(np.stack(data[other_inds], axis=2), axis=2, weights=subject_weights[s, :])
+        sum += r2z(wcorr(data[s], other_mean, timepoint_weights))
+
     return z2r(np.divide(sum, len(subjects)))
 
 

@@ -2,7 +2,7 @@
 
 import numpy as np
 import scipy.spatial.distance as sd
-from numba import jit
+from multiprocessing import Pool
 
 gaussian_params = {'var': 1000}
 
@@ -12,44 +12,72 @@ def gaussian_weights(timepoints, t, params=gaussian_params):
 
     return np.divide(exp(-np.divide(np.power(np.subtract(timepoints, t), 2), (2 * params['var']))), np.math.sqrt(2 * np.math.pi * params['var']))
 
-def isfc(data, weights):
+def isfc(data, timepoint_weights):
+    if type(data) == list:
+        subject_weights = np.ones([1, len(data)])
+    else:
+        subject_weights = None
+
+    return wisfc(data, timepoint_weights, subject_weights=subject_weights)
+
+    #f (type(data) != list):
+    #    return wcorr(data, data, weights)
+    #elif len(data) == 1:
+    #    return wcorr(data[0], data[0], weights)
+    #else: #need to do the multi-subject thing
+    #    subjects = np.arange(len(data))
+    #    T = data[0].shape[0]
+    #    V = data[0].shape[1]
+    #    sum = np.zeros([T, ((V ** 2) - V) / 2])
+    #    for s in subjects:
+    #        other_inds = subjects[subjects != s]
+    #        other_mean = np.mean(np.stack([data[x] for x in other_inds], axis=2), axis=2)
+    #        sum += r2z(wcorr(data[s], other_mean, weights))
+    #    return z2r(np.divide(sum, len(data)))
+
+
+def wisfc(data, timepoint_weights, subject_weights=None):
     if (type(data) != list):
         return wcorr(data, data, weights)
     elif len(data) == 1:
         return wcorr(data[0], data[0], weights)
-    else: #need to do the multi-subject thing
-        subjects = np.arange(len(data))
-        T = data[0].shape[0]
-        V = data[0].shape[1]
-        sum = np.zeros([T, ((V ** 2) - V) / 2])
-        for s in subjects:
-            other_inds = subjects[subjects != s]
-            other_mean = np.mean(np.stack([data[x] for x in other_inds], axis=2), axis=2)
-            sum += r2z(wcorr(data[s], other_mean, weights))
-        return z2r(np.divide(sum, len(data)))
-
-
-def wisfc(data, weights):
-    if (type(data) != list) or (len(data) == 1):
-        return isfc(data, weights)
 
     T = data[0].shape[0]
     V = data[0].shape[1]
 
     connectomes = np.zeros([len(data), ((V ** 2) - V) / 2])
     subjects = np.arange(len(data))
-    for s in subjects:
-        connectomes[s, :] = wcorr(data[s], data[s], weights)
+
+    def get_weighted_connectome(s):
+        print('computing connectome for subject ' + str(s))
+        return wcorr(data[s], data[s], timepoint_weights)
+
+    #for s in subjects:
+    #    connectomes[s, :] = wcorr(data[s], data[s], timepoint_weights)
 
     #weight subjects by how similar they are to each other
-    similarities = 1 - sd.squareform(sd.cdist(connectomes.T, metric='correlation'))
+    if subject_weights is None:
+        p = Pool(len(subjects))
+        connectomes = list(p.map(get_weighted_connectome, subjects))
+        connectomes = np.vstack(connectomes)
+
+        subject_weights = 1 - sd.squareform(sd.cdist(connectomes.T, metric='correlation'))
+
+    def subfun(s):
+        print('working on subject ' + str(s))
+        other_inds = subjects[subjects != s]
+        other_mean = weighted_mean(np.stack(data[other_inds], axis=2), axis=2, weights=subject_weights[s, :])
+        return r2z(wcorr(data[s], other_mean, timepoint_weights))
+
+    p = Pool(len(subjects))
+    zcorrs = list(p.map(subfun, subjects))
 
     sum = np.zeros([T, ((V ** 2) - V) / 2])
     for s in subjects:
-        other_inds = subjects[subjects != s]
-        other_mean = weighted_mean(np.stack(data[other_inds], axis=2), axis=2, weights=similarities[s, :])
-        sum += r2z(wcorr(data[s], other_mean, weights))
-    return z2r(np.divide(sum, len(data)))
+        #other_inds = subjects[subjects != s]
+        #other_mean = weighted_mean(np.stack(data[other_inds], axis=2), axis=2, weights=subject_weights[s, :])
+        sum += zcorrs[s] #r2z(wcorr(data[s], other_mean, timepoint_weights))
+    return z2r(np.divide(sum, len(subjects)))
 
 
 def weighted_mean(x, axis=None, weights=None):
@@ -79,32 +107,38 @@ def weighted_std(x, axis=None, weights=None):
     diffs = x - np.tile(mean_x, dims)
     return np.sqrt(weighted_mean(np.power(diffs, 2), axis=axis, weights=weights))
 
-@jit
 def wcorr(x, y, weights):
     def wcorr_helper(a, b, weights):
+        a = a[:, np.newaxis]
+        b = b[:, np.newaxis]
+        weights = weights[:, np.newaxis]
         ma = weighted_mean(a, axis=0, weights=weights)
         mb = weighted_mean(b, axis=0, weights=weights)
         sa = weighted_std(a, axis=0, weights=weights)
         sb = weighted_std(b, axis=0, weights=weights)
 
-        return np.divide(weighted_mean((a - ma) * (b - mb), axis=0, weights=weights), sa * sb)
+        return np.divide(weighted_mean((a - ma) * (b - mb), axis=0, weights=weights), sa * sb)[0][0]
 
-    r = np.zeros([x.shape[1], y.shape[1]])
-    autocorr = np.isclose(x, y).all()
-    for i in np.arange(x.shape[1]):
-        if autocorr:
-            stop = i
-            r[i, i] = 1
-        else:
-            stop = y.shape[1]
-        a = x[:, i]
-        for j in np.arange(stop):
-            b = y[:, j]
-            r[i, j] = wcorr_helper(a[:, np.newaxis], b[:, np.newaxis], weights[:, np.newaxis])
+    wcorrfun = lambda a, b: wcorr_helper(a, b, weights)
+    if np.isclose(x, y).all(): #autocorrelation
+        return sd.squareform(sd.pdist(x.T, metric=wcorrfun))
+    else:
+        return sd.cdist(x.T, y.T, metric=wcorrfun)
 
-            if autocorr:
-                r[j, i] = r[i, j]
-    return r
+    #for i in np.arange(x.shape[1]):
+    #    if autocorr:
+    #        stop = i
+    #        r[i, i] = 1
+    #    else:
+    #        stop = y.shape[1]
+    #    a = x[:, i]
+    #    for j in np.arange(stop):
+    #        b = y[:, j]
+    #        r[i, j] = wcorr_helper(a[:, np.newaxis], b[:, np.newaxis], weights[:, np.newaxis])
+    #
+    #        if autocorr:
+    #            r[j, i] = r[i, j]
+    #return r
 
 
 def squareform(m):

@@ -2,15 +2,102 @@
 
 import numpy as np
 import scipy.spatial.distance as sd
-from multiprocessing import Pool
+from scipy.linalg import toeplitz
 
-gaussian_params = {'var': 1000}
+gaussian_params = {'var': 10000}
 
-def gaussian_weights(timepoints, t, params=gaussian_params):
-    def exp(x):
-        return np.array(list(map(np.math.exp, x)))
+def gaussian_weights(T, params=gaussian_params):
+    c1 = np.divide(1, np.sqrt(2 * np.math.pi * params['var']))
+    c2 = np.divide(-1, 2 * params['var'])
+    sqdiffs = toeplitz(np.arange(T)) ** 2
+    return c1 * np.exp(c2 * sqdiffs)
 
-    return np.divide(exp(-np.divide(np.power(np.subtract(timepoints, t), 2), (2 * params['var']))), np.math.sqrt(2 * np.math.pi * params['var']))
+def wcorr(a, b, weights, tol=1e-5):
+    '''
+    Compute moment-by-moment correlations between sets of observations
+
+    :param a: a number-of-timepoints by number-of-features observations matrix
+    :param b: a number-of-timepoints by number-of-features observations matrix
+    :param weights: a number-of-timepoints by number-of-timepoints weights matrix specifying the per-timepoint weights
+              to be considered (for each timepoint)
+    :param tol: ignore all weights less than or equal (in absolute value) to tol
+    :return: a a.shape[1] by b.shape[1] by weights.shape[0] array of per-timepoint correlation matrices.
+    '''
+    def weighted_mean_var(x, weights): #TODO: DEBUG THIS...the variances don't seem right
+        weights[np.isnan(weights)] = 0
+        if np.sum(weights) == 0:
+            weights = np.ones(x.shape)
+
+        # get rid of 0 weights to avoid unnecessary computations
+        good_inds = np.abs(weights) > tol
+        weights[good_inds] /= np.sum(weights[good_inds])
+
+        weights = np.tile(weights[good_inds, np.newaxis], [1, x.shape[1]])
+        x = x[good_inds, :]
+
+        mx = np.sum(x * weights, axis=0)
+        varx = np.sum((x - np.tile(mx, [x.shape[0], 1])) * weights, axis=0)
+        return mx, varx
+
+    autocorrelation = np.isclose(a, b).all()
+
+    corrs = np.zeros([a.shape[1], b.shape[1], weights.shape[1]])
+    for t in np.arange(weights.shape[1]):
+        ma, vara = weighted_mean_var(a, weights[:, t])
+        diffs_a = a - np.tile(ma, [a.shape[0], 1])
+
+        if autocorrelation:
+            mb = ma
+            varb = vara
+            diffs_b = diffs_a
+        else:
+            mb, varb = weighted_mean_var(b, weights[:, t])
+            diffs_b = b - np.tile(mb, [b.shape[0], 1])
+
+        alpha = np.dot(diffs_a.T, diffs_b)
+        beta = np.dot(vara[:, np.newaxis], varb[np.newaxis, :])
+
+        corrs[:, :, t] = np.divide(alpha, beta)
+    return corrs
+
+def wisfc(data, timepoint_weights, subject_weights=None):
+    if type(data) != list:
+        return wcorr(data, data, timepoint_weights)
+    elif len(data) == 1:
+        return wcorr(data[0], data[0], timepoint_weights)
+
+    subjects = np.arange(len(data))
+    S = len(subjects)
+    K = data[0].shape[1]
+    T = timepoint_weights.shape[1]
+
+    if subject_weights == None:
+        connectomes = np.zeros([S, (K**2 - K) / 2])
+        for s in subjects:
+            connectomes[s, :] = 1 - sd.pdist(data[s].T, metric='correlation')
+        subject_weights = 1 - sd.squareform(sd.pdist(connectomes.T, metric='correlation'))
+
+    sum = np.zeros([K, K, T])
+    for s in subjects:
+        a = data[s]
+        other_inds = list([subjects[subjects != s]][0])
+        b = weighted_mean(np.stack([data[x] for x in other_inds], axis=2), axis=2, weights=subject_weights[s, other_inds])
+
+        next = wcorr(a, b, timepoint_weights)
+        for t in np.arange(T):
+            x = next[:, :, t]
+            x[np.isinf(x) | np.isnan(x)] = 0
+            z = r2z(x)
+            sum[:, :, t] = np.nansum(np.stack([sum[:, :, t], z + z.T], axis=2), axis=2)
+
+    corrs = np.zeros([T, (K ** 2 - K)/2])
+    for t in np.arange(T):
+        corrs[t, :] = squareform(z2r(np.divide(sum[:, :, t], (2*S))))
+
+    return corrs
+
+
+
 
 def isfc(data, timepoint_weights):
     if type(data) == list:
@@ -36,37 +123,8 @@ def isfc(data, timepoint_weights):
     #    return z2r(np.divide(sum, len(data)))
 
 
-def wisfc(data, timepoint_weights, subject_weights=None):
-    if (type(data) != list):
-        return wcorr(data, data, weights)
-    elif len(data) == 1:
-        return wcorr(data[0], data[0], weights)
 
-    T = data[0].shape[0]
-    V = data[0].shape[1]
-
-    subjects = np.arange(len(data))
-
-    def get_weighted_connectome(s):
-        print('computing connectome for subject ' + str(s))
-        return wcorr(data[s], data[s], timepoint_weights)
-
-    if subject_weights is None:
-        connectomes = np.zeros([len(data), ((V ** 2) - V) / 2])
-        for s in subjects:
-            connectomes[s, :] = get_weighted_connectome(s)
-        subject_weights = 1 - sd.squareform(sd.cdist(connectomes.T, metric='correlation'))
-
-    sum = np.zeros([T, ((V ** 2) - V) / 2])
-    for s in subjects:
-        other_inds = subjects[subjects != s]
-        other_mean = weighted_mean(np.stack(data[other_inds], axis=2), axis=2, weights=subject_weights[s, :])
-        sum += r2z(wcorr(data[s], other_mean, timepoint_weights))
-
-    return z2r(np.divide(sum, len(subjects)))
-
-
-def weighted_mean(x, axis=None, weights=None):
+def weighted_mean(x, axis=None, weights=None, tol=1e-5):
     if axis is None:
         axis=len(x.shape)-1
     if weights is None:
@@ -77,54 +135,15 @@ def weighted_mean(x, axis=None, weights=None):
     if np.sum(weights) == 0:
         return np.mean(x, axis=axis)
 
-    weights = np.divide(weights, np.sum(weights))
+    # get rid of 0 weights to avoid unnecessary computations
+    good_inds = np.abs(weights) > tol
+    weights[good_inds] /= np.sum(weights[good_inds])
 
-    #multiply each slice of x by its weight and then sum along the specified dimension
-    return np.sum(np.stack(list(map(lambda w, x: np.multiply(w, x), weights, np.split(x, x.shape[axis], axis=axis))), axis=axis), axis=axis)
+    weighted_sum = np.zeros(np.take(x, 0, axis=axis).shape)
+    for i in np.where(good_inds)[0]:
+        weighted_sum += weights[i] * np.take(x, i, axis=axis)
 
-def weighted_std(x, axis=None, weights=None):
-    if axis is None:
-        axis=len(x.shape)-1
-
-    mean_x = weighted_mean(x, axis=axis, weights=weights)
-    dims = np.ones([1, len(x.shape)], dtype=np.int)[0]
-    dims[axis] = x.shape[axis]
-
-    diffs = x - np.tile(mean_x, dims)
-    return np.sqrt(weighted_mean(np.power(diffs, 2), axis=axis, weights=weights))
-
-def wcorr(x, y, weights):
-    def wcorr_helper(a, b, weights):
-        a = a[:, np.newaxis]
-        b = b[:, np.newaxis]
-        weights = weights[:, np.newaxis]
-        ma = weighted_mean(a, axis=0, weights=weights)
-        mb = weighted_mean(b, axis=0, weights=weights)
-        sa = weighted_std(a, axis=0, weights=weights)
-        sb = weighted_std(b, axis=0, weights=weights)
-
-        return np.divide(weighted_mean((a - ma) * (b - mb), axis=0, weights=weights), sa * sb)[0][0]
-
-    wcorrfun = lambda a, b: wcorr_helper(a, b, weights)
-    if np.isclose(x, y).all(): #autocorrelation
-        return sd.squareform(sd.pdist(x.T, metric=wcorrfun))
-    else:
-        return sd.cdist(x.T, y.T, metric=wcorrfun)
-
-    #for i in np.arange(x.shape[1]):
-    #    if autocorr:
-    #        stop = i
-    #        r[i, i] = 1
-    #    else:
-    #        stop = y.shape[1]
-    #    a = x[:, i]
-    #    for j in np.arange(stop):
-    #        b = y[:, j]
-    #        r[i, j] = wcorr_helper(a[:, np.newaxis], b[:, np.newaxis], weights[:, np.newaxis])
-    #
-    #        if autocorr:
-    #            r[j, i] = r[i, j]
-    #return r
+    return weighted_sum
 
 
 def squareform(m):
@@ -141,18 +160,6 @@ def squareform(m):
     else: #do nothing
         x = m
     return x
-
-
-def get_xval_assignments(ndata, nfolds):
-    group_assignments = np.zeros(ndata)
-    groupsize = int(np.ceil(ndata / nfolds))
-
-    # group assignments
-    for i in range(1, nfolds):
-        inds = np.arange(i * groupsize, np.min([(i + 1) * groupsize, ndata]))
-        group_assignments[inds] = i
-    np.random.shuffle(group_assignments)
-    return group_assignments
 
 
 def rmdiag(m):

@@ -10,6 +10,8 @@ from .helpers import isfc, gaussian_weights, gaussian_params
 # - write a smooth function that uses per-timepoint weights
 # - create a sliding window function that can be used for cfun (that pads the result with nans)
 # - debug everything and write unit tests
+#
+# - update documentation...some is now out of date
 
 import numpy as np
 import hypertools as hyp
@@ -25,13 +27,11 @@ def timecorr(data, weights_function=gaussian_weights, weights_params=gaussian_pa
         Each numpy array (or dataframe) should have size timepoints by features.
         If a list of arrays are passed, there should be one array per subject.
 
-    weights_function: a function of the form func(timepoints, t, params) where
-        timepoints is a numpy array of times to evaluate the function at
-        t is a specific timepoint (must be a member of timepoints)
-        params is weights_params (described next)
+    weights_function: a function of the form func(T, params) where
+        T is a non-negative integer specifying the number of timepoints to consider.
 
-        The function should return an array of the same size as timepoints,
-        containing the per-timepoint weights.
+        The function should return a T by T array containing the timepoint-specific
+        weights for each consecutive time point from 0 to T (not including T).
 
         Default: gaussian_weights
 
@@ -87,11 +87,6 @@ def timecorr(data, weights_function=gaussian_weights, weights_params=gaussian_pa
         If mode is 'across', corrmats is an array with number-of-timepoints rows
         and an arbitrary number of columns (determined by cfun).
     """
-
-    def get_corrs(data, weights):
-        corrs = list(map(lambda w: cfun(data, w), weights))
-        return np.vstack(corrs)
-
     data = hyp.tools.format_data(data)
 
     if type(data) == list:
@@ -99,13 +94,15 @@ def timecorr(data, weights_function=gaussian_weights, weights_params=gaussian_pa
     else:
         T = data.shape[0]
 
-    timepoints = np.arange(T)
-    weights = list(map(lambda t: weights_function(timepoints, t, weights_params), timepoints))
+    weights = weights_function(T, weights_params)
 
     if (mode == 'across') or (type(data) != list) or (len(data) == 1):
-        return get_corrs(data, weights)
-    elif mode == 'within': #data must also be a list
-        return list(map(lambda d: get_corrs(d, weights), data))
+        return cfun(data, weights)
+    elif mode == 'within':
+        return list(map(lambda x: cfun(x, weights), data))
+    else:
+        print('Unknown mode: ' + mode)
+        raise
 
 
 def levelup(data, mode='within', weight_function=gaussian_weights, weights_params=gaussian_params, cfun=isfc, reduce='IncrementalPCA'):
@@ -136,19 +133,11 @@ def levelup(data, mode='within', weight_function=gaussian_weights, weights_param
         'within' and 'across' mode return the output of cfun applied to the
         single data array.
 
-    weights_function: a function of the form func(timepoints, t, params) where
-        timepoints is a numpy array of times to evaluate the function at
-        t is a specific timepoint (must be a member of timepoints)
-        params is weights_params (described next)
-
-        The function should return an array of the same size as timepoints,
-        containing the per-timepoint weights.
+    weights_function: see description from timecorr
 
         Default: gaussian_weights
 
-    weights_params: used to pass parameters to the weights_params function. This
-        can be specified in any format (e.g. a scalar, list, object, dictionary,
-        etc.).
+    weights_params: see description from timecorr
 
         Default: gaussian_variance
 

@@ -4,7 +4,7 @@ import numpy as np
 import scipy.spatial.distance as sd
 from scipy.linalg import toeplitz
 
-gaussian_params = {'var': 10000}
+gaussian_params = {'var': 1000}
 
 def gaussian_weights(T, params=gaussian_params):
     c1 = np.divide(1, np.sqrt(2 * np.math.pi * params['var']))
@@ -23,7 +23,7 @@ def wcorr(a, b, weights, tol=1e-5):
     :param tol: ignore all weights less than or equal (in absolute value) to tol
     :return: a a.shape[1] by b.shape[1] by weights.shape[0] array of per-timepoint correlation matrices.
     '''
-    def weighted_mean_var(x, weights): #TODO: DEBUG THIS...the variances don't seem right
+    def weighted_mean_var_diffs(x, weights):
         weights[np.isnan(weights)] = 0
         if np.sum(weights) == 0:
             weights = np.ones(x.shape)
@@ -36,23 +36,22 @@ def wcorr(a, b, weights, tol=1e-5):
         x = x[good_inds, :]
 
         mx = np.sum(x * weights, axis=0)
-        varx = np.sum((x - np.tile(mx, [x.shape[0], 1])) * weights, axis=0)
-        return mx, varx
+        diffs = x - np.tile(mx, [x.shape[0], 1])
+        varx = np.sum(np.abs(diffs) * weights, axis=0)
+        return mx, varx, diffs
 
     autocorrelation = np.isclose(a, b).all()
 
     corrs = np.zeros([a.shape[1], b.shape[1], weights.shape[1]])
     for t in np.arange(weights.shape[1]):
-        ma, vara = weighted_mean_var(a, weights[:, t])
-        diffs_a = a - np.tile(ma, [a.shape[0], 1])
+        ma, vara, diffs_a = weighted_mean_var_diffs(a, weights[:, t])
 
         if autocorrelation:
             mb = ma
             varb = vara
             diffs_b = diffs_a
         else:
-            mb, varb = weighted_mean_var(b, weights[:, t])
-            diffs_b = b - np.tile(mb, [b.shape[0], 1])
+            mb, varb, diffs_b = weighted_mean_var_diffs(b, weights[:, t])
 
         alpha = np.dot(diffs_a.T, diffs_b)
         beta = np.dot(vara[:, np.newaxis], varb[np.newaxis, :])
@@ -62,37 +61,45 @@ def wcorr(a, b, weights, tol=1e-5):
 
 def wisfc(data, timepoint_weights, subject_weights=None):
     if type(data) != list:
-        return wcorr(data, data, timepoint_weights)
+        sum = 2 * wcorr(data, data, timepoint_weights)
+        sum[np.isinf(sum) | np.isnan(sum)] = 0
+        S = 1
+        K = data.shape[1]
+        T = data.shape[0]
     elif len(data) == 1:
-        return wcorr(data[0], data[0], timepoint_weights)
+        sum = 2 * wcorr(data[0], data[0], timepoint_weights)
+        sum[np.isinf(sum) | np.isnan(sum)] = 0
+        S = 1
+        K = data[0].shape[1]
+        T = data[0].shape[0]
+    else:
+        subjects = np.arange(len(data))
+        S = len(subjects)
+        K = data[0].shape[1]
+        T = data[0].shape[0]
 
-    subjects = np.arange(len(data))
-    S = len(subjects)
-    K = data[0].shape[1]
-    T = timepoint_weights.shape[1]
+        if subject_weights == None:
+            connectomes = np.zeros([S, (K**2 - K) / 2])
+            for s in subjects:
+                connectomes[s, :] = 1 - sd.pdist(data[s].T, metric='correlation')
+            subject_weights = 1 - sd.squareform(sd.pdist(connectomes.T, metric='correlation'))
 
-    if subject_weights == None:
-        connectomes = np.zeros([S, (K**2 - K) / 2])
+        sum = np.zeros([K, K, T])
         for s in subjects:
-            connectomes[s, :] = 1 - sd.pdist(data[s].T, metric='correlation')
-        subject_weights = 1 - sd.squareform(sd.pdist(connectomes.T, metric='correlation'))
+            a = data[s]
+            other_inds = list([subjects[subjects != s]][0])
+            b = weighted_mean(np.stack([data[x] for x in other_inds], axis=2), axis=2, weights=subject_weights[s, other_inds])
 
-    sum = np.zeros([K, K, T])
-    for s in subjects:
-        a = data[s]
-        other_inds = list([subjects[subjects != s]][0])
-        b = weighted_mean(np.stack([data[x] for x in other_inds], axis=2), axis=2, weights=subject_weights[s, other_inds])
+            next = wcorr(a, b, timepoint_weights)
+            for t in np.arange(T):
+                x = next[:, :, t]
+                x[np.isinf(x) | np.isnan(x)] = 0
+                z = r2z(x)
+                sum[:, :, t] = np.nansum(np.stack([sum[:, :, t], z + z.T], axis=2), axis=2)
 
-        next = wcorr(a, b, timepoint_weights)
-        for t in np.arange(T):
-            x = next[:, :, t]
-            x[np.isinf(x) | np.isnan(x)] = 0
-            z = r2z(x)
-            sum[:, :, t] = np.nansum(np.stack([sum[:, :, t], z + z.T], axis=2), axis=2)
-
-    corrs = np.zeros([T, (K ** 2 - K)/2])
+    corrs = np.zeros([T, ((K ** 2 - K)/2) + K])
     for t in np.arange(T):
-        corrs[t, :] = squareform(z2r(np.divide(sum[:, :, t], (2*S))))
+        corrs[t, :] = mat2vec(np.squeeze(z2r(np.divide(sum[:, :, t], 2*S))))
 
     return corrs
 
@@ -107,20 +114,6 @@ def isfc(data, timepoint_weights):
 
     return wisfc(data, timepoint_weights, subject_weights=subject_weights)
 
-    #f (type(data) != list):
-    #    return wcorr(data, data, weights)
-    #elif len(data) == 1:
-    #    return wcorr(data[0], data[0], weights)
-    #else: #need to do the multi-subject thing
-    #    subjects = np.arange(len(data))
-    #    T = data[0].shape[0]
-    #    V = data[0].shape[1]
-    #    sum = np.zeros([T, ((V ** 2) - V) / 2])
-    #    for s in subjects:
-    #        other_inds = subjects[subjects != s]
-    #        other_mean = np.mean(np.stack([data[x] for x in other_inds], axis=2), axis=2)
-    #        sum += r2z(wcorr(data[s], other_mean, weights))
-    #    return z2r(np.divide(sum, len(data)))
 
 
 
@@ -146,22 +139,6 @@ def weighted_mean(x, axis=None, weights=None, tol=1e-5):
     return weighted_sum
 
 
-def squareform(m):
-    if len(m.shape) == 3:
-        v = m.shape[0]
-        x = np.zeros([m.shape[2], (v*v - v)/2 + v])
-        for i in range(0, m.shape[2]):
-            x[i, :] = mat2vec(np.squeeze(m[:, :, i]))
-    elif len(m.shape) == 2:
-        v = 0.5*(np.sqrt(8*m.shape[1] + 1) + 1)
-        x = np.zeros([v, v, m.shape[0]])
-        for i in range(0, m.shape[0]):
-            x[:, :, i] = vec2mat(m[i, :])
-    else: #do nothing
-        x = m
-    return x
-
-
 def rmdiag(m):
     return m - np.diag(np.diag(m))
 
@@ -171,7 +148,10 @@ def r2z(r):
 
 
 def z2r(z):
-    return (np.exp(2*z) - 1)/(np.exp(2*z) + 1)
+    r = np.divide((np.exp(2*z) - 1), (np.exp(2*z) + 1))
+    r[np.isnan(r)] = 0
+    r[np.isinf(r)] = np.sign(r)[np.isinf(r)]
+    return r
 
 
 def mat2vec(m):

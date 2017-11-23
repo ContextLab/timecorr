@@ -5,6 +5,10 @@ from timecorr.helpers import wisfc
 
 x = hyp.load('weights_sample')
 
-wisfc = tc.timecorr(x, mode='across', cfun=wisfc)
+wisfc_across = tc.timecorr(x, mode='across', cfun=wisfc)
+wisfc_within = tc.timecorr(x, mode='within', cfun=wisfc)
 
-sns.heatmap(wisfc)
+hyp.plot(wisfc_across)
+hyp.plot(wisfc_within)
+hyp.plot(x)
+

@@ -1,14 +1,24 @@
 import timecorr as tc
 import hypertools as hyp
+from timecorr.helpers import isfc, wisfc
 import seaborn as sns
-from timecorr.helpers import wisfc
+import numpy as np
 
-x = hyp.load('weights')
+x = hyp.load('weights_sample')
+
+isfc_across = tc.timecorr(x, mode='across', cfun=isfc)
+isfc_within = tc.timecorr(x, mode='within', cfun=isfc)
 
 wisfc_across = tc.timecorr(x, mode='across', cfun=wisfc)
 wisfc_within = tc.timecorr(x, mode='within', cfun=wisfc)
 
-hyp.plot(wisfc_across)
-hyp.plot(wisfc_within)
+print('Sanity check passed: ' + str(np.array(map(lambda x, y: np.isclose(x, y).all(), isfc_within, wisfc_within)).all()))
+
+
+hyp.plot([isfc_across, wisfc_across])
 hyp.plot(x)
+
+sns.heatmap(isfc_across)
+sns.heatmap(wisfc_across)
+
 

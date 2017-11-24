@@ -29,7 +29,7 @@ def wcorr(a, b, weights, tol=1e-5):
             weights = np.ones(x.shape)
 
         # get rid of 0 weights to avoid unnecessary computations
-        good_inds = np.abs(weights) > tol
+        good_inds = (np.abs(weights) > tol)
         weights[good_inds] /= np.sum(weights[good_inds])
 
         weights = np.tile(weights[good_inds, np.newaxis], [1, x.shape[1]])
@@ -38,6 +38,7 @@ def wcorr(a, b, weights, tol=1e-5):
         mx = np.sum(x * weights, axis=0)
         diffs = x - np.tile(mx, [x.shape[0], 1])
         varx = np.sqrt(np.sum((diffs ** 2) * weights, axis=0))
+
         return mx, varx, diffs
 
     autocorrelation = np.isclose(a, b).all()
@@ -56,7 +57,7 @@ def wcorr(a, b, weights, tol=1e-5):
         alpha = np.dot(diffs_a.T, diffs_b)
         beta = np.dot(vara[:, np.newaxis], varb[np.newaxis, :])
 
-        corrs[:, :, t] = np.divide(alpha, beta)
+        corrs[:, :, t] = np.divide(alpha, weights.shape[1] * beta)
     return corrs
 
 def wisfc(data, timepoint_weights, subject_weights=None):
@@ -78,11 +79,13 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         K = data[0].shape[1]
         T = data[0].shape[0]
 
-        if subject_weights == None:
+        if subject_weights is None:
             connectomes = np.zeros([S, (K**2 - K) / 2])
             for s in subjects:
                 connectomes[s, :] = 1 - sd.pdist(data[s].T, metric='correlation')
             subject_weights = 1 - sd.squareform(sd.pdist(connectomes.T, metric='correlation'))
+        else:
+            subject_weights = np.tile(subject_weights, [S, 1])
 
         sum = np.zeros([K, K, T])
         for s in subjects:
@@ -101,6 +104,8 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     for t in np.arange(T):
         corrs[t, :] = mat2vec(np.squeeze(z2r(np.divide(sum[:, :, t], 2*S))))
 
+    corrs[np.isinf(corrs)] = np.sign(corrs[np.isinf(corrs)])
+    corrs[np.isnan(corrs)] = 0
     return corrs
 
 

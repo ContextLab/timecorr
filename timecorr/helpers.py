@@ -37,7 +37,7 @@ def wcorr(a, b, weights, tol=1e-5):
 
         mx = np.sum(x * weights, axis=0)
         diffs = x - np.tile(mx, [x.shape[0], 1])
-        varx = np.sum(np.abs(diffs) * weights, axis=0)
+        varx = np.sqrt(np.sum((diffs ** 2) * weights, axis=0))
         return mx, varx, diffs
 
     autocorrelation = np.isclose(a, b).all()

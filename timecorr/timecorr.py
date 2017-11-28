@@ -13,9 +13,7 @@ from .helpers import isfc, gaussian_weights, gaussian_params
 #
 # - update documentation...some is now out of date
 
-import numpy as np
 import hypertools as hyp
-import scipy.spatial.distance as sd
 
 def timecorr(data, weights_function=gaussian_weights, weights_params=gaussian_params, mode="within", cfun=isfc):
     """
@@ -183,9 +181,9 @@ def levelup(data, mode='within', weight_function=gaussian_weights, weights_param
 
     data = hyp.tools.format_data(data)
     if type(data) == list:
-        T = data[0].shape[0]
+        V = data[0].shape[1]
     else:
-        T = data.shape[0]
+        V = data.shape[1]
 
-    corrs = timecorr(data, weight_function=weight_function, weights_params=weights_params, mode="within", cfun=isfc)
-    return hyp.reduce(corrs, reduce=reduce, ndims=T)
+    corrs = timecorr(data, weights_function=weight_function, weights_params=weights_params, mode="within", cfun=isfc)
+    return hyp.reduce(corrs, reduce=reduce, ndims=V)

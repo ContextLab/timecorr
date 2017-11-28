@@ -21,4 +21,13 @@ hyp.plot(x)
 sns.heatmap(isfc_across)
 sns.heatmap(wisfc_across)
 
+levelup_isfc = tc.levelup(x)
+levelup_wisfc = tc.levelup(x, cfun=wisfc)
+
+level2_isfc_across = tc.timecorr(levelup_isfc, mode='across', cfun=isfc)
+level2_wisfc_across = tc.timecorr(levelup_wisfc, mode='across', cfun=wisfc)
+
+hyp.plot([isfc_across, wisfc_across, level2_isfc_across, level2_wisfc_across], legend=['isfc', 'wisfc', 'l2 isfc', 'l2 wisfc'])
+
+sns.heatmap(level2_isfc_across)
 

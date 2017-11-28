@@ -120,6 +120,85 @@ def isfc(data, timepoint_weights):
     return wisfc(data, timepoint_weights, subject_weights=subject_weights)
 
 
+#TODO: UPDATE THIS FUNCTION FOR USE WITH TIMECORR
+def smooth(w, windowsize):
+    kernel = np.ones(windowsize)
+    w /= kernel.sum()
+    x = np.zeros([w.shape[0] - windowsize + 1, w.shape[1]])
+    for i in range(0, w.shape[1]):
+        x[:, i] = np.convolve(kernel, w[:, i], mode='valid')
+    return x
+
+
+#TODO: UPDATE THIS FUNCTION FOR USE WITH TIMECORR
+# WISHLIST:
+#   - support passing in a list of connectivity functions and a mixing proportions vector; compute stats for all non-zero
+#     mixing proportions and use those stats (weighted appropriately) to do the decoding
+def timepoint_decoder(data, windowsize=0, mu=0, nfolds=2, connectivity_fun=isfc):
+    """
+    :param data: a number-of-observations by number-of-features matrix
+    :param windowsize: number of observations to include in each sliding window (set to 0 or don't specify if all
+                       timepoints should be used)
+    :param mu: mixing parameter-- mu = 0 means decode using raw features; mu = 1 means decode using ISFC; 0 < mu < 1
+               means decode using a weighted mixture of the two estimates
+    :param nfolds: number of cross-validation folds (train using out-of-fold data; test using in-fold data)
+    :param connectivity_fun: function for transforming the group data (default: isfc)
+    :return: results dictionary with the following keys:
+       'rank': mean percentile rank (across all timepoints and folds) in the decoding distribution of the true timepoint
+       'accuracy': mean percent accuracy (across all timepoints and folds)
+       'error': mean estimation error (across all timepoints and folds) between the decoded and actual window numbers,
+                expressed as a percentage of the total number of windows
+    """
+    assert ((mu >= 0) and (mu <= 1))
+
+    group_assignments = get_xval_assignments(len(data), nfolds)
+
+    # fill in results
+    results_template = {'rank': 0, 'accuracy': 0, 'error': 0}
+    results = copy(results_template)
+    for i in range(0, nfolds):
+        if mu > 0:
+            in_fold_isfc = squareform(connectivity_fun(data[group_assignments == i], windowsize))
+            out_fold_isfc = squareform(connectivity_fun(data[group_assignments != i], windowsize))
+            isfc_corrs = 1 - sd.cdist(in_fold_isfc, out_fold_isfc, 'correlation')
+            if mu == 1:
+                corrs = isfc_corrs
+
+        if mu < 1:
+            in_fold_raw = smooth(np.mean(data[np.where(group_assignments == i)[0]], axis=0), windowsize)
+            out_fold_raw = smooth(np.mean(data[np.where(group_assignments != i)[0]], axis=0), windowsize)
+            raw_corrs = 1 - sd.cdist(in_fold_raw, out_fold_raw, 'correlation')
+            if mu == 0:
+                corrs = raw_corrs
+
+        if 0 < mu < 1:
+            corrs = z2r(mu*r2z(raw_corrs) + (1 - mu)*r2z(isfc_corrs))
+
+        next_results = copy(results_template)
+
+        timepoint_dists = la.toeplitz(np.arange(corrs.shape[0]))
+        for t in range(0, corrs.shape[0]):
+            include_inds = np.unique(np.append(np.where(timepoint_dists[t, :] > 0), np.array(t)))
+            #include_inds = np.unique(np.append(np.where(timepoint_dists[t, :] > windowsize), np.array(t))) # more liberal test
+
+            decoded_inds = include_inds[np.where(corrs[t, include_inds] == np.max(corrs[t, include_inds]))]
+            next_results['error'] += np.mean(np.abs(decoded_inds - np.array(t)))/(corrs.shape[0] - 1)
+            next_results['accuracy'] += np.mean(decoded_inds == np.array(t))
+            next_results['rank'] += np.mean(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t])))
+        next_results['error'] /= corrs.shape[0]
+        next_results['accuracy'] /= corrs.shape[0]
+        next_results['rank'] /= corrs.shape[0]
+
+        results['error'] += next_results['error']
+        results['accuracy'] += next_results['accuracy']
+        results['rank'] += next_results['rank']
+
+    results['error'] /= nfolds
+    results['accuracy'] /= nfolds
+    results['rank'] /= nfolds
+    return results
+
+
 
 
 def weighted_mean(x, axis=None, weights=None, tol=1e-5):
@@ -179,3 +258,15 @@ def vec2mat(v):
 
 def symmetric(m):
     return np.isclose(m, m.T).all()
+
+
+def get_xval_assignments(ndata, nfolds):
+    group_assignments = np.zeros(ndata)
+    groupsize = int(np.ceil(ndata / nfolds))
+
+    # group assignments
+    for i in range(1, nfolds):
+        inds = np.arange(i * groupsize, np.min([(i + 1) * groupsize, ndata]))
+        group_assignments[inds] = i
+    np.random.shuffle(group_assignments)
+    return group_assignments

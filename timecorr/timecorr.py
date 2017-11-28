@@ -2,16 +2,16 @@
 
 from .helpers import isfc, gaussian_weights, gaussian_params
 
-#TO DO:
-# - modify isfc to accept a list OR numpy array (single-subject)
-# - create gaussian_weights and gaussian_params
-# - expose format_data function in hypertools
+#TO DO (JEREMY):
 # - create a synthetic dataset (ideally write a function to do this)
 # - write a smooth function that uses per-timepoint weights
-# - create a sliding window function that can be used for cfun (that pads the result with nans)
+# - create a sliding window function(s) for ISFC, WISFC, and SMOOTH that can be used for cfun (that pads the result with nans)
 # - debug everything and write unit tests
 #
-# - update documentation...some is now out of date
+#TO DO (EMILY):
+# - update documentation...a lot of stuff is now out of date
+# - figure out (with Andy's help?) how to make a Sphinx website for the TimeCorr API (some of this might have been done
+#   by Tom, but it'll now need to be updated
 
 import hypertools as hyp
 
@@ -187,3 +187,4 @@ def levelup(data, mode='within', weight_function=gaussian_weights, weights_param
 
     corrs = timecorr(data, weights_function=weight_function, weights_params=weights_params, mode="within", cfun=isfc)
     return hyp.reduce(corrs, reduce=reduce, ndims=V)
+

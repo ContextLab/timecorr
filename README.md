@@ -11,11 +11,12 @@ To install the TimeCorr toolbox, type `pip install .` from within the TimeCorr f
 ## Basic usage ##
 ### `timecorr` "within" mode ###
 
-The timecorr within mode can be used for one or multiple subjects. In this mode the
+The timecorr within mode can be used for one or multiple subjects. There are two variations of this mode, _isfc_ and _wisfc_. In the isfc mode the functional connectivity is calculated by using a timepoint by number of voxel matrix and finding the reverse squareform of the correlation matrix. The wisfc mode the inter-subject functional connectivity does the same thing yet is found by using a weighted correlational average of correlational matrixes.   
+
 (add instructions for timecorr within mode)
 
 ### `timecorr` "across" mode ###
-The timecorr across mode may only be used with multiple subject inputs.
+The timecorr across mode may only be used with multiple subject inputs. There are two variations of this mode, _isfc_ and _wisfc_. In the isfc mode, the inter-subject functional connectivity is calculated by using a timepoint by number of voxel matrix and finding the reverse squareform of the correlation matrix. the wisfc mode calculates the inter-subject functional connectivity the same way, yet is found by using a weighted correlational average of correlational matrixes.
 (add instructions for timecorr across mode)
 
 ### `levelup` "within" mode ###

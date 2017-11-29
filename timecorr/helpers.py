@@ -80,14 +80,14 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         T = data[0].shape[0]
 
         if subject_weights is None:
-            connectomes = np.zeros([S, (K**2 - K) / 2])
+            connectomes = np.zeros([S, int((K**2 - K) / 2)])
             for s in subjects:
                 connectomes[s, :] = 1 - sd.pdist(data[s].T, metric='correlation')
             subject_weights = 1 - sd.squareform(sd.pdist(connectomes.T, metric='correlation'))
         else:
             subject_weights = np.tile(subject_weights, [S, 1])
 
-        sum = np.zeros([K, K, T])
+        sum = np.zeros([K, K, T]) 
         for s in subjects:
             a = data[s]
             other_inds = list([subjects[subjects != s]][0])

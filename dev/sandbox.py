@@ -3,6 +3,12 @@ import hypertools as hyp
 from timecorr.helpers import isfc, wisfc
 import seaborn as sns
 import numpy as np
+from scipy.io import loadmat as load
+
+data = load('/Users/jmanning/Desktop/fMRI/sherlock/sherlock_data.mat')['HTFA'][0]
+data = [d for d in data]
+x = np.mean(tc.timecorr(data, mode='across', cfun=tc.helpers.wisfc), axis=1)
+
 
 x = hyp.load('weights_sample')
 

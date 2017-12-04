@@ -25,6 +25,5 @@ install:
 - cp tests/matplotlibrc .
 script: py.test
 notifications:
-  slack:
-    rooms:
-      secure:
+  slack: context-lab:Ai78gYTph7bTYPlsWjvRzBku
+    

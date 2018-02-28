@@ -86,7 +86,7 @@ def timecorr(data, weights_function=gaussian_weights, weights_params=gaussian_pa
         and an arbitrary number of columns (determined by cfun).
     """
     data = hyp.tools.format_data(data)
-
+    #data= hyp.tools.df2mat(data)
     if type(data) == list:
         T = data[0].shape[0]
     else:
@@ -155,7 +155,7 @@ def levelup(data, mode='within', weight_function=gaussian_weights, weights_param
         arbitrary number of columns (the number of columns may be determined by
         the function).
 
-        Default: A continuous verison of Inter-Subject Functional Connectivity
+        Default: A continuous version of Inter-Subject Functional Connectivity
         (Simony et al. 2017).  If only one data array is passed (rather than a
         list), the default cfun returns the moment-by-moment correlations for
         that array.
@@ -187,4 +187,3 @@ def levelup(data, mode='within', weight_function=gaussian_weights, weights_param
 
     corrs = timecorr(data, weights_function=weight_function, weights_params=weights_params, mode="within", cfun=isfc)
     return hyp.reduce(corrs, reduce=reduce, ndims=V)
-

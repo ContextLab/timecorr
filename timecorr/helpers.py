@@ -1,5 +1,6 @@
 # coding: utf-8
-
+# from __future__ import division
+from past.utils import old_div
 import numpy as np
 import scipy.spatial.distance as sd
 from scipy.linalg import toeplitz
@@ -87,7 +88,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         else:
             subject_weights = np.tile(subject_weights, [S, 1])
 
-        sum = np.zeros([K, K, T]) 
+        sum = np.zeros([K, K, T])
         for s in subjects:
             a = data[s]
             other_inds = list([subjects[subjects != s]][0])
@@ -100,7 +101,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
                 z = r2z(x)
                 sum[:, :, t] = np.nansum(np.stack([sum[:, :, t], z + z.T], axis=2), axis=2)
 
-    corrs = np.zeros([T, ((K ** 2 - K)/2) + K])
+    corrs = np.zeros([T, int(((K**2 - K) / 2) + K)])
     for t in np.arange(T):
         corrs[t, :] = mat2vec(np.squeeze(z2r(np.divide(sum[:, :, t], 2*S))))
 
@@ -116,7 +117,6 @@ def isfc(data, timepoint_weights):
         subject_weights = np.ones([1, len(data)])
     else:
         subject_weights = None
-
     return wisfc(data, timepoint_weights, subject_weights=subject_weights)
 
 
@@ -240,7 +240,7 @@ def z2r(z):
 
 def mat2vec(m):
     x = m.shape[0]
-    v = np.zeros((x*x - x)/2 + x)
+    v = np.zeros(old_div((x*x - x), 2) + x)
     v[0:x] = np.diag(m)
 
     #force m to be symmetric (sometimes rounding errors get introduced)
@@ -248,6 +248,8 @@ def mat2vec(m):
     m += m.T
 
     v[x:] = sd.squareform(rmdiag(m))
+    # before returning v, make every element of v an int?
+
     return v
 
 

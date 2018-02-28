@@ -86,7 +86,7 @@ def timecorr(data, weights_function=gaussian_weights, weights_params=gaussian_pa
         and an arbitrary number of columns (determined by cfun).
     """
     data = hyp.tools.format_data(data)
-    #data= hyp.tools.df2mat(data)
+    
     if type(data) == list:
         T = data[0].shape[0]
     else:

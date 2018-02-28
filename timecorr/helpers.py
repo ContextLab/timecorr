@@ -1,5 +1,5 @@
 # coding: utf-8
-# from __future__ import division
+
 from past.utils import old_div
 import numpy as np
 import scipy.spatial.distance as sd

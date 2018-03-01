@@ -13,7 +13,7 @@ import hypertools as hyp
 # TO DO (EMILY):
 # - update documentation...a lot of stuff is now out of date
 # - figure out (with Andy's help?) how to make a Sphinx website for the TimeCorr
-#    API (some of this might have been done by Tom, but it'll now need to be updated)
+#   API (some of this might have been done by Tom, but it'll now need to be updated)
 
 
 def timecorr(data, weights_function=gaussian_weights,

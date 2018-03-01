@@ -169,8 +169,10 @@ def timepoint_decoder(data, windowsize=0, mu=0, nfolds=2, connectivity_fun=isfc)
     results = copy(results_template)
     for i in range(0, nfolds):
         if mu > 0:
-            in_fold_isfc = squareform(connectivity_fun(data[group_assignments == i], windowsize))
-            out_fold_isfc = squareform(connectivity_fun(data[group_assignments != i], windowsize))
+            in_fold_isfc = squareform(connectivity_fun(data
+                                      [group_assignments == i], windowsize))
+            out_fold_isfc = squareform(connectivity_fun(data
+                                       [group_assignments != i], windowsize))
             isfc_corrs = 1 - sd.cdist(in_fold_isfc, out_fold_isfc, 'correlation')
             if mu == 1:
                 corrs = isfc_corrs
@@ -193,7 +195,8 @@ def timepoint_decoder(data, windowsize=0, mu=0, nfolds=2, connectivity_fun=isfc)
             # include_inds = np.unique(np.append(np.where(timepoint_dists[t, :] >
             # windowsize), np.array(t))) # more liberal test
 
-            decoded_inds = include_inds[np.where(corrs[t, include_inds] == np.max(corrs[t, include_inds]))]
+            decoded_inds = include_inds[np.where(corrs[t, include_inds] ==
+                                        np.max(corrs[t, include_inds]))]
             next_results['error'] += np.mean(np.abs(decoded_inds - np.array(t)))/(corrs.shape[0] - 1)
             next_results['accuracy'] += np.mean(decoded_inds == np.array(t))
             next_results['rank'] += np.mean(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t])))

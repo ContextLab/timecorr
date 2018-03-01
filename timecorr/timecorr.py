@@ -1,21 +1,23 @@
 # coding: utf-8
 
 from .helpers import isfc, gaussian_weights, gaussian_params
-
-#TO DO (JEREMY):
-# - create a synthetic dataset (ideally write a function to do this)
-# - write a smooth function that uses per-timepoint weights
-# - create a sliding window function(s) for ISFC, WISFC, and SMOOTH that can be used for cfun (that pads the result with nans)
-# - debug everything and write unit tests
-#
-#TO DO (EMILY):
-# - update documentation...a lot of stuff is now out of date
-# - figure out (with Andy's help?) how to make a Sphinx website for the TimeCorr API (some of this might have been done
-#   by Tom, but it'll now need to be updated
-
 import hypertools as hyp
 
-def timecorr(data, weights_function=gaussian_weights, weights_params=gaussian_params, mode="within", cfun=isfc):
+# TO DO (JEREMY):
+# - create a synthetic dataset (ideally write a function to do this)
+# - write a smooth function that uses per-timepoint weights
+# - create a sliding window function(s) for ISFC, WISFC, and SMOOTH that can be
+#   used for cfun (that pads the result with nans)
+# - debug everything and write unit tests
+#
+# TO DO (EMILY):
+# - update documentation...a lot of stuff is now out of date
+# - figure out (with Andy's help?) how to make a Sphinx website for the TimeCorr
+#    API (some of this might have been done by Tom, but it'll now need to be updated)
+
+
+def timecorr(data, weights_function=gaussian_weights,
+             weights_params=gaussian_params, mode="within", cfun=isfc):
     """
     Computes dynamics correlations in single-subject or multi-subject data.
 
@@ -86,7 +88,7 @@ def timecorr(data, weights_function=gaussian_weights, weights_params=gaussian_pa
         and an arbitrary number of columns (determined by cfun).
     """
     data = hyp.tools.format_data(data)
-    
+
     if type(data) == list:
         T = data[0].shape[0]
     else:
@@ -103,12 +105,13 @@ def timecorr(data, weights_function=gaussian_weights, weights_params=gaussian_pa
         raise
 
 
-def levelup(data, mode='within', weight_function=gaussian_weights, weights_params=gaussian_params, cfun=isfc, reduce='IncrementalPCA'):
+def levelup(data, mode='within', weight_function=gaussian_weights,
+            weights_params=gaussian_params, cfun=isfc, reduce='IncrementalPCA'):
     """
     Convenience function that performs two steps:
     1.) Uses timecorr to compute within-subject moment-by-moment correlations
     2.) Uses dimensinality reduction to project the output onto the same number
-    of dimensions as the original data.
+        of dimensions as the original data.
 
     Inputs
     ----------
@@ -185,5 +188,6 @@ def levelup(data, mode='within', weight_function=gaussian_weights, weights_param
     else:
         V = data.shape[1]
 
-    corrs = timecorr(data, weights_function=weight_function, weights_params=weights_params, mode="within", cfun=isfc)
+    corrs = timecorr(data, weights_function=weight_function,
+                     weights_params=weights_params, mode="within", cfun=isfc)
     return hyp.reduce(corrs, reduce=reduce, ndims=V)

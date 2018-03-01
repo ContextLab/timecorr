@@ -7,11 +7,13 @@ from scipy.linalg import toeplitz
 
 gaussian_params = {'var': 1000}
 
+
 def gaussian_weights(T, params=gaussian_params):
     c1 = np.divide(1, np.sqrt(2 * np.math.pi * params['var']))
     c2 = np.divide(-1, 2 * params['var'])
     sqdiffs = toeplitz(np.arange(T)) ** 2
     return c1 * np.exp(c2 * sqdiffs)
+
 
 def wcorr(a, b, weights, tol=1e-5):
     '''
@@ -19,10 +21,11 @@ def wcorr(a, b, weights, tol=1e-5):
 
     :param a: a number-of-timepoints by number-of-features observations matrix
     :param b: a number-of-timepoints by number-of-features observations matrix
-    :param weights: a number-of-timepoints by number-of-timepoints weights matrix specifying the per-timepoint weights
-              to be considered (for each timepoint)
+    :param weights: a number-of-timepoints by number-of-timepoints weights matrix
+        specifying the per-timepoint weights to be considered (for each timepoint)
     :param tol: ignore all weights less than or equal (in absolute value) to tol
-    :return: a a.shape[1] by b.shape[1] by weights.shape[0] array of per-timepoint correlation matrices.
+    :return: a a.shape[1] by b.shape[1] by weights.shape[0] array of per-timepoint
+        correlation matrices.
     '''
     def weighted_mean_var_diffs(x, weights):
         weights[np.isnan(weights)] = 0
@@ -61,6 +64,7 @@ def wcorr(a, b, weights, tol=1e-5):
         corrs[:, :, t] = np.divide(alpha, weights.shape[1] * beta)
     return corrs
 
+
 def wisfc(data, timepoint_weights, subject_weights=None):
     if type(data) != list:
         sum = 2 * wcorr(data, data, timepoint_weights)
@@ -84,7 +88,8 @@ def wisfc(data, timepoint_weights, subject_weights=None):
             connectomes = np.zeros([S, int((K**2 - K) / 2)])
             for s in subjects:
                 connectomes[s, :] = 1 - sd.pdist(data[s].T, metric='correlation')
-            subject_weights = 1 - sd.squareform(sd.pdist(connectomes.T, metric='correlation'))
+            subject_weights = 1 - sd.squareform(sd.pdist(connectomes.T,
+                                                metric='correlation'))
         else:
             subject_weights = np.tile(subject_weights, [S, 1])
 
@@ -92,14 +97,16 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         for s in subjects:
             a = data[s]
             other_inds = list([subjects[subjects != s]][0])
-            b = weighted_mean(np.stack([data[x] for x in other_inds], axis=2), axis=2, weights=subject_weights[s, other_inds])
+            b = weighted_mean(np.stack([data[x] for x in other_inds], axis=2),
+                              axis=2, weights=subject_weights[s, other_inds])
 
             next = wcorr(a, b, timepoint_weights)
             for t in np.arange(T):
                 x = next[:, :, t]
                 x[np.isinf(x) | np.isnan(x)] = 0
                 z = r2z(x)
-                sum[:, :, t] = np.nansum(np.stack([sum[:, :, t], z + z.T], axis=2), axis=2)
+                sum[:, :, t] = np.nansum(np.stack([sum[:, :, t], z + z.T],
+                                                  axis=2), axis=2)
 
     corrs = np.zeros([T, int(((K**2 - K) / 2) + K)])
     for t in np.arange(T):
@@ -110,8 +117,6 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     return corrs
 
 
-
-
 def isfc(data, timepoint_weights):
     if type(data) == list:
         subject_weights = np.ones([1, len(data)])
@@ -120,7 +125,7 @@ def isfc(data, timepoint_weights):
     return wisfc(data, timepoint_weights, subject_weights=subject_weights)
 
 
-#TODO: UPDATE THIS FUNCTION FOR USE WITH TIMECORR
+# TODO: UPDATE THIS FUNCTION FOR USE WITH TIMECORR
 def smooth(w, windowsize):
     kernel = np.ones(windowsize)
     w /= kernel.sum()
@@ -130,24 +135,30 @@ def smooth(w, windowsize):
     return x
 
 
-#TODO: UPDATE THIS FUNCTION FOR USE WITH TIMECORR
+# TODO: UPDATE THIS FUNCTION FOR USE WITH TIMECORR
 # WISHLIST:
-#   - support passing in a list of connectivity functions and a mixing proportions vector; compute stats for all non-zero
-#     mixing proportions and use those stats (weighted appropriately) to do the decoding
+#   - support passing in a list of connectivity functions and a mixing
+#     proportions vector; compute stats for all non-zero
+#     mixing proportions and use those stats (weighted appropriately) to do the
+#     decoding
 def timepoint_decoder(data, windowsize=0, mu=0, nfolds=2, connectivity_fun=isfc):
     """
     :param data: a number-of-observations by number-of-features matrix
-    :param windowsize: number of observations to include in each sliding window (set to 0 or don't specify if all
-                       timepoints should be used)
-    :param mu: mixing parameter-- mu = 0 means decode using raw features; mu = 1 means decode using ISFC; 0 < mu < 1
-               means decode using a weighted mixture of the two estimates
-    :param nfolds: number of cross-validation folds (train using out-of-fold data; test using in-fold data)
+    :param windowsize: number of observations to include in each sliding window
+                      (set to 0 or don't specify if all timepoints should be used)
+    :param mu: mixing parameter-- mu = 0 means decode using raw features;
+               mu = 1 means decode using ISFC; 0 < mu < 1 means decode using a
+               weighted mixture of the two estimates
+    :param nfolds: number of cross-validation folds (train using out-of-fold data;
+                   test using in-fold data)
     :param connectivity_fun: function for transforming the group data (default: isfc)
     :return: results dictionary with the following keys:
-       'rank': mean percentile rank (across all timepoints and folds) in the decoding distribution of the true timepoint
+       'rank': mean percentile rank (across all timepoints and folds) in the
+               decoding distribution of the true timepoint
        'accuracy': mean percent accuracy (across all timepoints and folds)
-       'error': mean estimation error (across all timepoints and folds) between the decoded and actual window numbers,
-                expressed as a percentage of the total number of windows
+       'error': mean estimation error (across all timepoints and folds) between
+                the decoded and actual window numbers, expressed as a percentage
+                of the total number of windows
     """
     assert ((mu >= 0) and (mu <= 1))
 
@@ -179,7 +190,8 @@ def timepoint_decoder(data, windowsize=0, mu=0, nfolds=2, connectivity_fun=isfc)
         timepoint_dists = la.toeplitz(np.arange(corrs.shape[0]))
         for t in range(0, corrs.shape[0]):
             include_inds = np.unique(np.append(np.where(timepoint_dists[t, :] > 0), np.array(t)))
-            #include_inds = np.unique(np.append(np.where(timepoint_dists[t, :] > windowsize), np.array(t))) # more liberal test
+            # include_inds = np.unique(np.append(np.where(timepoint_dists[t, :] >
+            # windowsize), np.array(t))) # more liberal test
 
             decoded_inds = include_inds[np.where(corrs[t, include_inds] == np.max(corrs[t, include_inds]))]
             next_results['error'] += np.mean(np.abs(decoded_inds - np.array(t)))/(corrs.shape[0] - 1)
@@ -199,15 +211,13 @@ def timepoint_decoder(data, windowsize=0, mu=0, nfolds=2, connectivity_fun=isfc)
     return results
 
 
-
-
 def weighted_mean(x, axis=None, weights=None, tol=1e-5):
     if axis is None:
-        axis=len(x.shape)-1
+        axis = len(x.shape) - 1
     if weights is None:
         weights = np.ones([1, x.shape[axis]])
 
-    #remove nans and force weights to sum to 1
+    # remove nans and force weights to sum to 1
     weights[np.isnan(weights)] = 0
     if np.sum(weights) == 0:
         return np.mean(x, axis=axis)
@@ -243,7 +253,7 @@ def mat2vec(m):
     v = np.zeros(old_div((x*x - x), 2) + x)
     v[0:x] = np.diag(m)
 
-    #force m to be symmetric (sometimes rounding errors get introduced)
+    # force m to be symmetric (sometimes rounding errors get introduced)
     m = np.triu(rmdiag(m))
     m += m.T
 

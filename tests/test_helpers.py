@@ -13,7 +13,10 @@ gaussian_params = {'var': 1000}
 ### function:
 def gaussian_weights(T, params=gaussian_params):
     """
+    gaussian_weights takes the input, T, a non-negative integer
+    specifying the number of timepoints to consider.
 
+    Function should return a T by T array
     """
     c1 = np.divide(1, np.sqrt(2 * np.math.pi * params['var']))
     c2 = np.divide(-1, 2 * params['var'])
@@ -25,4 +28,5 @@ def gaussian_weights(T, params=gaussian_params):
 
 ### test:
 def test_gaussian_weights():
-    assert
+    first_tester = gaussian_weights(T, params=gaussian_params)
+    assert isinstance(first_tester, np.array)

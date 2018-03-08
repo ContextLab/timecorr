@@ -30,3 +30,22 @@ def gaussian_weights(T, params=gaussian_params):
 def test_gaussian_weights():
     first_tester = gaussian_weights(T, params=gaussian_params)
     assert isinstance(first_tester, np.array)
+
+def test_wcorr():
+    # do I need to test weighted_mean_var_diffs as well? or is placing it here okay?
+    def weighted_mean_var_diffs(x, weights):
+        return mx, varx, diffs
+    second_tester = test_wcorr()
+    assert isinstance()
+
+def test_wisfc():
+    assert isinstance()
+
+def test_isfc():
+    assert isinstance()
+
+def test_smooth():
+    assert isinstance()
+
+def test_timepoint_decoder():
+    assert isinstance()

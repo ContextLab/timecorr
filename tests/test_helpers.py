@@ -23,7 +23,7 @@ def gaussian_weights(T, params=gaussian_params):
     sqdiffs = toeplitz(np.arange(T)) ** 2
     return c1 * np.exp(c2 * sqdiffs)
 
-
+data_numpy=
 
 
 ### test:
@@ -32,7 +32,7 @@ def test_gaussian_weights():
     first_tester = gaussian_weights(T, params=gaussian_params)
     assert isinstance(first_tester, np.array)
 
-#working from here up 
+#working from here up
 
 def test_wcorr():
     # do I need to test weighted_mean_var_diffs as well? or is placing it here okay?
@@ -41,7 +41,9 @@ def test_wcorr():
     second_tester = test_wcorr()
     assert isinstance()
 
-def test_wisfc():
+def test_wisfc_type_not_list():
+    data= data_numpy
+    wisfc_test_1= wisfc(data)
 
     assert isinstance()
 

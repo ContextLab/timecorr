@@ -23,7 +23,7 @@ def gaussian_weights(T, params=gaussian_params):
     sqdiffs = toeplitz(np.arange(T)) ** 2
     return c1 * np.exp(c2 * sqdiffs)
 
-data_numpy=
+data_numpy= np.random.randn(10,3)
 
 
 ### test:
@@ -44,10 +44,11 @@ def test_wcorr():
 def test_wisfc_type_not_list():
     data= data_numpy
     wisfc_test_1= wisfc(data)
-
-    assert isinstance()
+    wisfc_test_2 = 2*data
+    assert isinstance(wisfc_test_2>wisfc_test_1)
 
 def test_isfc():
+
     assert isinstance()
 
 def test_smooth():

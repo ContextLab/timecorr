@@ -50,15 +50,16 @@ def test_wisfc_type_not_list():
 
 def test_isfc():
     testing_np.ones= np.ones[1, len(data_numpy)]
-
     assert isinstance(test_isfc = testing_np.ones)
 
 #working from here up
 
 def test_smooth():
-
-    assert isinstance()
+    smooth_tester= smooth()
+    assert isinstance(smooth_tester, np.array)
 
 def test_timepoint_decoder():
+
+    assert ((mu >= 0) and (mu <= 1))
 
     assert isinstance()

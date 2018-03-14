@@ -48,11 +48,14 @@ def test_wisfc_type_not_list():
     assert isinstance(wisfc_test_2>wisfc_test_1)
 
 def test_isfc():
+    testing_np.ones= np.ones[1, len(data_numpy)])
 
-    assert isinstance()
+    assert isinstance(test_isfc = testing_np.ones)
 
 def test_smooth():
+
     assert isinstance()
 
 def test_timepoint_decoder():
+
     assert isinstance()

@@ -7,6 +7,8 @@ from timecorr.timecorr import timecorr, levelup,
 
 
 gaussian_params = {'var': 1000}
+data_list= np.random.randn(10,3)
+
 
 def test_timecorr():
     first_tester = gaussian_weights(T, params=gaussian_params)

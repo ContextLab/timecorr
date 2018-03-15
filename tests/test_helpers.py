@@ -8,7 +8,7 @@ from timecorr.helpers import gaussian_weights, wcorr, wisfc, isfc, smooth, timep
 
 
 gaussian_params = {'var': 1000}
-#data_numpy= np.random.randn(10,3)
+data_numpy= np.random.randn(10,3)
 #window size = 0
 #mu = 0
 #nfolds = 2
@@ -59,7 +59,6 @@ def test_smooth():
     assert isinstance(smooth_tester, np.array)
 
 def test_timepoint_decoder():
-
-    assert ((mu >= 0) and (mu <= 1))
+    test5= timepoint_decoder(data, windowsize=0, mu=0, nfolds=2, connectivity_fun=isfc)
 
     assert isinstance()

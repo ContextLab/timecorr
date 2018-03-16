@@ -9,6 +9,13 @@ from timecorr.helpers import gaussian_weights, wcorr, wisfc, isfc, smooth, timep
 
 gaussian_params = {'var': 1000}
 data_numpy= np.random.randn(10,3)
+""" :param a: a number-of-timepoints by number-of-features observations matrix
+    :param b: a number-of-timepoints by number-of-features observations matrix
+    :param weights: a number-of-timepoints by number-of-timepoints weights matrix
+    specifying the per-timepoint weights to be considered (for each timepoint) """
+param_a= np.array(2, 6, 8, 12). reshape(2,2)
+param_b= np.array(5, 9, 10, 7). reshape(2,2)
+param_weights= np.random.randn(2,2)
 #window size = 0
 #mu = 0
 #nfolds = 2
@@ -37,8 +44,11 @@ def test_gaussian_weights():
 def test_wcorr():
     # do I need to test weighted_mean_var_diffs as well? or is placing it here okay?
     def weighted_mean_var_diffs(x, weights):
+
         return mx, varx, diffs
     second_tester = test_wcorr()
+    assert isinstance(test_autocorrelation == autocorrelation)
+    assert isinstance()
     assert isinstance()
 
 

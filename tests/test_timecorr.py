@@ -6,7 +6,7 @@ import scipy.spatial.distance as sd
 from scipy.linalg import toeplitz
 
 from timecorr.timecorr import timecorr, levelup
-import timecorr.helpers 
+import timecorr.helpers
 
 gaussian_params = {'var': 1000}
 data_list= np.random.randn(10,3)
@@ -27,9 +27,17 @@ def test_timecorr():
     assert isinstance(data_npl, np.array)
     assert isinstance(data_rn, np.array)
 
-    first_tester = gaussian_weights(T, params=gaussian_params)
-    assert isinstance (first_tester, )
+    T1=  data_df[0].shape[0]
+    T2=  data_npa[0].shape[0]
+    T3=  data_npl[0].shape[0]
+    T4=  data_rn[0].shape[0]
 
+    first_tester = gaussian_weights(T1, params=gaussian_params)
+    second_tester = gaussian_weights(T2, params=gaussian_params)
+    thrid_tester = gaussian_weights(T3, params=gaussian_params)
+    fourth_tester = gaussian_weights(T4, params=gaussian_params)
+    assert isinstance (first_tester, )
+    assert isinstance ()
 
    # test_weights_functions=
     assert isinstance(first_tester, np.array)

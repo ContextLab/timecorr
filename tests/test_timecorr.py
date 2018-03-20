@@ -6,7 +6,7 @@ import scipy.spatial.distance as sd
 from scipy.linalg import toeplitz
 
 from timecorr.timecorr import timecorr, levelup
-import timecorr.helpers
+from timecorr.helpers import isfc, gaussian_weights, gaussian_params
 
 gaussian_params = {'var': 1000}
 data_list= np.random.randn(10,3)
@@ -53,6 +53,6 @@ def test_levelup ():
     else:
         V = data.shape[1]
 
-    corrs = timecorr(data, weights_function=weight_function, weights_params=weights_params, mode="within", cfun=isfc)
-    return hyp.reduce(corrs, reduce=reduce, ndims=V)
+    corrs = timecorr(data, weights_function= gaussian_weights, weights_params=gaussian_params, mode="within", cfun=isfc)
+   # return hyp.reduce(corrs, reduce=reduce, ndims=V)
     assert isinstance(corrs.shape == data.shape)

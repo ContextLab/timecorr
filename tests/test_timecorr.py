@@ -36,6 +36,10 @@ def test_timecorr():
     second_tester = gaussian_weights(T2, params=gaussian_params)
     thrid_tester = gaussian_weights(T3, params=gaussian_params)
     fourth_tester = gaussian_weights(T4, params=gaussian_params)
+
+    if (mode == 'across') or (type(data) != list) or (len(data) == 1):
+        return cfun(data, weights)
+
     assert isinstance (first_tester, )
     assert isinstance ()
 

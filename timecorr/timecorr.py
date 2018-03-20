@@ -188,6 +188,6 @@ def levelup(data, mode='within', weight_function=gaussian_weights,
     else:
         V = data.shape[1]
 
-    corrs = timecorr(data, weights_function=weight_function,
+    corrs = timecorr(data, weights_function=gaussian_weights,
                      weights_params=weights_params, mode="within", cfun=isfc)
     return hyp.reduce(corrs, reduce=reduce, ndims=V)

@@ -50,14 +50,14 @@ def test_wcorr():
         if np.sum(weights) == 0:
             weights = np.ones(x.shape)
         assert isinstance(weights> zero_weights)
-        
+
     second_tester = test_wcorr()
     assert isinstance(test_autocorrelation == autocorrelation)
     assert isinstance()
     assert isinstance()
 
 
-def test_wisfc_type_not_list():
+def test_wisfc():
     data= data_numpy
     wisfc_test_1= wisfc(data)
     wisfc_test_2 = 2*data

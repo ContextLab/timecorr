@@ -5,8 +5,8 @@ import hypertools as hyp
 import scipy.spatial.distance as sd
 from scipy.linalg import toeplitz
 
-from timecorr.timecorr import timecorr, levelup,
-
+from timecorr.timecorr import timecorr, levelup
+import timecorr.helpers 
 
 gaussian_params = {'var': 1000}
 data_list= np.random.randn(10,3)
@@ -27,11 +27,20 @@ def test_timecorr():
     assert isinstance(data_npl, np.array)
     assert isinstance(data_rn, np.array)
 
-
-
     first_tester = gaussian_weights(T, params=gaussian_params)
-    type_data= data_list
-    weights =
+    assert isinstance (first_tester, )
 
-    test_weights_functions=
+
+   # test_weights_functions=
     assert isinstance(first_tester, np.array)
+
+def test_levelup ():
+    data = hyp.tools.format_data(data_list)
+    if type(data) == list:
+        V = data[0].shape[1]
+    else:
+        V = data.shape[1]
+
+    corrs = timecorr(data, weights_function=weight_function, weights_params=weights_params, mode="within", cfun=isfc)
+    return hyp.reduce(corrs, reduce=reduce, ndims=V)
+    assert isinstance(corrs.shape == data.shape)

@@ -11,7 +11,6 @@ from timecorr.helpers import isfc, gaussian_weights, gaussian_params
 gaussian_params = {'var': 1000}
 data_list= np.random.randn(10,3)
 pandas_dataframe= pd.DataFrame(np.random.randint(low=0, high=10, size=(2, 2)))
-#pandas_dataframes= pd.df()
 numpy_array= np.array([[5, 9], [10, 7]])
 numpy_array_list= np.array([[8,2],[4,6]]).tolist()
 random_numbers= (2 ,3 ,5, 10, 12, 4, 6)

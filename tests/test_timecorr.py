@@ -20,14 +20,15 @@ def test_timecorr():
     data_dl = hyp.tools.format_data(data_list)
     data_pdf = hyp.tools.format_data(pandas_dataframe)
     data_npa = hyp.tools.format_data(numpy_array)
-#    data_npl = hyp.tools.format_data(numpy_array_list)
+#   data_npl = hyp.tools.format_data(numpy_array_list)
 #   data_rand = hyp.tools.format_data(random_numbers)
-    #these are now lists
+#   these are now lists
     assert isinstance (data_dl, list)
 
     Test_dl=  data_dl[0].shape[0]
     Test_pdf=  data_pdf[0].shape[0]
     Test_npa=  data_npa[0].shape[0]
+    #Test returns the shape of the weights_function
 #   Test_npl=  data_npl[0].shape[0]
 #   Test_rand=  data_rn[0].shape[0]
 
@@ -39,8 +40,9 @@ def test_timecorr():
 #   thrid_tester = gaussian_weights(T3, params=gaussian_params)
 #   fourth_tester = gaussian_weights(T4, params=gaussian_params)
 
-    assert -----
-
+    assert isinstance (npa_tester, np.ndarray)
+    assert npa_tester.shape == data_npa.shape
+    assert dl_tester.shape > data_dl.shape
 #unsure how to test 'across' mode
 
 
@@ -52,5 +54,5 @@ def test_levelup ():
         V = data.shape[1]
 
     corrs = timecorr(data, weights_function= gaussian_weights, weights_params=gaussian_params, mode="within", cfun=isfc)
-    #return hyp.reduce(corrs, reduce=reduce, ndims=V)
+
     assert len(corrs) == len(numpy_array)

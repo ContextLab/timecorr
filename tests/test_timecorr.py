@@ -43,6 +43,8 @@ def test_timecorr():
     assert isinstance (npa_tester, np.ndarray)
     assert npa_tester.shape == data_npa.shape
     assert dl_tester.shape > data_dl.shape
+
+    
 #unsure how to test 'across' mode
 
 

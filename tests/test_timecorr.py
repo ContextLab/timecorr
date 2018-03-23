@@ -1,9 +1,7 @@
-from past.utils import old_div
+
 import numpy as np
 import pandas as pd
 import hypertools as hyp
-import scipy.spatial.distance as sd
-from scipy.linalg import toeplitz
 
 from timecorr.timecorr import timecorr, levelup
 from timecorr.helpers import isfc, gaussian_weights, gaussian_params
@@ -18,36 +16,36 @@ random_numbers= (2 ,3 ,5, 10, 12, 4, 6)
 
 
 def test_timecorr():
-    data_df = hyp.tools.format_data(pandas_dataframe)
+
+    data_dl = hyp.tools.format_data(data_list)
+    data_pdf = hyp.tools.format_data(pandas_dataframe)
     data_npa = hyp.tools.format_data(numpy_array)
-    #data_npl = hyp.tools.format_data(numpy_array_list)
-#    data_rn = hyp.tools.format_data(random_numbers)
-    assert isinstance(data_df, np.ndarray)
-    assert isinstance(data_npa, np.ndarray)
-#    assert isinstance(data_npl, np.array)
-#    assert isinstance(data_rn, np.array)
+#    data_npl = hyp.tools.format_data(numpy_array_list)
+#   data_rand = hyp.tools.format_data(random_numbers)
+    #these are now lists
+    assert isinstance (data_dl, list)
 
-    T1=  data_df[0].shape[0]
-    T2=  data_npa[0].shape[0]
-    #T3=  data_npl[0].shape[0]
-#    T4=  data_rn[0].shape[0]
+    Test_dl=  data_dl[0].shape[0]
+    Test_pdf=  data_pdf[0].shape[0]
+    Test_npa=  data_npa[0].shape[0]
+#   Test_npl=  data_npl[0].shape[0]
+#   Test_rand=  data_rn[0].shape[0]
 
-    first_tester = gaussian_weights(T1, params=gaussian_params)
-    second_tester = gaussian_weights(T2, params=gaussian_params)
-    #thrid_tester = gaussian_weights(T3, params=gaussian_params)
-#    fourth_tester = gaussian_weights(T4, params=gaussian_params)
+    assert isinstance (Test_pdf, int)
 
-    if (mode == 'across') or (type(data) != list) or (len(data) == 1):
-        return cfun(data, weights)
+    dl_tester = gaussian_weights(Test_dl, params=gaussian_params)
+    pdf_tester = gaussian_weights(Test_pdf, params=gaussian_params)
+    npa_tester = gaussian_weights(Test_npa, params=gaussian_params)
+#   thrid_tester = gaussian_weights(T3, params=gaussian_params)
+#   fourth_tester = gaussian_weights(T4, params=gaussian_params)
 
-    assert isinstance (first_tester, )
-    assert isinstance ()
+    assert -----
 
-   # test_weights_functions=
-    assert isinstance(first_tester, np.array)
+#unsure how to test 'across' mode
+
 
 def test_levelup ():
-    data = hyp.tools.format_data(data_list)
+    data = hyp.tools.format_data(numpy_array)
     if type(data) == list:
         V = data[0].shape[0]
     else:
@@ -55,4 +53,4 @@ def test_levelup ():
 
     corrs = timecorr(data, weights_function= gaussian_weights, weights_params=gaussian_params, mode="within", cfun=isfc)
     #return hyp.reduce(corrs, reduce=reduce, ndims=V)
-    assert len(corrs) == len(data_list)
+    assert len(corrs) == len(numpy_array)

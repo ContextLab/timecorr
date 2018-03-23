@@ -15,8 +15,8 @@ param_weights= np.random.randn(2,2)
 zero_weights= np.array([[0, 0], [0, 0]])
 
 def test_gaussian_weights():
-    first_tester = gaussian_weights(T, params=gaussian_params)
-    assert isinstance(first_tester, np.array)
+    test_gw = gaussian_weights(T, params=gaussian_params)
+    assert isinstance(test_gw, np.array)
 
 
 def test_wcorr():

@@ -9,8 +9,6 @@ from timecorr.helpers import gaussian_weights, wcorr, wisfc, isfc, smooth, timep
 
 gaussian_params = {'var': 1000}
 data_numpy= np.random.randn(10,3)
-param_a= np.array([[2, 6], [8, 12]])
-param_b= np.array([[5, 9], [10, 7]])
 param_weights= np.random.randn(2,2)
 zero_weights= np.array([[0, 0], [0, 0]])
 

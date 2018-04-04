@@ -1,6 +1,5 @@
 # coding: utf-8
-
-from past.utils import old_div
+from __future__ import division
 import numpy as np
 import scipy.spatial.distance as sd
 from scipy.linalg import toeplitz
@@ -252,8 +251,9 @@ def z2r(z):
 
 
 def mat2vec(m):
+
     x = m.shape[0]
-    v = np.zeros(old_div((x*x - x), 2) + x)
+    v = np.zeros(((x*x - x)// 2) + x)
     v[0:x] = np.diag(m)
 
     # force m to be symmetric (sometimes rounding errors get introduced)

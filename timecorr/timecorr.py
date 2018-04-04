@@ -88,10 +88,9 @@ def timecorr(data, weights_function=gaussian_weights,
         and an arbitrary number of columns (determined by cfun).
     """
     data = hyp.tools.format_data(data)
-    #data formatted into list
+
     if type(data) == list:
         T = data[0].shape[0]
-        #data formatted into integer
     else:
         T = data.shape[0]
 
@@ -184,6 +183,7 @@ def levelup(data, mode='within', weight_function=gaussian_weights,
     """
 
     data = hyp.tools.format_data(data)
+    
     if type(data) == list:
         V = data[0].shape[1]
     else:

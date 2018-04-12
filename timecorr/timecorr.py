@@ -183,7 +183,7 @@ def levelup(data, mode='within', weight_function=gaussian_weights,
     """
 
     data = hyp.tools.format_data(data)
-    
+
     if type(data) == list:
         V = data[0].shape[1]
     else:

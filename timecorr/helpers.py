@@ -65,6 +65,16 @@ def wcorr(a, b, weights, tol=1e-5):
 
 
 def wisfc(data, timepoint_weights, subject_weights=None):
+    '''
+    Compute moment-by-moment correlations between sets of observations
+
+    :data:
+    :timepoint weights: a number-of-timepoints by number-of-timepoints weights matrix
+        specifying the per-timepoint weights to be considered (for each timepoint)
+    :subject weights: ignore all weights less than or equal (in absolute value) to tol
+    :return: a a.shape[1] by b.shape[1] by weights.shape[0] array of per-timepoint
+        correlation matrices.
+    '''
     if type(data) != list:
         sum = 2 * wcorr(data, data, timepoint_weights)
         sum[np.isinf(sum) | np.isnan(sum)] = 0

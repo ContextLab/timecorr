@@ -1,6 +1,6 @@
 nose
 sphinx 
-jumpy
+numpy
 pandas>=0.22.0
 hypertools>=0.4.2
 scipy

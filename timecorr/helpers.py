@@ -127,6 +127,11 @@ def wisfc(data, timepoint_weights, subject_weights=None):
 
 
 def isfc(data, timepoint_weights):
+    """
+    inter subject functonal correclation
+
+    :takes 
+    """
     if type(data) == list:
         subject_weights = np.ones([1, len(data)])
     else:

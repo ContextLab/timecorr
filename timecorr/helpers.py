@@ -128,7 +128,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
 
 def isfc(data, timepoint_weights):
     """
-    inter subject functonal correclation
+    inter subject functonal correlation
 
     :takes 
     """

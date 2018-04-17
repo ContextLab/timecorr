@@ -12,19 +12,21 @@ To install the TimeCorr toolbox, type `pip install .` from within the TimeCorr f
 
 * Python 2.7, 3.4+
 * Numpy >= 1.10.4
-* Scipy >= 0.17.1
-* Seaborn >= 0.8.0
-* Matplotlib >=1.5.1
+* Scipy >= 1.0.0
+* Seaborn >= 0.8.1
+* Matplotlib >=2.0.1
+* Pandas >= 0.22.0
+* Hypertools >= 0.4.2
 
 
 ## Basic usage ##
 ### `timecorr` "within" mode ###
 
-The timecorr within mode can be used for one or multiple subjects. There are two variations of this mode, _isfc_ and _wisfc_. In the isfc mode the functional connectivity is calculated by using a timepoint by number of voxel matrix and finding the reverse squareform of the correlation matrix. The wisfc mode the inter-subject functional connectivity does the same thing yet is found by using a weighted correlational average of correlational matrixes.   
+The timecorr within mode can be used for one or multiple subjects. There are two variations of this mode, _isfc_ and _wisfc_. In the isfc mode the functional connectivity is calculated by using a timepoint by number of voxel matrix and finding the reverse squareform of the correlation matrix. The wisfc mode the inter-subject functional connectivity does the same thing yet is found by using a weighted correlational average of correlational matrices.   
 
 
 ### `timecorr` "across" mode ###
-The timecorr across mode may only be used with multiple subject inputs. There are two variations of this mode, _isfc_ and _wisfc_. In the isfc mode, the inter-subject functional connectivity is calculated by using a timepoint by number of voxel matrix and finding the reverse squareform of the correlation matrix. the wisfc mode calculates the inter-subject functional connectivity the same way, yet is found by using a weighted correlational average of correlational matrixes.
+The timecorr across mode may only be used with multiple subject inputs. There are two variations of this mode, _isfc_ and _wisfc_. In the isfc mode, the inter-subject functional connectivity is calculated by using a timepoint by number of voxel matrix and finding the reverse squareform of the correlation matrix. the wisfc mode calculates the inter-subject functional connectivity the same way, yet is found by using a weighted correlational average of correlational matrices.
 
 
 ### `levelup` "within" mode ###

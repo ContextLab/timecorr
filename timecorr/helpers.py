@@ -68,7 +68,6 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     '''
     Compute moment-by-moment correlations between sets of observations
 
-    :data:
     :timepoint weights: a number-of-timepoints by number-of-timepoints weights matrix
         specifying the per-timepoint weights to be considered (for each timepoint)
     :subject weights: ignore all weights less than or equal (in absolute value) to tol
@@ -127,11 +126,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
 
 
 def isfc(data, timepoint_weights):
-    """
-    inter subject functonal correlation
 
-    :takes 
-    """
     if type(data) == list:
         subject_weights = np.ones([1, len(data)])
     else:

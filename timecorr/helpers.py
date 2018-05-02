@@ -277,7 +277,7 @@ def mat2vec(m):
 
 
 def vec2mat(v):
-    x = 0.5*(np.sqrt(8*len(v) + 1) - 1)
+    x = int(0.5*(np.sqrt(8*len(v) + 1) - 1))
     return sd.squareform(v[(x+1):]) + np.diag(v[0:x])
 
 

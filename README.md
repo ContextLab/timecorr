@@ -6,7 +6,7 @@ The TimeCorr toolbox provides tools for computing and exploring the correlationa
 * `levelup` is used to find higher order structure in the data.  Calling `levelup` converts a timeseries of observations into a timeseries of correlations _with the same number of features_.  This function may be called recursively to compute dynamic correlations ("level 1"), dynamic correlations _between_ correlations ("level 2"), dynamic correlations between correlations between correlations ("level 3"), etc.  The new features may be computed _within_ a single matrix, or a list of matrices (this returns a new single matrix or list of matrices of the same shape, but containing the higher order features), or _across_ a list of such matrices (given a list of matrices, the _across_ matrix higher-order structure comprises a single matrix).
 
 ## Installing ##
-To install the TimeCorr toolbox, type `pip install .` from within the TimeCorr folder.
+To install the TimeCorr toolbox directly from GitHub, type `pip install git+https://github.com/ContextLab/timecorr`.  You can also install by calling `pip install .` from within the TimeCorr folder (after cloning this repository).
 
 ## Requirements ##
 

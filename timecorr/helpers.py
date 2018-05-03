@@ -14,9 +14,10 @@ def gaussian_weights(T, params=gaussian_params):
     sqdiffs = toeplitz(np.arange(T)) ** 2
     return c1 * np.exp(c2 * sqdiffs)
 
+laplace_params = {'scale': 100}
 def laplace_weights(T, params=laplace_params):
     absdiffs = toeplitz(np.arange(T))
-    return np.multiply(np.divide(1, 2 * params['scale']), np.exp(-np.divide(absdiffs, params['scale'])))
+    return np.multiply(np.divide(2.5, 2 * params['scale']), np.exp(-np.divide(absdiffs, params['scale']))) #scale by a factor of 2.5 to prevent near-zero rounding issues
 
 
 def wcorr(a, b, weights, tol=1e-5):

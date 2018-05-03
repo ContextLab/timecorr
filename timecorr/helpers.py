@@ -5,6 +5,7 @@ import scipy.spatial.distance as sd
 from scipy.linalg import toeplitz
 
 gaussian_params = {'var': 1000}
+laplace_params = {'scale': 100}
 
 
 def gaussian_weights(T, params=gaussian_params):
@@ -12,6 +13,10 @@ def gaussian_weights(T, params=gaussian_params):
     c2 = np.divide(-1, 2 * params['var'])
     sqdiffs = toeplitz(np.arange(T)) ** 2
     return c1 * np.exp(c2 * sqdiffs)
+
+def laplace_weights(T, params=laplace_params):
+    absdiffs = toeplitz(np.arange(T))
+    return np.multiply(np.divide(1, 2 * params['scale']), np.exp(-np.divide(absdiffs, params['scale'])))
 
 
 def wcorr(a, b, weights, tol=1e-5):

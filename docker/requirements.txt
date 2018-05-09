@@ -1,5 +1,5 @@
 nose
-sphinx 
+sphinx
 numpy>=1.14.2
 pandas>=0.22.0
 hypertools>=0.4.2

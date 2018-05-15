@@ -3,6 +3,7 @@ from __future__ import division
 import numpy as np
 import scipy.spatial.distance as sd
 from scipy.linalg import toeplitz
+import pykalman
 
 gaussian_params = {'var': 1000}
 laplace_params = {'scale': 100}
@@ -45,6 +46,7 @@ def wcorr(a, b, weights, tol=1e-5):
         x = x[good_inds, :]
 
         mx = np.sum(x * weights, axis=0)
+
         diffs = x - np.tile(mx, [x.shape[0], 1])
         varx = np.sqrt(np.sum((diffs ** 2) * weights, axis=0))
 
@@ -227,6 +229,25 @@ def timepoint_decoder(data, windowsize=0, mu=0, nfolds=2, connectivity_fun=isfc)
     results['accuracy'] /= nfolds
     results['rank'] /= nfolds
     return results
+
+def predict(x, n=1):
+    '''
+    Use a Kalman filter (with automatically inferred parameters) to estimate
+    future states of a signal, n timepoints into the future.
+
+    x: timepoints by features signal (numpy array)
+    n: number of timepoints into the future (must be an integer)
+
+    Returns a new numpy array with x.shape[0] + n rows and x.shape[1] columns,
+    where the last n rows contain the predicted future states.  The other
+    entries contain "smoothed" estimates of the observed signals.
+    '''
+    x_masked = np.ma.MaskedArray(np.vstack((x, np.tile(np.nan, (n, x.shape[1])))))
+    x_masked[-n, :] = np.ma.masked
+
+    kf = pykalman.KalmanFilter(initial_state_mean=np.mean(x, axis=0), n_dim_obs=x.shape[1], n_dim_state=x.shape[1])
+    x_predicted = kf.em(x_masked, em_vars='all').smooth(x_masked)
+    return x_predicted[0] #note: x_predicted[1] contains the per-timepoint covariance matrices
 
 
 def weighted_mean(x, axis=None, weights=None, tol=1e-5):

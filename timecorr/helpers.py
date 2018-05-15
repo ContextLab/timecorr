@@ -239,7 +239,8 @@ def predict(x, n=1):
     n: number of timepoints into the future (must be an integer)
 
     Returns a new numpy array with x.shape[0] + n rows and x.shape[1] columns,
-    where the last n rows contain the predicted future states
+    where the last n rows contain the predicted future states.  The other
+    entries contain "smoothed" estimates of the observed signals.
     '''
     x_masked = np.ma.MaskedArray(np.vstack((x, np.tile(np.nan, (n, x.shape[1])))))
     x_masked[-n, :] = np.ma.masked

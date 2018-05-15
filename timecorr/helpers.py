@@ -244,7 +244,7 @@ def predict(x, n=1):
     '''
 
     if n == 0:
-        return x
+        return kf.em(x).smooth(x)[0]
 
     x_masked = np.ma.MaskedArray(np.vstack((x, np.tile(np.nan, (1, x.shape[1])))))
     x_masked[-1, :] = np.ma.masked

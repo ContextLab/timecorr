@@ -242,12 +242,23 @@ def predict(x, n=1):
     where the last n rows contain the predicted future states.  The other
     entries contain "smoothed" estimates of the observed signals.
     '''
-    x_masked = np.ma.MaskedArray(np.vstack((x, np.tile(np.nan, (n, x.shape[1])))))
-    x_masked[-n, :] = np.ma.masked
+
+    if n == 0:
+        return x
+
+    x_masked = np.ma.MaskedArray(np.vstack((x, np.tile(np.nan, (1, x.shape[1])))))
+    x_masked[-1, :] = np.ma.masked
 
     kf = pykalman.KalmanFilter(initial_state_mean=np.mean(x, axis=0), n_dim_obs=x.shape[1], n_dim_state=x.shape[1])
     x_predicted = kf.em(x_masked, em_vars='all').smooth(x_masked)
-    return x_predicted[0] #note: x_predicted[1] contains the per-timepoint covariance matrices
+
+    if n == 1:
+        return x_predicted[0] #x_predicted[1] contains timepoint-by-timepoint covariance estimates
+    elif n > 1:
+        next_x_predicted = predict(x_predicted[0], n-1)
+        diff = next_x_predicted.shape[0] - x_predicted[0].shape[0]
+        next_x_predicted[:-diff, :] = x_predicted[0]
+        return next_x_predicted
 
 
 def weighted_mean(x, axis=None, weights=None, tol=1e-5):

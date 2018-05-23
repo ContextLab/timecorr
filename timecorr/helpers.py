@@ -6,19 +6,19 @@ from scipy.linalg import toeplitz
 import pykalman
 
 gaussian_params = {'var': 1000}
-laplace_params = {'scale': 100}
+laplace_params = {'scale': 50}
 
 
 def gaussian_weights(T, params=gaussian_params):
     c1 = np.divide(1, np.sqrt(2 * np.math.pi * params['var']))
     c2 = np.divide(-1, 2 * params['var'])
-    sqdiffs = toeplitz(np.arange(T)) ** 2
+    sqdiffs = toeplitz(np.arange(T) ** 2)
     return c1 * np.exp(c2 * sqdiffs)
 
 laplace_params = {'scale': 100}
 def laplace_weights(T, params=laplace_params):
     absdiffs = toeplitz(np.arange(T))
-    return np.multiply(np.divide(2.5, 2 * params['scale']), np.exp(-np.divide(absdiffs, params['scale']))) #scale by a factor of 2.5 to prevent near-zero rounding issues
+    return np.multiply(np.divide(1, 2 * params['scale']), np.exp(-np.divide(absdiffs, params['scale']))) #scale by a factor of 2.5 to prevent near-zero rounding issues
 
 
 def wcorr(a, b, weights, tol=1e-5):

@@ -187,7 +187,12 @@ def levelup(data, mode='within', weight_function=gaussian_weights,
     dataset(s)
     """
 
-    data = hyp.tools.format_data(data)
+    from .time_crystals import TimeCrystal
+
+    if isinstance(data, TimeCrystal):
+        data = data.get_time_data()
+    else:
+        data = hyp.tools.format_data(data)
 
     if type(data) == list:
         V = data[0].shape[1]
@@ -196,4 +201,4 @@ def levelup(data, mode='within', weight_function=gaussian_weights,
 
     corrs = timecorr(data, weights_function=gaussian_weights,
                      weights_params=gaussian_params, mode="within", cfun=isfc)
-    return hyp.reduce(corrs, reduce=reduce, ndims=V)
+    return TimeCrystal(time_data=data, covs=hyp.reduce(corrs.get_covs(), reduce=reduce, ndims=V))

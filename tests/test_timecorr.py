@@ -57,4 +57,4 @@ def test_levelup ():
 
 corrs = timecorr(numpy_array, weights_function= gaussian_weights, weights_params=gaussian_params, mode="within", cfun=isfc)
 
-assert len(corrs) == len(numpy_array)
+assert len(corrs.get_time_data()[0]) == len(numpy_array)

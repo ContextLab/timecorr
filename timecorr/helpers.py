@@ -3,7 +3,7 @@ from __future__ import division
 import numpy as np
 import scipy.spatial.distance as sd
 from scipy.linalg import toeplitz
-import pykalman
+#import pykalman
 
 gaussian_params = {'var': 1000}
 laplace_params = {'scale': 50}

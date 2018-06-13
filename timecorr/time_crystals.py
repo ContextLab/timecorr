@@ -52,9 +52,9 @@ class TimeCrystal(object):
 
     def save(self, fname):
 
-        np.savez(fname, data=self.time_data, covs=self.covs, meta=self.meta, date_created=self.date_created)
+        np.savez(fname, time_data=self.time_data, covs=self.covs, meta=self.meta, date_created=self.date_created)
 
 
 def load(fname):
-    temp_data = np.load(fname)
+    temp_data = np.load(fname, mmap_mode='r')
     return TimeCrystal(time_data = temp_data['time_data'], covs = temp_data['covs'], meta = temp_data['meta'], date_created = temp_data['date_created'])

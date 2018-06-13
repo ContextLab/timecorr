@@ -101,10 +101,11 @@ def timecorr(data, weights_function=gaussian_weights,
     weights = weights_function(T, weights_params)
 
     if (mode == 'across') or (type(data) != list) or (len(data) == 1):
-        return TimeCrystal(time_data=data, covs=cfun(data, weights))
+        return TimeCrystal(time_data=data, covs=cfun(data, weights), meta={'mode': mode})
 
     elif mode == 'within':
-        return TimeCrystal(time_data=data, covs = list(map(lambda x: cfun(x, weights), data)))
+        return TimeCrystal(time_data=data, covs = list(map(lambda x: cfun(x, weights), data)),
+                           meta={'mode': mode})
     else:
         print('Unknown mode: ' + mode)
         raise
@@ -201,4 +202,5 @@ def levelup(data, mode='within', weight_function=gaussian_weights,
 
     corrs = timecorr(data, weights_function=gaussian_weights,
                      weights_params=gaussian_params, mode="within", cfun=isfc)
-    return TimeCrystal(time_data=data, covs=hyp.reduce(corrs.get_covs(), reduce=reduce, ndims=V))
+    return TimeCrystal(time_data=data, covs=hyp.reduce(corrs.get_covs(), reduce=reduce, ndims=V),
+                       meta={'mode': mode, 'reduce':reduce})

@@ -5,7 +5,7 @@ from .timecorr import timecorr
 from .helpers import mat2vec, vec2mat
 
 
-def simulate_timecorr_data(subs=5, events=10, event_time=100, features=100, noise=0):
+def generate_multisubject_data(subs=5, events=10, event_time=100, features=100, noise=0):
     """
     Simulates data for several subjects using shared timeseries of covariance matrices
 
@@ -27,7 +27,7 @@ def simulate_timecorr_data(subs=5, events=10, event_time=100, features=100, nois
      data : np.ndarray
         Returns simulated data
     """
-    covs = generate_timeseries_covs(events, features)
+    covs = spawn_corrmat_timeseries(events, features)
 
     data = []
     for s in np.arange(subs):
@@ -36,7 +36,7 @@ def simulate_timecorr_data(subs=5, events=10, event_time=100, features=100, nois
     return data
 
 
-def generate_random_covariance_matrix(N):
+def spawn_corrmat(N):
     """
     Simulate random covariance matrix
 
@@ -55,7 +55,7 @@ def generate_random_covariance_matrix(N):
     cov = np.multiply(template, template.T)
     return mat2vec(cov)
 
-def generate_timeseries_covs(E, N):
+def spawn_corrmat_timeseries(E, N):
     """
     Simulate a timeseries of covariance matrices
 
@@ -75,7 +75,7 @@ def generate_timeseries_covs(E, N):
 
     covs = np.zeros((E, int((N**2 - N)/2 + N)))
     for event in np.arange(E):
-        covs[event, :] = generate_random_covariance_matrix(N)
+        covs[event, :] = spawn_corrmat(N)
     return covs
 
 def generate_data(sq_cov, T, noise=0):

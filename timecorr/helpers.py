@@ -3,7 +3,9 @@ from __future__ import division
 import numpy as np
 import scipy.spatial.distance as sd
 from scipy.linalg import toeplitz
-#import pykalman
+from .timecrystal import TimeCrystal
+import pykalman
+import hypertools as hyp
 
 gaussian_params = {'var': 1000}
 laplace_params = {'scale': 50}
@@ -19,6 +21,15 @@ laplace_params = {'scale': 100}
 def laplace_weights(T, params=laplace_params):
     absdiffs = toeplitz(np.arange(T))
     return np.multiply(np.divide(1, 2 * params['scale']), np.exp(-np.divide(absdiffs, params['scale']))) #scale by a factor of 2.5 to prevent near-zero rounding issues
+
+def format_data(data):
+    if isinstance(data, list): #extract data from all TimeCrystal objects
+        data = list(map(lambda x: x.get_data() if isinstance(x, TimeCrystal) else x, data))
+    elif isinstance(data, TimeCrystal):
+        data = data.get_data()
+    return hyp.tools.format_data(data)
+
+
 
 
 def wcorr(a, b, weights, tol=1e-5):

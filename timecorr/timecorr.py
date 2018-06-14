@@ -1,7 +1,6 @@
 # coding: utf-8
 
-from .helpers import isfc, gaussian_weights, gaussian_params
-import hypertools as hyp
+from .helpers import isfc, gaussian_weights, gaussian_params, format_data
 
 # TO DO (JEREMY):
 # - create a synthetic dataset (ideally write a function to do this)
@@ -87,12 +86,8 @@ def timecorr(data, weights_function=gaussian_weights,
         If mode is 'across', corrmats is an array with number-of-timepoints rows
         and an arbitrary number of columns (determined by cfun).
     """
-    from .time_crystals import TimeCrystal
+    data = format_data(data)
 
-    if isinstance(data, TimeCrystal):
-        data = data.get_time_data()
-    else:
-        data = hyp.tools.format_data(data)
     if type(data) == list:
         T = data[0].shape[0]
     else:
@@ -101,14 +96,12 @@ def timecorr(data, weights_function=gaussian_weights,
     weights = weights_function(T, weights_params)
 
     if (mode == 'across') or (type(data) != list) or (len(data) == 1):
-        return TimeCrystal(time_data=data, covs=cfun(data, weights), meta={'mode': mode})
-
+        return cfun(data, weights)
     elif mode == 'within':
-        return TimeCrystal(time_data=data, covs = list(map(lambda x: cfun(x, weights), data)),
-                           meta={'mode': mode})
+        return list(map(lambda x: cfun(x, weights), data))
     else:
-        print('Unknown mode: ' + mode)
-        raise
+        raise Exception(f"'{mode}' is not a valid mode")
+
 
 
 def levelup(data, mode='within', weight_function=gaussian_weights,
@@ -188,19 +181,11 @@ def levelup(data, mode='within', weight_function=gaussian_weights,
     dataset(s)
     """
 
-    from .time_crystals import TimeCrystal
-
-    if isinstance(data, TimeCrystal):
-        data = data.get_time_data()
-    else:
-        data = hyp.tools.format_data(data)
-
+    data = hyp.tools.format_data(data)
     if type(data) == list:
         V = data[0].shape[1]
     else:
         V = data.shape[1]
 
-    corrs = timecorr(data, weights_function=gaussian_weights,
-                     weights_params=gaussian_params, mode="within", cfun=isfc)
-    return TimeCrystal(time_data=data, covs=hyp.reduce(corrs.get_covs(), reduce=reduce, ndims=V),
-                       meta={'mode': mode, 'reduce':reduce})
+    corrs = timecorr(data, weights_function=weight_function, weights_params=weights_params, mode="within", cfun=isfc)
+    return hyp.reduce(corrs, reduce=reduce, ndims=V)

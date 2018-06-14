@@ -2,10 +2,10 @@ import timecorr as tc
 import numpy as np
 
 ## simulate some data
-data = tc.simulate_timecorr_data()
+data = tc.generate_multisubject_data()
 
 ## create a timecrystal with just timedata
-timecrystal = tc.TimeCrystal(time_data=data)
+timecrystal = tc.TimeCrystal(data=data)
 
 ## timecrystal's covs field empty
 timecrystal.get_covs()

@@ -4,7 +4,8 @@ FROM debian:latest
 MAINTAINER Contextual Dynamics Lab <contextualdynamics@gmail.com>
 
 
-RUN apt-get update
+RUN apt-get update && \
+    apt-get install libgl1-mesa-glx -y
 RUN apt-get install -y eatmydata
 
 

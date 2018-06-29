@@ -1,8 +1,11 @@
 import timecorr as tc
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
 
 ## simulate some data
 data = tc.generate_multisubject_data()
+
 
 ## create a timecrystal with just timedata
 timecrystal = tc.TimeCrystal(data=data)

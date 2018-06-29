@@ -41,7 +41,8 @@ numpy \
 scipy \
 pandas \
 matplotlib \
-numba
+numba \
+pykalman
 
 # Due to behavior of pip>=10.1, we must use the `--ignore-installed` flag to
 # install packages that were originally distutils installs (or rely on packages

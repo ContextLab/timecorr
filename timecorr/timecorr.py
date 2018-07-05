@@ -1,6 +1,8 @@
 # coding: utf-8
 
 from .helpers import isfc, gaussian_weights, gaussian_params, format_data
+from .timecrystal import TimeCrystal
+import hypertools as hyp
 
 # TO DO (JEREMY):
 # - create a synthetic dataset (ideally write a function to do this)
@@ -86,6 +88,7 @@ def timecorr(data, weights_function=gaussian_weights,
         If mode is 'across', corrmats is an array with number-of-timepoints rows
         and an arbitrary number of columns (determined by cfun).
     """
+
     data = format_data(data)
 
     if type(data) == list:
@@ -181,7 +184,8 @@ def levelup(data, mode='within', weight_function=gaussian_weights,
     dataset(s)
     """
 
-    data = hyp.tools.format_data(data)
+    data = format_data(data)
+
     if type(data) == list:
         V = data[0].shape[1]
     else:

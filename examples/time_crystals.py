@@ -28,10 +28,10 @@ timecrystal.levelup(mode='within', reduce='IncrementalPCA')
 timecrystal.info()
 
 ## save data (saves as npz files, but would be nice to have a different extension)
-timecrystal.save('/Users/lucyowen/Desktop/temp_folder/temp_tc')
+#timecrystal.save('/filepath/to/temp_folder/temp_tc')
 
 ## loading data
-time_load = tc.load('/Users/lucyowen/Desktop/temp_folder/temp_tc.npz')
+#time_load = tc.load('/filepath/to/temp_folder/temp_tc.npz')
 
 ## see the loaded data
-time_load.info()
+#time_load.info()

@@ -29,6 +29,11 @@ def format_data(data):
         data = data.get_data()
     return hyp.tools.format_data(data)
 
+def _is_empty(dict):
+    if not bool(dict):
+        return True
+    return False
+
 
 
 

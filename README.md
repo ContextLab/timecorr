@@ -30,12 +30,12 @@ There are many ways you can help out!  After trying out the code yourself, you c
 - Do something else helpful-- there are nearly limitless ways of helping out; be creative and try to cultivate a "hacker mindset" by figuring out innovative and off-the-beaten path ways of helping out!
 
 ## Adding and tracking issues/feature requests
-If you encounter a bug, or if you have an idea for a new feature (or how to modify an existing feature to make it more useful!), or if you notice some other issue or reqeust, please add an issue using the [issue tracker](https://github.com/Summer-MIND/timecorr/issues).  This will automatically populate the [project board](https://github.com/Summer-MIND/timecorr/projects/1)'s "to do" column with a new item.
+If you encounter a bug, or if you have an idea for a new feature (or how to modify an existing feature to make it more useful!), or if you notice some other issue or reqeust, please add an issue using the [issue tracker](https://github.com/Summer-MIND/timecorr/issues).  If you associate it with the MIND 2018 Hackathon project, it will automatically populate the [project board](https://github.com/Summer-MIND/timecorr/projects/1)'s "to do" column with a new item.
 
 ## Changing code/documentation
 Start with the [project board](https://github.com/Summer-MIND/timecorr/projects/1).  If you see an existing issue in the "to do" column that you want to help out with, open the associated issue, assign it to yourself (and whoever else you're working on that issue with) and move it to the "in progress" column.
 
-If there's no "to do" item for what you want to contribue, please add a [new issue](https://github.com/Summer-MIND/timecorr/issues) describing what you want to do.  (This will add it automatically to the project board; assign yourself to the issue and move it from the "to do" to the "in progress" column.
+If there's no "to do" item for what you want to contribue, please add a [new issue](https://github.com/Summer-MIND/timecorr/issues) describing what you want to do.  (If you associate it with the MIND 2018 Hackathon project, his will add it automatically to the project board; assign yourself to the issue and move it from the "to do" to the "in progress" column.
 
 Once you've defined what you want to do and moved your issue to the "in progress" column, *Fork* this repository (click the button in the upper right).  That's the version of the project that you'll be editing directly.  Clone that (forked) repository into the mount point of your Docker image (probably `~/Desktop`).  Then:
 - Navigate to `/mnt/timecorr` (from within the Docker terminal)

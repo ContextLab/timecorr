@@ -23,7 +23,7 @@ There are many ways you can help out!  After trying out the code yourself, you c
 - Clean up documentation (e.g. if you notice typos, bad or inefficient grammar, stuff that's confusing or could be better described, etc.) you can change it (place to start: to do column of the [project board](https://github.com/Summer-MIND/timecorr/projects/1))
 - Clean up or fix existing code (place to start: to do column of [project board](https://github.com/Summer-MIND/timecorr/projects/1))
 - Add new code
-- Add new ideas to the [issue tracker](https://github.com/Summer-MIND/timecorr/issues) (see **Tracking issues**)
+- Add new ideas to the [issue tracker](https://github.com/Summer-MIND/timecorr/issues) (see next section)
 - Add comments or requests for clarification to existing issues
 - Pair up with another student or faculty member and help them work through the logic
 - Ask good questions to help stimulate discussion and new ideas

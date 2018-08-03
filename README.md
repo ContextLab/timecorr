@@ -8,7 +8,7 @@ To install the TimeCorr toolbox directly from GitHub, type `pip install git+http
 
 # Requirements
 
-* Python 2.7, 3.4+
+* Python 3.4+
 * Numpy >= 1.10.4
 * Scipy >= 1.0.0
 * Seaborn >= 0.8.1

@@ -49,42 +49,42 @@ def wcorr(a, b, weights, tol=1e-5):
     :return: a a.shape[1] by b.shape[1] by weights.shape[0] array of per-timepoint
         correlation matrices.
     '''
-    def weighted_mean_var_diffs(x, weights):
+    #TODO: allow different weights for a and b (e.g. we could study lagged correlations)
+    #TODO: correct documentation above
+    def weighted_mean_std_diffs_norm(x, weights):
         weights[np.isnan(weights)] = 0
         if np.sum(weights) == 0:
             weights = np.ones(x.shape)
 
-        # get rid of 0 weights to avoid unnecessary computations
-        good_inds = (np.abs(weights) > tol)
-        weights[good_inds] /= np.sum(weights[good_inds])
+        norm = np.sum(weights, axis=1)[:, np.newaxis] #T by 1
 
-        weights = np.tile(weights[good_inds, np.newaxis], [1, x.shape[1]])
-        x = x[good_inds, :]
+        norm_tiled = np.tile(norm, [1, x.shape[1]]) #T by F = x.shape[0]
 
-        mx = np.sum(x * weights, axis=0)
+        mx = np.sum(np.divide(np.dot(weights, x), norm_tiled), axis=1)[:, np.newaxis] #T by F
+        diffs = x - mx #T by F
+        stdx = np.sqrt(np.divide(np.power(diffs, 2), norm_tiled)) #T by F
 
-        diffs = x - np.tile(mx, [x.shape[0], 1])
-        varx = np.sqrt(np.sum((diffs ** 2) * weights, axis=0))
-
-        return mx, varx, diffs
+        return mx, stdx, diffs, norm
 
     autocorrelation = np.isclose(a, b).all()
 
     corrs = np.zeros([a.shape[1], b.shape[1], weights.shape[1]])
+
+    ma, stda, diffs_a, norm_a = weighted_mean_std_diffs_norm(a, weights)
+
+    if autocorrelation:
+        mb = ma
+        stdb = stda
+        diffs_b = diffs_a
+        norm_b = norm_a
+    else:
+        mb, stdb, diffs_b, norm_b = weighted_mean_std_diffs_norm(b, weights)
+
     for t in np.arange(weights.shape[1]):
-        ma, vara, diffs_a = weighted_mean_var_diffs(a, weights[:, t])
+        alpha = np.dot(diffs_a[t, :].T, diffs_b[t, :]) #Fa by Fb
+        beta = np.dot(stda[t, :].T, stdb[t, :]) #Fa by Fb
+        corrs[:, :, t] = np.divide(np.divide(alpha, beta), np.sqrt(norm_a[t] * norm_b[t])) #Fa by Fb
 
-        if autocorrelation:
-            mb = ma
-            varb = vara
-            diffs_b = diffs_a
-        else:
-            mb, varb, diffs_b = weighted_mean_var_diffs(b, weights[:, t])
-
-        alpha = np.dot(diffs_a.T, diffs_b)
-        beta = np.dot(vara[:, np.newaxis], varb[np.newaxis, :])
-
-        corrs[:, :, t] = np.divide(alpha, weights.shape[1] * beta)
     return corrs
 
 
@@ -140,7 +140,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
                 sum[:, :, t] = np.nansum(np.stack([sum[:, :, t], z + z.T],
                                                   axis=2), axis=2)
 
-    corrs = np.zeros([T, int(((K**2 - K) / 2) + K)])
+    corrs = np.zeros([T, int(((K**2 - K) / 2) + K)]) ## why are we adding K back here?
     for t in np.arange(T):
         corrs[t, :] = mat2vec(np.squeeze(z2r(np.divide(sum[:, :, t], 2*S))))
 

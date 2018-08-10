@@ -58,35 +58,130 @@ def wcorr(a, b, weights, tol=1e-5):
 
         norm = np.sum(weights, axis=1)[:, np.newaxis] #T by 1
 
-        norm_tiled = np.tile(norm, [1, x.shape[1]]) #T by F = x.shape[0]
+        if x.ndim>2:
+            norm_tiled = np.tile(norm, [1, x.shape[2]])  # T by F = x.shape[0]
+        else:
+            norm_tiled = np.tile(norm, [1, x.shape[1]]) #T by F = x.shape[0]
+            ## also maybe: norm_tiled = np.tile(norm, [1, x.shape[-1]])
 
-        mx = np.sum(np.divide(np.dot(weights, x), norm_tiled), axis=1)[:, np.newaxis] #T by F
-        diffs = x - mx #T by F
-        stdx = np.sqrt(np.divide(np.power(diffs, 2), norm_tiled)) #T by F
+        #mx = np.sum(np.divide(np.dot(weights, x), norm_tiled), axis=1)[:, np.newaxis] #T by F
+        mx = np.divide(np.dot(weights, x), norm_tiled)  # T by F
 
-        return mx, stdx, diffs, norm
+        #mx_tile = np.tile(mx.T, [x.shape[0], 1])
+        #mx = np.divide(np.dot(weights, x), norm_tiled)
+        #diffs = np.abs(x - mx) #T by F
+        diffs = x - mx  # T by F
+        
+        #diffs = x - mx_tile  # T by F
+        #sum_square_diffs= np.sum(np.power(diffs, 2), axis=1)[:, np.newaxis]
+        square_diffs = np.power(diffs, 2)
+        #ssd_tiled = np.tile(sum_square_diffs.T, [x.shape[0], 1])
+        #stdx = np.sqrt(np.divide(sum_square_diffs, norm_tiled))
+
+        varx = np.divide(square_diffs, norm_tiled)
+
+        #varx = np.divide(ssd_tiled, norm_tiled)
+        #stdx = np.sqrt(np.divide(np.sum(np.power(diffs, 2), norm_tiled)) #T by F
+        ## abs of diffs?
+        #stdx = np.divide(diffs, norm_tiled)  # T by F
+
+        #return mx, stdx, diffs, norm
+
+        return mx, varx, diffs, norm
 
     autocorrelation = np.isclose(a, b).all()
 
     corrs = np.zeros([a.shape[1], b.shape[1], weights.shape[1]])
 
-    ma, stda, diffs_a, norm_a = weighted_mean_std_diffs_norm(a, weights)
+    #ma, stda, diffs_a, norm_a = weighted_mean_std_diffs_norm(a, weights)
+    ma, vara, diffs_a, norm_a = weighted_mean_std_diffs_norm(a, weights)
 
     if autocorrelation:
         mb = ma
-        stdb = stda
+        #stdb = stda
         diffs_b = diffs_a
         norm_b = norm_a
+        varb = vara
     else:
-        mb, stdb, diffs_b, norm_b = weighted_mean_std_diffs_norm(b, weights)
+        #mb, stdb, diffs_b, norm_b = weighted_mean_std_diffs_norm(b, weights)
+        mb, varb, diffs_b, norm_b = weighted_mean_std_diffs_norm(b, weights)
 
     for t in np.arange(weights.shape[1]):
-        alpha = np.dot(diffs_a[t, :].T, diffs_b[t, :]) #Fa by Fb
-        beta = np.dot(stda[t, :].T, stdb[t, :]) #Fa by Fb
-        corrs[:, :, t] = np.divide(np.divide(alpha, beta), np.sqrt(norm_a[t] * norm_b[t])) #Fa by Fb
+
+        alpha = np.dot(np.atleast_2d(diffs_a[t, :].T), np.atleast_2d(diffs_b[t, :])) #Fa by Fb
+        sums_alpha = np.sum(alpha, axis=0)[:, np.newaxis]
+
+        beta = np.sqrt(np.dot(np.atleast_2d(vara[t, :].T), np.atleast_2d(varb[t, :]))) #Fa by Fb
+
+        corrs[:, :, t] = np.divide(alpha, beta)
+
+        #corrs[:, :, t] = np.divide(np.divide(sums_alpha, beta), np.sqrt(norm_a[t] * norm_b[t]))
+        #corrs[:, :, t] = np.divide(np.sum(np.divide(alpha, beta), axis=1), np.sqrt(norm_a[t] * norm_b[t]))
+        #corrs[:, :, t] = np.divide(np.divide(sums_alpha, beta), np.sqrt(norm_a[t] * norm_b[t]))
+        #corrs[:, :, t] = np.divide(np.sum(np.divide(alpha, beta)), np.sqrt(norm_a[t] * norm_b[t])) #Fa by Fb
+        #corrs[:, :, t] = np.divide(np.divide(alpha, beta), norm_a[t] * norm_b[t])
 
     return corrs
 
+def old_wcorr(a, b, weights, tol=1e-5):
+    '''
+    Compute moment-by-moment correlations between sets of observations
+
+    :param a: a number-of-timepoints by number-of-features observations matrix
+    :param b: a number-of-timepoints by number-of-features observations matrix
+    :param weights: a number-of-timepoints by number-of-timepoints weights matrix
+        specifying the per-timepoint weights to be considered (for each timepoint)
+    :param tol: ignore all weights less than or equal (in absolute value) to tol
+    :return: a a.shape[1] by b.shape[1] by weights.shape[0] array of per-timepoint
+        correlation matrices.
+    '''
+    def weighted_mean_var_diffs(x, weights):
+        weights[np.isnan(weights)] = 0
+        if np.sum(weights) == 0:
+            weights = np.ones(x.shape)
+
+        # get rid of 0 weights to avoid unnecessary computations
+        good_inds = (np.abs(weights) > tol)
+        weights[good_inds] /= np.sum(weights[good_inds])
+
+        weights = np.tile(weights[good_inds, np.newaxis], [1, x.shape[1]])
+        x = x[good_inds, :]
+
+        # if x.ndim>2:
+        #     w_tiled = np.tile(norm, [1, x.shape[2]])  # T by F = x.shape[0]
+        # else:
+        #     w_tiled = np.tile(norm, [1, x.shape[1]])
+
+        mx = np.sum(x * weights, axis=1)[:, np.newaxis]
+        diffs = x-mx
+        #diffs = x - np.tile(mx, [1, x.shape[-1]])
+        varx = np.sum((diffs ** 2) * weights, axis=1)[:, np.newaxis]
+
+        return mx, varx, diffs
+
+    autocorrelation = np.isclose(a, b).all()
+
+    corrs = np.zeros([a.shape[1], b.shape[1], weights.shape[1]])
+    for t in np.arange(weights.shape[1]):
+        ma, vara, diffs_a = weighted_mean_var_diffs(a, weights[:, t])
+
+        if autocorrelation:
+            mb = ma
+            varb = vara
+            diffs_b = diffs_a
+        else:
+            mb, varb, diffs_b = weighted_mean_var_diffs(b, weights[:, t])
+
+        alpha = np.dot(diffs_a.T, diffs_b)
+        beta = np.sqrt(np.dot(np.atleast_2d(vara[t, :].T), np.atleast_2d(varb[t, :])))
+
+        norm = np.sum(weights, axis=1)[:, np.newaxis]
+        if a.ndim>2:
+            norm_tiled = np.tile(norm, [1, a.shape[2]])  # T by F = x.shape[0]
+        else:
+            norm_tiled = np.tile(norm, [1, a.shape[1]])
+        corrs[:, :, t] = np.divide(alpha, np.dot(beta, norm_tiled.T))
+    return corrs
 
 def wisfc(data, timepoint_weights, subject_weights=None):
     '''

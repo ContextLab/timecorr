@@ -66,15 +66,9 @@ def wcorr(a, b, weights, tol=1e-5):
 
     norm = np.sum(weights, axis=1)[:, np.newaxis]  # T by 1
 
-    if a.ndim > 2:
-        norma = np.tile(norm, [1, a.shape[2]])  # T by F = x.shape[0]
-    else:
-        norma = np.tile(norm, [1, a.shape[1]])
+    norma = np.tile(norm, [1, a.shape[1]])
 
-    if b.ndim > 2:
-        normb = np.tile(norm, [1, b.shape[2]])  # T by F = x.shape[0]
-    else:
-        normb = np.tile(norm, [1, b.shape[1]])
+    normb = np.tile(norm, [1, b.shape[1]])
 
     autocorrelation = np.isclose(a, b).all()
 
@@ -90,9 +84,12 @@ def wcorr(a, b, weights, tol=1e-5):
         else:
             mb, varb, diffs_b= weighted_mean_var_diffs(b, weights[:, t])
 
-        alpha = np.dot(diffs_a.T, diffs_b)
-        beta = np.sqrt(np.dot(vara[:, np.newaxis], varb[np.newaxis, :]))
+        alpha = np.dot(diffs_a.T, diffs_b)[0]
+
+        beta = np.sqrt(np.dot(vara.T, varb))
+
         corrs[:, :, t] = np.multiply(np.divide(alpha, beta), np.sqrt(norma[t] * normb[t]))
+
     return corrs
 
 def wisfc(data, timepoint_weights, subject_weights=None):

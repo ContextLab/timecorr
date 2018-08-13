@@ -19,33 +19,20 @@ T = data.shape[0]
 
 weights = gaussian_weights(T, gaussian_params)
 
-## negative times itself, neg 1s
-## random data
-
 col_1 = np.atleast_2d(data[:,0]).T
 
 col_2 = np.atleast_2d(data[:,1]).T
 
+corrs_col_arrays = np.squeeze(wcorr(data, data, weights))
+
 corrs_multidim = wcorr(col_1, data, weights)
 
-corrs_col_old = np.squeeze(wcorr(col_1, col_1, weights))
+corrs_col = np.squeeze(wcorr(col_1, col_1, weights))
 
-corrs_col_old_neg = np.squeeze(wcorr(-col_1, col_1, weights))
+corrs_col_neg = np.squeeze(wcorr(-col_1, col_1, weights))
 
-corrs_col_old_12 = np.squeeze(wcorr(col_2, col_1, weights))
+corrs_col_12 = np.squeeze(wcorr(col_2, col_1, weights))
 
+assert(np.allclose(corrs_col,corrs_multidim[0][0]))
+assert(np.allclose(corrs_col_12,corrs_multidim[0][1]))
 
-
-# create list of simulated brain objects
-model_bos = [se.simulate_model_bos(n_samples=1000, sample_rate=1000,
-                                   locs=locs, sample_locs=10) for x in range(3)]
-
-
-stacked_data = np.dstack((model_bos[0].get_data().as_matrix().T, model_bos[1].get_data().as_matrix().T,
-                  model_bos[2].get_data().as_matrix().T)).T
-
-
-
-
-
-mo_corrs = wcorr(stacked_data, np.atleast_3d(model_bos[0].get_data().as_matrix().T).T, weights)

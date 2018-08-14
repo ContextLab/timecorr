@@ -84,11 +84,12 @@ def wcorr(a, b, weights, tol=1e-5):
         else:
             mb, varb, diffs_b= weighted_mean_var_diffs(b, weights[:, t])
 
-        alpha = np.dot(diffs_a.T, diffs_b)[0]
+        alpha = np.dot(diffs_a.T, diffs_b)
 
         beta = np.sqrt(np.dot(vara.T, varb))
 
-        corrs[:, :, t] = np.multiply(np.divide(alpha, beta), np.sqrt(norma[t] * normb[t]))
+        #corrs[:, :, t] = np.multiply(np.divide(alpha, beta), np.sqrt(norma[t] * normb[t]))
+        corrs[:, :, t] = np.divide(alpha, beta)
 
     return corrs
 

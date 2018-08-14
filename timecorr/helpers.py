@@ -36,7 +36,6 @@ def _is_empty(dict):
 
 
 
-
 def wcorr(a, b, weights, tol=1e-5):
     '''
     Compute moment-by-moment correlations between sets of observations
@@ -54,23 +53,27 @@ def wcorr(a, b, weights, tol=1e-5):
         if np.sum(weights) == 0:
             weights = np.ones(x.shape)
 
-        # get rid of 0 weights to avoid unnecessary computations
-        good_inds = (np.abs(weights) > tol)
-        weights[good_inds] /= np.sum(weights[good_inds])
+        weights_tiled = np.tile(weights[:, np.newaxis], [1, x.shape[1]])
 
-        weights = np.tile(weights[good_inds, np.newaxis], [1, x.shape[1]])
-        x = x[good_inds, :]
+        mx = np.sum(np.multiply(weights_tiled, x), axis=0)[:, np.newaxis].T
 
-        mx = np.sum(x * weights, axis=0)
 
         diffs = x - np.tile(mx, [x.shape[0], 1])
-        varx = np.sqrt(np.sum((diffs ** 2) * weights, axis=0))
+
+        varx = np.sum(diffs ** 2, axis=0)[:, np.newaxis].T
 
         return mx, varx, diffs
+
+    norm = np.sum(weights, axis=1)[:, np.newaxis]  # T by 1
+
+    norma = np.tile(norm, [1, a.shape[1]])
+
+    normb = np.tile(norm, [1, b.shape[1]])
 
     autocorrelation = np.isclose(a, b).all()
 
     corrs = np.zeros([a.shape[1], b.shape[1], weights.shape[1]])
+
     for t in np.arange(weights.shape[1]):
         ma, vara, diffs_a = weighted_mean_var_diffs(a, weights[:, t])
 
@@ -82,11 +85,13 @@ def wcorr(a, b, weights, tol=1e-5):
             mb, varb, diffs_b = weighted_mean_var_diffs(b, weights[:, t])
 
         alpha = np.dot(diffs_a.T, diffs_b)
-        beta = np.dot(vara[:, np.newaxis], varb[np.newaxis, :])
 
-        corrs[:, :, t] = np.divide(alpha, weights.shape[1] * beta)
+        beta = np.sqrt(np.dot(vara.T, varb))
+
+        #corrs[:, :, t] = np.multiply(np.divide(alpha, beta), np.sqrt(norma[t] * normb[t]))
+        corrs[:, :, t] = np.divide(alpha, beta)
+
     return corrs
-
 
 def wisfc(data, timepoint_weights, subject_weights=None):
     '''
@@ -140,7 +145,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
                 sum[:, :, t] = np.nansum(np.stack([sum[:, :, t], z + z.T],
                                                   axis=2), axis=2)
 
-    corrs = np.zeros([T, int(((K**2 - K) / 2) + K)])
+    corrs = np.zeros([T, int(((K**2 - K) / 2) + K)]) ## why are we adding K back here?
     for t in np.arange(T):
         corrs[t, :] = mat2vec(np.squeeze(z2r(np.divide(sum[:, :, t], 2*S))))
 

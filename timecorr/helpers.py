@@ -82,7 +82,7 @@ def wcorr(a, b, weights, tol=1e-5):
             varb = vara
             diffs_b = diffs_a
         else:
-            mb, varb, diffs_b= weighted_mean_var_diffs(b, weights[:, t])
+            mb, varb, diffs_b = weighted_mean_var_diffs(b, weights[:, t])
 
         alpha = np.dot(diffs_a.T, diffs_b)
 

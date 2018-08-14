@@ -18,7 +18,7 @@ R = toeplitz(np.linspace(0, 1, n_elecs)[::-1])
 
 data_sim = np.random.multivariate_normal(np.zeros(n_elecs), R, size=n_samples)
 
-gps = {'var': 10}
+gps = {'var': 100}
 
 T_sim = data_sim.shape[0]
 
@@ -53,10 +53,21 @@ def test_wcorr():
 
     corrs_col_12 = np.squeeze(wcorr(col_2, col_1, weights_sim))
 
+    # correlate one column with itself and the same column in larger array is the same
     assert (np.allclose(corrs_col, corrs_multidim[0][0]))
+    # correlating a timeseries with -1 times itself produces -1's
+    assert corrs_col.mean() == 1
+    # correlate one column with the second column and the same column in larger array is the same
     assert (np.allclose(corrs_col_12, corrs_multidim[0][1]))
+    # correlating a timeseries with -1 times itself produces negative correlations
     assert (np.allclose(-corrs_col, corrs_col_neg))
-    assert (np.isclose(corrs_col_arrays[1,1,50],1))
+    # correlating a timeseries with -1 times itself produces -1's
+    assert corrs_col_neg.mean()==-1
+    # check if corresponding columns in 3d array produces 1
+    assert (np.isclose(corrs_col_arrays[4,4,500],1))
+    # check if toeplitz matrix is produced
+    assert (np.allclose(corrs_col_arrays[:, :, 500], R, atol=.1))
+    # check if corrs is a numpy array
     assert isinstance(corrs, np.ndarray)
 
 def test_wisfc():

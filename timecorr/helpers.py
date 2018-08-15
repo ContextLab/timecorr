@@ -358,38 +358,46 @@ def z2r(z):
     return r
 
 
-def mat2vec_worker(m):
 
-    x = m.shape[0]
-    v = np.zeros(((x*x - x)// 2) + x)
-    v[0:x] = np.diag(m)
 
-    # force m to be symmetric (sometimes rounding errors get introduced)
-    m = np.triu(rmdiag(m))
-    m += m.T
+def mat2vec(m):
+    K = m.shape[0]
+    V = int((((K ** 2) - K) / 2) + K)
 
-    v[x:] = sd.squareform(rmdiag(m))
-    # before returning v, make every element of v an int?
+    if m.ndim == 2:
+        y = np.zeros(V)
+        y[0:K] = np.diag(m)
 
-    return v
+        #force m to by symmetric
+        m = np.triu(rmdiag(m))
+        m += m.T
 
-def mat2vec(x):
-
-    if x.ndim>2:
-        K = x.shape[0]
-        V = np.zeros([x.shape[2], int((K**2 - K)/2 + K)])
-        for t in np.arange(x.shape[2]):
-            V[t, :] = mat2vec_worker(np.squeeze(x[:, :, t]))
+        y[K:] = sd.squareform(rmdiag(m))
+    elif m.ndim == 3:
+        T = m.shape[2]
+        y = np.zeros([T, V])
+        for t in np.arange(T):
+            y[t, :] = mat2vec(np.squeeze(m[:, :, t]))
     else:
+        raise ValueError('Input must be a 2 or 3 dimensional Numpy array')
 
-        V = mat2vec_worker(x)
+    return y
 
-    return V
 
 def vec2mat(v):
-    x = int(0.5*(np.sqrt(8*len(v) + 1) - 1))
-    return sd.squareform(v[x:]) + np.diag(v[0:x])
+    if (v.ndim == 1) or (v.shape[0] == 1):
+        x = int(0.5*(np.sqrt(8*len(v) + 1) - 1))
+        return sd.squareform(v[x:]) + np.diag(v[0:x])
+    elif v.ndim == 2:
+        a = vec2mat(v[0, :])
+        y = np.zeros([a.shape[0], a.shape[1], v.shape[0]])
+        y[:, :, 0] = a
+        for t in np.arange(1, v.shape[0]):
+            y[:, :, t] = vec2mat(v[t, :])
+    else:
+        raise ValueError('Input must be a 1 or 2 dimensional Numpy array')
 
+    return y
 
 def symmetric(m):
     return np.isclose(m, m.T).all()

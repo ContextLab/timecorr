@@ -5,8 +5,8 @@ import hypertools as hyp
 
 
 
-def timecorr(data, weights_function=gaussian_weights,
-             weights_params=gaussian_params, mode="within", cfun=isfc):
+def timecorr(data, weights_function=laplace_weights,
+             weights_params=None, mode="within", cfun=isfc):
     """
     Computes dynamics correlations in single-subject or multi-subject data.
 
@@ -22,19 +22,22 @@ def timecorr(data, weights_function=gaussian_weights,
         The function should return a T by T array containing the timepoint-specific
         weights for each consecutive time point from 0 to T (not including T).
 
-        Default: gaussian_weights
+        Default: laplace_weights; options: laplace_weights, gaussian_weights,
+        t_weights, eye_weights, mexican_hat_weights
 
     weights_params: used to pass parameters to the weights_params function. This
         can be specified in any format (e.g. a scalar, list, object, dictionary,
         etc.).
 
-        Default: gaussian_variance
+        Default: None (use default parameters for the given weights function).
+        Options: gaussian_params, laplace_params, t_params, eye_params,
+        mexican_hat_params.
 
     mode: 'within' (default) or 'across'
         When mode is 'within' (default), the cfun operation (defined below) is
         applied independently to each data array.  The result is a list (of the
         same length as data) containing the outputs of the cfun operation for
-        each array.
+        each array. #TODO: VERIFY THIS
 
         When mode is 'across', the cfun operation is applied to the full data
         list simultaneously.  This is useful for across-subject analyses or

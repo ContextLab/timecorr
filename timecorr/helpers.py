@@ -18,7 +18,6 @@ def gaussian_weights(T, params=gaussian_params):
     sqdiffs = toeplitz(np.arange(T) ** 2)
     return c1 * np.exp(c2 * sqdiffs)
 
-laplace_params = {'scale': 100}
 def laplace_weights(T, params=laplace_params):
     absdiffs = toeplitz(np.arange(T))
     return np.multiply(np.divide(1, 2 * params['scale']), np.exp(-np.divide(absdiffs, params['scale']))) #scale by a factor of 2.5 to prevent near-zero rounding issues
@@ -70,12 +69,6 @@ def wcorr(a, b, weights, tol=1e-5):
 
         return mx, varx, diffs
 
-    norm = np.sum(weights, axis=1)[:, np.newaxis]  # T by 1
-
-    norma = np.tile(norm, [1, a.shape[1]])
-
-    normb = np.tile(norm, [1, b.shape[1]])
-
     autocorrelation = np.isclose(a, b).all()
 
     corrs = np.zeros([a.shape[1], b.shape[1], weights.shape[1]])
@@ -94,7 +87,6 @@ def wcorr(a, b, weights, tol=1e-5):
 
         beta = np.sqrt(np.dot(vara.T, varb))
 
-        #corrs[:, :, t] = np.multiply(np.divide(alpha, beta), np.sqrt(norma[t] * normb[t]))
         corrs[:, :, t] = np.divide(alpha, beta)
 
     return corrs
@@ -342,20 +334,50 @@ def mat2vec_worker(m):
 
 def mat2vec(x):
 
+    def m2v(m):
+
+        x = m.shape[0]
+        v = np.zeros(((x * x - x) // 2) + x)
+        v[0:x] = np.diag(m)
+
+        # force m to be symmetric (sometimes rounding errors get introduced)
+        m = np.triu(rmdiag(m))
+        m += m.T
+
+        v[x:] = sd.squareform(rmdiag(m))
+        # before returning v, make every element of v an int?
+
+        return v
+
     if x.ndim>2:
+
         K = x.shape[0]
         V = np.zeros([x.shape[2], int((K**2 - K)/2 + K)])
         for t in np.arange(x.shape[2]):
-            V[t, :] = mat2vec_worker(np.squeeze(x[:, :, t]))
+            V[t, :] = m2v(np.squeeze(x[:, :, t]))
     else:
 
-        V = mat2vec_worker(x)
+        V = m2v(x)
 
     return V
 
 def vec2mat(v):
-    x = int(0.5*(np.sqrt(8*len(v) + 1) - 1))
-    return sd.squareform(v[x:]) + np.diag(v[0:x])
+
+    def v2m(v):
+        x = int(0.5 * (np.sqrt(8 * len(v) + 1) - 1))
+        return sd.squareform(v[x:]) + np.diag(v[0:x])
+
+    if v.ndim > 1:
+        K = int(0.5 * (np.sqrt(8 * v.shape[1] + 1) - 1))
+        M = np.zeros([K, K, v.shape[0]])
+        for t in np.arange(v.shape[0]):
+            M[:, :, t] = v2m(v[t, :])
+
+    else:
+
+        M = v2m(v)
+
+    return M
 
 
 def symmetric(m):

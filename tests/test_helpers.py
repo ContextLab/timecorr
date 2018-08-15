@@ -4,7 +4,8 @@ import scipy.spatial.distance as sd
 from scipy.linalg import toeplitz
 
 #using method from supereeg
-from timecorr.helpers import gaussian_weights, gaussian_params, wcorr, wisfc, isfc, smooth, timepoint_decoder, predict
+from timecorr.helpers import gaussian_weights, gaussian_params, wcorr, \
+    wisfc, isfc, smooth, timepoint_decoder, predict, mat2vec, vec2mat
 
 T = 10
 D = 4
@@ -12,13 +13,13 @@ S = 5
 
 n_elecs = 20
 
-n_samples = 1000
+n_samples = 100
 
 R = toeplitz(np.linspace(0, 1, n_elecs)[::-1])
 
 data_sim = np.random.multivariate_normal(np.zeros(n_elecs), R, size=n_samples)
 
-gps = {'var': 100}
+gps = {'var': 10}
 
 T_sim = data_sim.shape[0]
 
@@ -64,9 +65,9 @@ def test_wcorr():
     # correlating a timeseries with -1 times itself produces -1's
     assert corrs_col_neg.mean()==-1
     # check if corresponding columns in 3d array produces 1
-    assert (np.isclose(corrs_col_arrays[4,4,500],1))
+    assert (np.isclose(corrs_col_arrays[4,4,50],1))
     # check if toeplitz matrix is produced
-    assert (np.allclose(corrs_col_arrays[:, :, 500], R, atol=.1))
+    assert (np.allclose(corrs_col_arrays[:, :, 50], R, atol=.1))
     # check if corrs is a numpy array
     assert isinstance(corrs, np.ndarray)
 
@@ -80,6 +81,23 @@ def test_wisfc():
 
 def test_isfc():
     test_wisfc()
+
+def test_mat2vec_vec2mat():
+
+    corrs = np.squeeze(wcorr(data_sim, data_sim, weights_sim))
+
+    ## check for 3d
+    V = mat2vec(corrs)
+
+    M = vec2mat(V)
+
+    ## check for 2d
+    v = mat2vec(corrs[:, :, 50])
+
+    m = vec2mat(v)
+
+    assert (np.allclose(M, corrs))
+    assert (np.allclose(m, corrs[:, :, 50]))
 
 #commenting out: smoothing not implemented #TODO: implement smooth function
 #def test_smooth():

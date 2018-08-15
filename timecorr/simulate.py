@@ -33,7 +33,7 @@ def generate_multisubject_data(subs=5, events=10, event_time=100, features=100, 
     for s in np.arange(subs):
         data.append(generate_subject_data(covs, event_time, noise))
 
-    return data
+    return np.asarray(data)
 
 
 def spawn_corrmat(N):

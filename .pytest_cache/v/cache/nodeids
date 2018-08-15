@@ -1,3 +1,3 @@
 [
-  "tests/test_helpers.py::test_wcorr"
+  "tests/test_helpers.py::test_mat2vec_vec2mat"
 ]

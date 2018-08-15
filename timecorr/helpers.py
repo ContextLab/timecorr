@@ -2,25 +2,64 @@
 from __future__ import division
 import numpy as np
 import scipy.spatial.distance as sd
+from scipy.special import gamma
 from scipy.linalg import toeplitz
 from .timecrystal import TimeCrystal
 import pykalman
 import hypertools as hyp
 
-gaussian_params = {'var': 1000}
-laplace_params = {'scale': 50}
+gaussian_params = {'var': 100}
+laplace_params = {'scale': 100}
+eye_params = {}
+t_params = {'df': 100}
+mexican_hat_params = {'sigma': 100}
 
 
 def gaussian_weights(T, params=gaussian_params):
+    if params is None:
+        params = gaussian_params
+
     c1 = np.divide(1, np.sqrt(2 * np.math.pi * params['var']))
     c2 = np.divide(-1, 2 * params['var'])
     sqdiffs = toeplitz(np.arange(T) ** 2)
     return c1 * np.exp(c2 * sqdiffs)
 
-laplace_params = {'scale': 100}
 def laplace_weights(T, params=laplace_params):
+    if params is None:
+        params = laplace_params
+
     absdiffs = toeplitz(np.arange(T))
     return np.multiply(np.divide(1, 2 * params['scale']), np.exp(-np.divide(absdiffs, params['scale']))) #scale by a factor of 2.5 to prevent near-zero rounding issues
+
+
+def eye_weights(T, params=eye_params):
+    #if params is None:
+    #    params = eye_params
+
+    return np.eye(T)
+
+def t_weights(T, params=t_params):
+    if params is None:
+        params = t_params
+
+    c1 = np.divide(gamma((params['df'] + 1) / 2), np.sqrt(params['df'] * np.math.pi) * gamma(params['df'] / 2))
+    c2 = np.divide(-params['df'] + 1, 2)
+
+    sqdiffs = toeplitz(np.arange(T) ** 2)
+    return np.multiply(c1, np.power(1 + np.divide(sqdiffs, params['df']), c2))
+
+def mexican_hat_weights(T, params=mexican_hat_params):
+    if params is None:
+        params = mexican_hat_params
+
+    absdiffs = toeplitz(np.arange(T))
+    sqdiffs = toeplitz(np.arange(T) ** 2)
+
+    a = np.divide(2, np.sqrt(3 * params['sigma']) * np.power(np.math.pi, 0.25))
+    b = 1 - np.power(np.divide(absdiffs, params['sigma']), 2)
+    c = np.exp(-np.divide(sqdiffs, 2 * np.power(params['sigma'], 2)))
+
+    return np.multiply(a, np.multiply(b, c))
 
 def format_data(data):
     if isinstance(data, list): #extract data from all TimeCrystal objects
@@ -33,7 +72,6 @@ def _is_empty(dict):
     if not bool(dict):
         return True
     return False
-
 
 
 
@@ -54,23 +92,27 @@ def wcorr(a, b, weights, tol=1e-5):
         if np.sum(weights) == 0:
             weights = np.ones(x.shape)
 
-        # get rid of 0 weights to avoid unnecessary computations
-        good_inds = (np.abs(weights) > tol)
-        weights[good_inds] /= np.sum(weights[good_inds])
+        weights_tiled = np.tile(weights[:, np.newaxis], [1, x.shape[1]])
 
-        weights = np.tile(weights[good_inds, np.newaxis], [1, x.shape[1]])
-        x = x[good_inds, :]
+        mx = np.sum(np.multiply(weights_tiled, x), axis=0)[:, np.newaxis].T
 
-        mx = np.sum(x * weights, axis=0)
 
         diffs = x - np.tile(mx, [x.shape[0], 1])
-        varx = np.sqrt(np.sum((diffs ** 2) * weights, axis=0))
+
+        varx = np.sum(diffs ** 2, axis=0)[:, np.newaxis].T
 
         return mx, varx, diffs
+
+    norm = np.sum(weights, axis=1)[:, np.newaxis]  # T by 1
+
+    norma = np.tile(norm, [1, a.shape[1]])
+
+    normb = np.tile(norm, [1, b.shape[1]])
 
     autocorrelation = np.isclose(a, b).all()
 
     corrs = np.zeros([a.shape[1], b.shape[1], weights.shape[1]])
+
     for t in np.arange(weights.shape[1]):
         ma, vara, diffs_a = weighted_mean_var_diffs(a, weights[:, t])
 
@@ -82,11 +124,13 @@ def wcorr(a, b, weights, tol=1e-5):
             mb, varb, diffs_b = weighted_mean_var_diffs(b, weights[:, t])
 
         alpha = np.dot(diffs_a.T, diffs_b)
-        beta = np.dot(vara[:, np.newaxis], varb[np.newaxis, :])
 
-        corrs[:, :, t] = np.divide(alpha, weights.shape[1] * beta)
+        beta = np.sqrt(np.dot(vara.T, varb))
+
+        #corrs[:, :, t] = np.multiply(np.divide(alpha, beta), np.sqrt(norma[t] * normb[t]))
+        corrs[:, :, t] = np.divide(alpha, beta)
+
     return corrs
-
 
 def wisfc(data, timepoint_weights, subject_weights=None):
     '''
@@ -140,7 +184,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
                 sum[:, :, t] = np.nansum(np.stack([sum[:, :, t], z + z.T],
                                                   axis=2), axis=2)
 
-    corrs = np.zeros([T, int(((K**2 - K) / 2) + K)])
+    corrs = np.zeros([T, int(((K**2 - K) / 2) + K)]) ## why are we adding K back here?
     for t in np.arange(T):
         corrs[t, :] = mat2vec(np.squeeze(z2r(np.divide(sum[:, :, t], 2*S))))
 
@@ -314,26 +358,46 @@ def z2r(z):
     return r
 
 
+
+
 def mat2vec(m):
+    K = m.shape[0]
+    V = int((((K ** 2) - K) / 2) + K)
 
-    x = m.shape[0]
-    v = np.zeros(((x*x - x)// 2) + x)
-    v[0:x] = np.diag(m)
+    if m.ndim == 2:
+        y = np.zeros(V)
+        y[0:K] = np.diag(m)
 
-    # force m to be symmetric (sometimes rounding errors get introduced)
-    m = np.triu(rmdiag(m))
-    m += m.T
+        #force m to by symmetric
+        m = np.triu(rmdiag(m))
+        m += m.T
 
-    v[x:] = sd.squareform(rmdiag(m))
-    # before returning v, make every element of v an int?
+        y[K:] = sd.squareform(rmdiag(m))
+    elif m.ndim == 3:
+        T = m.shape[2]
+        y = np.zeros([T, V])
+        for t in np.arange(T):
+            y[t, :] = mat2vec(np.squeeze(m[:, :, t]))
+    else:
+        raise ValueError('Input must be a 2 or 3 dimensional Numpy array')
 
-    return v
+    return y
 
 
 def vec2mat(v):
-    x = int(0.5*(np.sqrt(8*len(v) + 1) - 1))
-    return sd.squareform(v[x:]) + np.diag(v[0:x])
+    if (v.ndim == 1) or (v.shape[0] == 1):
+        x = int(0.5*(np.sqrt(8*len(v) + 1) - 1))
+        return sd.squareform(v[x:]) + np.diag(v[0:x])
+    elif v.ndim == 2:
+        a = vec2mat(v[0, :])
+        y = np.zeros([a.shape[0], a.shape[1], v.shape[0]])
+        y[:, :, 0] = a
+        for t in np.arange(1, v.shape[0]):
+            y[:, :, t] = vec2mat(v[t, :])
+    else:
+        raise ValueError('Input must be a 1 or 2 dimensional Numpy array')
 
+    return y
 
 def symmetric(m):
     return np.isclose(m, m.T).all()

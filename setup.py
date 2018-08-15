@@ -2,6 +2,8 @@
 
 from setuptools import setup, find_packages
 
+with open('requirements.txt') as f:
+    requirements = f.read().splitlines()
 
 with open('README.md') as f:
     readme = f.read()
@@ -17,6 +19,7 @@ setup(
     author='Contextual Dynamics Laboratory',
     author_email='contextualdynamics@gmail.com',
     url='https://github.com/ContextLab/timecorr',
+    install_requires = requirements,
     license=license,
     packages=find_packages(exclude=('tests', 'docs'))
 )

@@ -1,6 +1,6 @@
 # coding: utf-8
 
-from .helpers import isfc, gaussian_weights, gaussian_params, format_data
+from .helpers import isfc, laplace_weights, format_data
 import hypertools as hyp
 
 
@@ -98,8 +98,8 @@ def timecorr(data, weights_function=laplace_weights,
 
 
 
-def levelup(data, mode='within', weight_function=gaussian_weights,
-            weights_params=gaussian_params, cfun=isfc, reduce='IncrementalPCA'):
+def levelup(data, mode='within', weight_function=laplace_weights,
+            weights_params=None, cfun=isfc, reduce='IncrementalPCA'):
     """
     Convenience function that performs two steps:
     1.) Uses timecorr to compute within-subject moment-by-moment correlations
@@ -129,11 +129,11 @@ def levelup(data, mode='within', weight_function=gaussian_weights,
 
     weights_function: see description from timecorr
 
-        Default: gaussian_weights
+        Default: laplace_weights
 
     weights_params: see description from timecorr
 
-        Default: gaussian_variance
+        Default: None
 
     cfunc: function to apply to the data array(s)
         This function should be of the form
@@ -160,7 +160,7 @@ def levelup(data, mode='within', weight_function=gaussian_weights,
         scikit-learn functions are supported: PCA, IncrementalPCA, SparsePCA,
         MiniBatchSparsePCA, KernelPCA, FastICA, FactorAnalysis, TruncatedSVD,
         DictionaryLearning, MiniBatchDictionaryLearning, TSNE, Isomap,
-        SpectralEmbedding, LocallyLinearEmbedding, and MDS.
+        SpectralEmbedding, LocallyLinearEmbedding, MDS, and UMAP.
 
         Can be passed as a string, but for finer control of the model
         parameters, pass as a dictionary, e.g.
@@ -182,5 +182,5 @@ def levelup(data, mode='within', weight_function=gaussian_weights,
     else:
         V = data.shape[1]
 
-    corrs = timecorr(data, weights_function=weight_function, weights_params=weights_params, mode="within", cfun=isfc)
+    corrs = timecorr(data, weights_function=weight_function, weights_params=weights_params, mode=mode, cfun=cfun)
     return hyp.reduce(corrs, reduce=reduce, ndims=V)

@@ -2,31 +2,64 @@
 from __future__ import division
 import numpy as np
 import scipy.spatial.distance as sd
+from scipy.special import gamma
 from scipy.linalg import toeplitz
 from .timecrystal import TimeCrystal
 import pykalman
 import hypertools as hyp
 
-gaussian_params = {'var': 1000}
-laplace_params = {'scale': 50}
+gaussian_params = {'var': 100}
+laplace_params = {'scale': 100}
 eye_params = {}
+t_params = {'df': 100}
+mexican_hat_params = {'sigma': 100}
 
 
 def gaussian_weights(T, params=gaussian_params):
+    if params is None:
+        params = gaussian_params
+
     c1 = np.divide(1, np.sqrt(2 * np.math.pi * params['var']))
     c2 = np.divide(-1, 2 * params['var'])
     sqdiffs = toeplitz(np.arange(T) ** 2)
     return c1 * np.exp(c2 * sqdiffs)
 
-laplace_params = {'scale': 100}
 def laplace_weights(T, params=laplace_params):
+    if params is None:
+        params = laplace_params
+
     absdiffs = toeplitz(np.arange(T))
     return np.multiply(np.divide(1, 2 * params['scale']), np.exp(-np.divide(absdiffs, params['scale']))) #scale by a factor of 2.5 to prevent near-zero rounding issues
 
 
-def eye_weights (T, params=eye_params):
+def eye_weights(T, params=eye_params):
+    #if params is None:
+    #    params = eye_params
+
     return np.eye(T)
 
+def t_weights(T, params=t_params):
+    if params is None:
+        params = t_params
+
+    c1 = np.divide(gamma((params['df'] + 1) / 2), np.sqrt(params['df'] * np.math.pi) * gamma(params['df'] / 2))
+    c2 = np.divide(-params['df'] + 1, 2)
+
+    sqdiffs = toeplitz(np.arange(T) ** 2)
+    return np.multiply(c1, np.power(1 + np.divide(sqdiffs, params['df']), c2))
+
+def mexican_hat_weights(T, params=mexican_hat_params):
+    if params is None:
+        params = mexican_hat_params
+
+    absdiffs = toeplitz(np.arange(T))
+    sqdiffs = toeplitz(np.arange(T) ** 2)
+
+    a = np.divide(2, np.sqrt(3 * params['sigma']) * np.power(np.math.pi, 0.25))
+    b = 1 - np.power(np.divide(absdiffs, params['sigma']), 2)
+    c = np.exp(-np.divide(sqdiffs, 2 * np.power(params['sigma'], 2)))
+
+    return np.multiply(a, np.multiply(b, c))
 
 def format_data(data):
     if isinstance(data, list): #extract data from all TimeCrystal objects

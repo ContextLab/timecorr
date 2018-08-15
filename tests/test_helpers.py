@@ -2,8 +2,6 @@ from past.utils import old_div
 import numpy as np
 import scipy.spatial.distance as sd
 from scipy.linalg import toeplitz
-
-#using method from supereeg
 from timecorr.helpers import gaussian_weights, gaussian_params, wcorr, \
     wisfc, isfc, smooth, timepoint_decoder, predict, mat2vec, vec2mat
 

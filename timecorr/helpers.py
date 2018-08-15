@@ -9,6 +9,7 @@ import hypertools as hyp
 
 gaussian_params = {'var': 1000}
 laplace_params = {'scale': 50}
+eye_params = {}
 
 
 def gaussian_weights(T, params=gaussian_params):
@@ -21,6 +22,11 @@ laplace_params = {'scale': 100}
 def laplace_weights(T, params=laplace_params):
     absdiffs = toeplitz(np.arange(T))
     return np.multiply(np.divide(1, 2 * params['scale']), np.exp(-np.divide(absdiffs, params['scale']))) #scale by a factor of 2.5 to prevent near-zero rounding issues
+
+
+def eye_weights (T, params=eye_params):
+    return np.eye(T)
+
 
 def format_data(data):
     if isinstance(data, list): #extract data from all TimeCrystal objects
@@ -319,7 +325,7 @@ def z2r(z):
     return r
 
 
-def mat2vec(m):
+def mat2vec_worker(m):
 
     x = m.shape[0]
     v = np.zeros(((x*x - x)// 2) + x)
@@ -334,6 +340,18 @@ def mat2vec(m):
 
     return v
 
+def mat2vec(x):
+
+    if x.ndim>2:
+        K = x.shape[0]
+        V = np.zeros([x.shape[2], int((K**2 - K)/2 + K)])
+        for t in np.arange(x.shape[2]):
+            V[t, :] = mat2vec_worker(np.squeeze(x[:, :, t]))
+    else:
+
+        V = mat2vec_worker(x)
+
+    return V
 
 def vec2mat(v):
     x = int(0.5*(np.sqrt(8*len(v) + 1) - 1))

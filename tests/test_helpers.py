@@ -4,7 +4,8 @@ import scipy.spatial.distance as sd
 from scipy.linalg import toeplitz
 
 #using method from supereeg
-from timecorr.helpers import gaussian_weights, gaussian_params, wcorr, wisfc, isfc, smooth, timepoint_decoder, predict
+from timecorr.helpers import gaussian_weights, gaussian_params, wcorr, wisfc, isfc, \
+    smooth, timepoint_decoder, predict, mat2vec, vec2mat
 
 T = 10
 D = 4
@@ -80,6 +81,24 @@ def test_wisfc():
 
 def test_isfc():
     test_wisfc()
+
+
+def test_mat2vec_vec2mat():
+
+    corrs = np.squeeze(wcorr(data_sim, data_sim, weights_sim))
+
+    ## check for 3d
+    V = mat2vec(corrs)
+
+    M = vec2mat(V)
+
+    ## check for 2d
+    v = mat2vec(corrs[:, :, 50])
+
+    m = vec2mat(v)
+
+    assert (np.allclose(M, corrs))
+    assert (np.allclose(m, corrs[:, :, 50]))
 
 #commenting out: smoothing not implemented #TODO: implement smooth function
 #def test_smooth():

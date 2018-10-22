@@ -12,7 +12,7 @@ gaussian_params = {'var': 100}
 laplace_params = {'scale': 100}
 eye_params = {}
 t_params = {'df': 100}
-mexican_hat_params = {'sigma': 100}
+mexican_hat_params = {'sigma': 10}
 
 
 def gaussian_weights(T, params=gaussian_params):

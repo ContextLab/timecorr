@@ -75,7 +75,7 @@ def _is_empty(dict):
 
 
 
-def wcorr(a, b, weights, tol=1e-5):
+def wcorr(a, b, weights):
     '''
     Compute moment-by-moment correlations between sets of observations
 
@@ -83,51 +83,36 @@ def wcorr(a, b, weights, tol=1e-5):
     :param b: a number-of-timepoints by number-of-features observations matrix
     :param weights: a number-of-timepoints by number-of-timepoints weights matrix
         specifying the per-timepoint weights to be considered (for each timepoint)
-    :param tol: ignore all weights less than or equal (in absolute value) to tol
     :return: a a.shape[1] by b.shape[1] by weights.shape[0] array of per-timepoint
         correlation matrices.
     '''
-    def weighted_mean_var_diffs(x, weights):
-        weights[np.isnan(weights)] = 0
-        if np.sum(weights) == 0:
-            weights = np.ones(x.shape)
-
-        weights_tiled = np.tile(weights[:, np.newaxis], [1, x.shape[1]])
+    def weighted_var_diffs(x, w):
+        w[np.isnan(w)] = 0
+        if np.sum(np.abs(w)) == 0:
+            weights_tiled = np.ones(x.shape)
+        else:
+            weights_tiled = np.tile(w[:, np.newaxis], [1, x.shape[1]])
 
         mx = np.sum(np.multiply(weights_tiled, x), axis=0)[:, np.newaxis].T
-
-
         diffs = x - np.tile(mx, [x.shape[0], 1])
-
         varx = np.sum(diffs ** 2, axis=0)[:, np.newaxis].T
 
-        return mx, varx, diffs
-
-    norm = np.sum(weights, axis=1)[:, np.newaxis]  # T by 1
-
-    norma = np.tile(norm, [1, a.shape[1]])
-
-    normb = np.tile(norm, [1, b.shape[1]])
+        return varx, diffs
 
     autocorrelation = np.isclose(a, b).all()
-
     corrs = np.zeros([a.shape[1], b.shape[1], weights.shape[1]])
 
     for t in np.arange(weights.shape[1]):
-        ma, vara, diffs_a = weighted_mean_var_diffs(a, weights[:, t])
+        vara, diffs_a = weighted_var_diffs(a, weights[:, t])
 
         if autocorrelation:
-            mb = ma
             varb = vara
             diffs_b = diffs_a
         else:
-            mb, varb, diffs_b = weighted_mean_var_diffs(b, weights[:, t])
+            varb, diffs_b = weighted_var_diffs(b, weights[:, t])
 
         alpha = np.dot(diffs_a.T, diffs_b)
-
         beta = np.sqrt(np.dot(vara.T, varb))
-
-        #corrs[:, :, t] = np.multiply(np.divide(alpha, beta), np.sqrt(norma[t] * normb[t]))
         corrs[:, :, t] = np.divide(alpha, beta)
 
     return corrs
@@ -184,7 +169,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
                 sum[:, :, t] = np.nansum(np.stack([sum[:, :, t], z + z.T],
                                                   axis=2), axis=2)
 
-    corrs = np.zeros([T, int(((K**2 - K) / 2) + K)]) ## why are we adding K back here?
+    corrs = np.zeros([T, int(((K**2 - K) / 2) + K)])
     for t in np.arange(T):
         corrs[t, :] = mat2vec(np.squeeze(z2r(np.divide(sum[:, :, t], 2*S))))
 

@@ -141,7 +141,7 @@ def block_compare(obs_corrs=None):
         obs_parsed.append(np.tile(obs_corrs[i, :], [T, 1]))
     return obs_parsed
 
-width = 100
+width = 10
 delta = {'name': '$\delta$', 'weights': tc.eye_weights, 'params': tc.eye_params}
 gaussian = {'name': 'Gaussian', 'weights': tc.gaussian_weights, 'params': {'var': width}}
 laplace = {'name': 'Laplace', 'weights': tc.laplace_weights, 'params': {'scale': width}}

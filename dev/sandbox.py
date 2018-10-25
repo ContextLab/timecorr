@@ -148,14 +148,14 @@ laplace = {'name': 'Laplace', 'weights': tc.laplace_weights, 'params': {'scale':
 mexican_hat = {'name': 'Mexican hat', 'weights': tc.mexican_hat_weights, 'params': {'sigma': width}}
 kernels = [delta, gaussian, laplace, mexican_hat]
 
-K = 25
-T = 1000
-N = 1000
-
-synth_data, synth_corrs = ramping_dataset(K, T)
-recovered_corrs = []
-for k in kernels:
-    recovered_corrs.append(tc.timecorr(synth_data, weights_function=k['weights'], weights_params=k['params']))
+# K = 25
+# T = 1000
+# N = 1000
+#
+# synth_data, synth_corrs = ramping_dataset(K, T)
+# recovered_corrs = []
+# for k in kernels:
+#     recovered_corrs.append(tc.timecorr(synth_data, weights_function=k['weights'], weights_params=k['params']))
 
 
 
@@ -170,11 +170,11 @@ for c in pieman_conds:
     conds.extend([c]*len(next_data))
 del pieman_data
 
-isfc_across = tc.timecorr(x, mode='across', cfun=isfc)
-isfc_within = tc.timecorr(x, mode='within', cfun=isfc)
+isfc_across = tc.timecorr(x, relative='across', cfun=isfc)
+isfc_within = tc.timecorr(x, relative='within', cfun=isfc)
 
-wisfc_across = tc.timecorr(x, mode='across', cfun=wisfc)
-wisfc_within = tc.timecorr(x, mode='within', cfun=wisfc)
+wisfc_across = tc.timecorr(x, relative='across', cfun=wisfc)
+wisfc_within = tc.timecorr(x, relative='within', cfun=wisfc)
 
 print('Sanity check passed: ' + str(np.array(map(lambda x, y: np.isclose(x, y).all(), isfc_within, wisfc_within)).all()))
 
@@ -188,8 +188,8 @@ sns.heatmap(wisfc_across)
 levelup_isfc = tc.levelup(x)
 levelup_wisfc = tc.levelup(x, cfun=wisfc)
 
-level2_isfc_across = tc.timecorr(levelup_isfc, mode='across', cfun=isfc)
-level2_wisfc_across = tc.timecorr(levelup_wisfc, mode='across', cfun=wisfc)
+level2_isfc_across = tc.timecorr(levelup_isfc, relative='across', cfun=isfc)
+level2_wisfc_across = tc.timecorr(levelup_wisfc, relative='across', cfun=wisfc)
 
 hyp.plot([isfc_across, wisfc_across, level2_isfc_across, level2_wisfc_across], legend=['isfc', 'wisfc', 'l2 isfc', 'l2 wisfc'])
 

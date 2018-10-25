@@ -154,27 +154,28 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         else:
             subject_weights = np.tile(subject_weights, [S, 1])
 
-        sum = np.zeros([K, K, T])
+        #sum = np.zeros([K, K, T])
+        corrs = []
         for s in subjects:
             a = data[s]
             other_inds = list([subjects[subjects != s]][0])
             b = weighted_mean(np.stack([data[x] for x in other_inds], axis=2),
                               axis=2, weights=subject_weights[s, other_inds])
 
-            next = wcorr(a, b, timepoint_weights)
-            for t in np.arange(T):
-                x = next[:, :, t]
-                x[np.isinf(x) | np.isnan(x)] = 0
-                z = r2z(x)
-                sum[:, :, t] = np.nansum(np.stack([sum[:, :, t], z + z.T],
-                                                  axis=2), axis=2)
-
-    corrs = np.zeros([T, int(((K**2 - K) / 2) + K)])
-    for t in np.arange(T):
-        corrs[t, :] = mat2vec(np.squeeze(z2r(np.divide(sum[:, :, t], 2*S))))
-
-    corrs[np.isinf(corrs)] = np.sign(corrs[np.isinf(corrs)])
-    corrs[np.isnan(corrs)] = 0
+            corrs.append(mat2vec(wcorr(a, b, timepoint_weights)))
+    #         for t in np.arange(T):
+    #             x = next[:, :, t]
+    #             x[np.isinf(x) | np.isnan(x)] = 0
+    #             z = r2z(x)
+    #             sum[:, :, t] = np.nansum(np.stack([sum[:, :, t], z + z.T],
+    #                                               axis=2), axis=2)
+    #
+    # corrs = np.zeros([T, int(((K**2 - K) / 2) + K)])
+    # for t in np.arange(T):
+    #     corrs[t, :] = mat2vec(np.squeeze(z2r(np.divide(sum[:, :, t], 2*S))))
+    #
+    # corrs[np.isinf(corrs)] = np.sign(corrs[np.isinf(corrs)])
+    # corrs[np.isnan(corrs)] = 0
     return corrs
 
 

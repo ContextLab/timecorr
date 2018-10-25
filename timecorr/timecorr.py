@@ -1,12 +1,12 @@
 # coding: utf-8
 
-from .helpers import isfc, laplace_weights, format_data
+from .helpers import isfc, laplace_weights, format_data, r2z, z2r
 import hypertools as hyp
 
 
 
 def timecorr(data, weights_function=laplace_weights,
-             weights_params=None, mode="within", cfun=isfc):
+             weights_params=None, relative="within", combine=False, cfun=isfc):
     """
     Computes dynamics correlations in single-subject or multi-subject data.
 
@@ -33,11 +33,11 @@ def timecorr(data, weights_function=laplace_weights,
         Options: gaussian_params, laplace_params, t_params, eye_params,
         mexican_hat_params.
 
-    mode: 'within' (default) or 'across'
+    relative: 'within' (default) or 'across'
         When mode is 'within' (default), the cfun operation (defined below) is
         applied independently to each data array.  The result is a list (of the
         same length as data) containing the outputs of the cfun operation for
-        each array. #TODO: VERIFY THIS
+        each array.
 
         When mode is 'across', the cfun operation is applied to the full data
         list simultaneously.  This is useful for across-subject analyses or
@@ -47,6 +47,12 @@ def timecorr(data, weights_function=laplace_weights,
         If data is a numpy array (rather than a list), mode is ignored (both
         'within' and 'across' mode return the output of cfun applied to the
         single data array.
+
+    combine: Boolean (default: False)
+        When combine = False, timecorr returns a matrix or list in the same
+        format as the input.  When combine = True, timecorr returns a single
+        numpy array that reflects the mean taken across input arrays.  When only
+        a single input array is passed, this argument is ignored.
 
     cfunc: function to apply to the data array(s)
         This function should be of the form
@@ -72,33 +78,32 @@ def timecorr(data, weights_function=laplace_weights,
     Outputs
     ----------
     corrmats: moment-by-moment correlations
-
-        If mode is 'within', corrmats is a list of the same length as data,
-        containing the outputs of cfun for each data array.
-
-        If mode is 'across', corrmats is an array with number-of-timepoints rows
-        and an arbitrary number of columns (determined by cfun).
     """
-
-    data = format_data(data)
 
     if type(data) == list:
         T = data[0].shape[0]
+        return_list = True
     else:
         T = data.shape[0]
+        data = [data]
+        return_list = False
+
+    data = format_data(data)
 
     weights = weights_function(T, weights_params)
+    corrs = cfun(data, weights)
 
-    if (mode == 'across') or (type(data) != list) or (len(data) == 1):
-        return cfun(data, weights)
-    elif mode == 'within':
-        return list(map(lambda x: cfun(x, weights), data))
+    if combine:
+        corrs = z2r(np.mean(r2z(np.concatenate(corrs, axis=2)), axis=2))
+        return_list = False
+
+    if return_list and (not (type(corrs) == list)):
+        return [corrs]
     else:
-        raise Exception(f"'{mode}' is not a valid mode")
+        return corrs
 
 
-
-def levelup(data, mode='within', weight_function=laplace_weights,
+def levelup(data, relative='within', combine=False, weight_function=laplace_weights,
             weights_params=None, cfun=isfc, reduce='IncrementalPCA'):
     """
     Convenience function that performs two steps:
@@ -112,20 +117,11 @@ def levelup(data, mode='within', weight_function=laplace_weights,
         Each numpy array (or dataframe) should have size timepoints by features.
         If a list of arrays are passed, there should be one array per subject.
 
-    mode: 'within' (default) or 'across'
-        When mode is 'within' (default), the cfun operation (defined below) is
-        applied independently to each data array.  The result is a list (of the
-        same length as data) containing the outputs of the cfun operation for
-        each array.
+    relative: 'within' (default) or 'across'
+        See `timecorr`
 
-        When mode is 'across', the cfun operation is applied to the full data
-        list simultaneously.  This is useful for across-subject analyses or
-        other scenarios where the relevant function needs to account for all
-        data simultaneously.
-
-        If data is a numpy array (rather than a list), mode is ignored (both
-        'within' and 'across' mode return the output of cfun applied to the
-        single data array.
+    combine: Boolean (default: False)
+        See `timecorr`
 
     weights_function: see description from timecorr
 
@@ -182,5 +178,6 @@ def levelup(data, mode='within', weight_function=laplace_weights,
     else:
         V = data.shape[1]
 
-    corrs = timecorr(data, weights_function=weight_function, weights_params=weights_params, mode=mode, cfun=cfun)
+    corrs = timecorr(data, weights_function=weight_function, weights_params=weights_params, relative=relative, combine=combine, cfun=cfun)
+    #TODO: add support for graph theory reduce operations
     return hyp.reduce(corrs, reduce=reduce, ndims=V)

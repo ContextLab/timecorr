@@ -57,6 +57,6 @@ def test_levelup ():
     else:
         V = data.shape[1]
 
-corrs = timecorr(numpy_array, weights_function= gaussian_weights, weights_params=gaussian_params, relative="within", cfun=isfc)
+corrs = timecorr(numpy_array, weights_function=gaussian_weights, weights_params=gaussian_params, combine=False, cfun=isfc)
 #assert()
 #assert len(corrs.get_time_data()[0]) == len(numpy_array)

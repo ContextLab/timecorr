@@ -177,7 +177,7 @@ def apply_by_row(corrs, f):
         return list(map(lambda x: apply_by_row(x, f), corrs))
 
     corrs = vec2mat(corrs) #V by V by T
-    return np.stack(list(map(f, np.split(corrs, np.arange(corrs.shape[2]), axis=2))), axis=0)
+    return np.stack(list(map(lambda x: f(np.squeeze(x)), np.split(corrs, corrs.shape[2], axis=2))), axis=0)
 
 
 

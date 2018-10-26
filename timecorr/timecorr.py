@@ -161,7 +161,7 @@ def levelup(data, combine=False, weight_function=laplace_weights,
     A single data array or list of arrays, of the same size(s) as the original
     dataset(s)
     """
-    get_V = lambda x: int(np.divide(-np.sqrt(8*x + 1) - 1, 2))
+    get_V = lambda x: int(np.divide(np.sqrt(8*x + 1) - 1, 2))
 
     corrs = timecorr(data, weights_function=weight_function, weights_params=weights_params, combine=combine, cfun=cfun)
     if type(corrs) is list:

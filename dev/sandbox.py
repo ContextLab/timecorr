@@ -171,6 +171,14 @@ for c in pieman_conds:
 del pieman_data
 
 x = [x[i] for i in np.where(np.array(conds) == 'intact')[0]]
+
+isfc_eig = tc.levelup(x, cfun=isfc, combine=True, reduce='eigenvector_centrality')
+isfc_pagerank = tc.levelup(x, cfun=isfc, combine=True, reduce='pagerank_centrality')
+isfc_strength = tc.levelup(x, cfun=isfc, combine=True, reduce='strength')
+isfc_PCA = tc.levelup(x, cfun=isfc, combine=True, reduce='IncrementalPCA')
+
+hyp.plot([isfc_eig, isfc_pagerank, isfc_strength, isfc_PCA], legend=['eig', 'pagerank', 'strength', 'PCA'], align='hyper')
+
 isfc_across = tc.timecorr(x, cfun=isfc, combine=True)
 isfc_within = tc.timecorr(x, cfun=isfc, combine=False)
 

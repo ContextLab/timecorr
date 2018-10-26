@@ -1,12 +1,13 @@
 # coding: utf-8
 
-from .helpers import isfc, laplace_weights, format_data, r2z, z2r
+from .helpers import isfc, autofc, laplace_weights, format_data, r2z, z2r
 import hypertools as hyp
+import numpy as np
 
 
 
 def timecorr(data, weights_function=laplace_weights,
-             weights_params=None, relative="within", combine=False, cfun=isfc):
+             weights_params=None, combine=False, cfun=isfc):
     """
     Computes dynamics correlations in single-subject or multi-subject data.
 
@@ -32,21 +33,6 @@ def timecorr(data, weights_function=laplace_weights,
         Default: None (use default parameters for the given weights function).
         Options: gaussian_params, laplace_params, t_params, eye_params,
         mexican_hat_params.
-
-    relative: 'within' (default) or 'across'
-        When mode is 'within' (default), the cfun operation (defined below) is
-        applied independently to each data array.  The result is a list (of the
-        same length as data) containing the outputs of the cfun operation for
-        each array.
-
-        When mode is 'across', the cfun operation is applied to the full data
-        list simultaneously.  This is useful for across-subject analyses or
-        other scenarios where the relevant function needs to account for all
-        data simultaneously.
-
-        If data is a numpy array (rather than a list), mode is ignored (both
-        'within' and 'across' mode return the output of cfun applied to the
-        single data array.
 
     combine: Boolean (default: False)
         When combine = False, timecorr returns a matrix or list in the same
@@ -94,7 +80,7 @@ def timecorr(data, weights_function=laplace_weights,
     corrs = cfun(data, weights)
 
     if combine:
-        corrs = z2r(np.mean(r2z(np.concatenate(corrs, axis=2)), axis=2))
+        corrs = z2r(np.mean(r2z(np.stack(corrs, axis=2)), axis=2))
         return_list = False
 
     if return_list and (not (type(corrs) == list)):
@@ -103,7 +89,7 @@ def timecorr(data, weights_function=laplace_weights,
         return corrs
 
 
-def levelup(data, relative='within', combine=False, weight_function=laplace_weights,
+def levelup(data, combine=False, weight_function=laplace_weights,
             weights_params=None, cfun=isfc, reduce='IncrementalPCA'):
     """
     Convenience function that performs two steps:
@@ -116,9 +102,6 @@ def levelup(data, relative='within', combine=False, weight_function=laplace_weig
     data: numpy array, pandas dataframe, or a list of numpy arrays/dataframes
         Each numpy array (or dataframe) should have size timepoints by features.
         If a list of arrays are passed, there should be one array per subject.
-
-    relative: 'within' (default) or 'across'
-        See `timecorr`
 
     combine: Boolean (default: False)
         See `timecorr`
@@ -170,14 +153,13 @@ def levelup(data, relative='within', combine=False, weight_function=laplace_weig
     A single data array or list of arrays, of the same size(s) as the original
     dataset(s)
     """
+    get_V = lambda x: int(np.divide(-np.sqrt(8*x + 1) - 1, 2))
 
-    data = format_data(data)
-
-    if type(data) == list:
-        V = data[0].shape[1]
+    corrs = timecorr(data, weights_function=weight_function, weights_params=weights_params, combine=combine, cfun=cfun)
+    if type(corrs) is list:
+        V = get_V(corrs[0].shape[1])
     else:
-        V = data.shape[1]
+        V = get_V(corrs.shape[1])
 
-    corrs = timecorr(data, weights_function=weight_function, weights_params=weights_params, relative=relative, combine=combine, cfun=cfun)
     #TODO: add support for graph theory reduce operations
     return hyp.reduce(corrs, reduce=reduce, ndims=V)

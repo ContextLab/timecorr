@@ -121,71 +121,45 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     '''
     Compute moment-by-moment correlations between sets of observations
 
+    :data: a list of number-of-timepoints by V matrices
     :timepoint weights: a number-of-timepoints by number-of-timepoints weights matrix
         specifying the per-timepoint weights to be considered (for each timepoint)
-    :subject weights: ignore all weights less than or equal (in absolute value) to tol
-    :return: a a.shape[1] by b.shape[1] by weights.shape[0] array of per-timepoint
-        correlation matrices.
+    :subject weights: number-of-subjects by number-of-subjects weights matrix
+    :return: a list of number-of-timepoints by (V^2 - V)/2 + V correlation matrices
     '''
     if type(data) != list:
-        sum = 2 * wcorr(data, data, timepoint_weights)
-        sum[np.isinf(sum) | np.isnan(sum)] = 0
-        S = 1
-        K = data.shape[1]
-        T = data.shape[0]
-    elif len(data) == 1:
-        sum = 2 * wcorr(data[0], data[0], timepoint_weights)
-        sum[np.isinf(sum) | np.isnan(sum)] = 0
-        S = 1
-        K = data[0].shape[1]
-        T = data[0].shape[0]
-    else:
-        subjects = np.arange(len(data))
-        S = len(subjects)
-        K = data[0].shape[1]
-        T = data[0].shape[0]
+        return wisfc([data], timepoint_weights, subject_weights=subject_weights)[0]
 
-        if subject_weights is None:
-            connectomes = np.zeros([S, int((K**2 - K) / 2)])
-            for s in subjects:
-                connectomes[s, :] = 1 - sd.pdist(data[s].T, metric='correlation')
-            subject_weights = 1 - sd.squareform(sd.pdist(connectomes.T,
-                                                metric='correlation'))
-        else:
-            subject_weights = np.tile(subject_weights, [S, 1])
-
-        #sum = np.zeros([K, K, T])
-        corrs = []
+    if subject_weights is None: #similarity-based weights
+        K = data[0].shape[1]
+        connectomes = np.zeros([len(data), int((K ** 2 - K) / 2)])
         for s in subjects:
-            a = data[s]
-            other_inds = list([subjects[subjects != s]][0])
-            b = weighted_mean(np.stack([data[x] for x in other_inds], axis=2),
-                              axis=2, weights=subject_weights[s, other_inds])
+            connectomes[s, :] = 1 - sd.pdist(data[s].T, metric='correlation')
+        subject_weights = 1 - sd.squareform(sd.pdist(connectomes.T, metric='correlation'))
+        np.fill_diagonal(subject_weights, 0)
+    elif np.isscalar(subject_weights):
+        subject_weights = subject_weights * np.ones([len(data), len(data)])
+        np.fill_diagonal(subject_weights, 0)
 
-            corrs.append(mat2vec(wcorr(a, b, timepoint_weights)))
-    #         for t in np.arange(T):
-    #             x = next[:, :, t]
-    #             x[np.isinf(x) | np.isnan(x)] = 0
-    #             z = r2z(x)
-    #             sum[:, :, t] = np.nansum(np.stack([sum[:, :, t], z + z.T],
-    #                                               axis=2), axis=2)
-    #
-    # corrs = np.zeros([T, int(((K**2 - K) / 2) + K)])
-    # for t in np.arange(T):
-    #     corrs[t, :] = mat2vec(np.squeeze(z2r(np.divide(sum[:, :, t], 2*S))))
-    #
-    # corrs[np.isinf(corrs)] = np.sign(corrs[np.isinf(corrs)])
-    # corrs[np.isnan(corrs)] = 0
+    corrs = []
+    for s, a in enumerate(data):
+        b = weighted_mean(np.stack(data, axis=2), axis=2, weights=subject_weights[s, :])
+        corrs.append(mat2vec(wcorr(a, b, timepoint_weights)))
+
     return corrs
 
 
 def isfc(data, timepoint_weights):
+    if type(data) != list:
+        return isfc([data], timepoint_weights)[0]
 
-    if type(data) == list:
-        subject_weights = np.ones([1, len(data)])
-    else:
-        subject_weights = None
-    return wisfc(data, timepoint_weights, subject_weights=subject_weights)
+    return wisfc(data, timepoint_weights, subject_weights=1 - np.eye(len(data)))
+
+def autofc(data, timepoint_weights):
+    if type(data) != list:
+        return autofc([data], timepoint_weights)[0]
+
+    return wisfc(data, timepoint_weights, subject_weights=np.eye(len(data)))
 
 
 # TODO: UPDATE THIS FUNCTION FOR USE WITH TIMECORR

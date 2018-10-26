@@ -170,14 +170,12 @@ for c in pieman_conds:
     conds.extend([c]*len(next_data))
 del pieman_data
 
-isfc_across = tc.timecorr(x, relative='across', cfun=isfc)
-isfc_within = tc.timecorr(x, relative='within', cfun=isfc)
+x = [x[i] for i in np.where(np.array(conds) == 'intact')[0]]
+isfc_across = tc.timecorr(x, cfun=isfc, combine=True)
+isfc_within = tc.timecorr(x, cfun=isfc, combine=False)
 
-wisfc_across = tc.timecorr(x, relative='across', cfun=wisfc)
-wisfc_within = tc.timecorr(x, relative='within', cfun=wisfc)
-
-print('Sanity check passed: ' + str(np.array(map(lambda x, y: np.isclose(x, y).all(), isfc_within, wisfc_within)).all()))
-
+wisfc_across = tc.timecorr(x, cfun=wisfc, combine=True)
+wisfc_within = tc.timecorr(x, cfun=wisfc, combine=False)
 
 hyp.plot([isfc_across, wisfc_across])
 hyp.plot(x)
@@ -188,8 +186,8 @@ sns.heatmap(wisfc_across)
 levelup_isfc = tc.levelup(x)
 levelup_wisfc = tc.levelup(x, cfun=wisfc)
 
-level2_isfc_across = tc.timecorr(levelup_isfc, relative='across', cfun=isfc)
-level2_wisfc_across = tc.timecorr(levelup_wisfc, relative='across', cfun=wisfc)
+level2_isfc_across = tc.timecorr(levelup_isfc, cfun=isfc)
+level2_wisfc_across = tc.timecorr(levelup_wisfc, cfun=wisfc)
 
 hyp.plot([isfc_across, wisfc_across, level2_isfc_across, level2_wisfc_across], legend=['isfc', 'wisfc', 'l2 isfc', 'l2 wisfc'])
 

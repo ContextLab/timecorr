@@ -168,6 +168,6 @@ def levelup(data, combine=False, weight_function=laplace_weights,
         V = get_V(corrs[0].shape[1])
     else:
         V = get_V(corrs.shape[1])
-
+        
     #TODO: add support for graph theory reduce operations
     return hyp.reduce(corrs, reduce=reduce, ndims=V)

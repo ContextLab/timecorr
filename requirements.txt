@@ -5,7 +5,6 @@ pandas>=0.22.0
 hypertools>=0.4.2
 scipy>=0.13.3
 matplotlib>=2.1.0
-numba
 seaborn>=0.8.1
 scikit-learn>=0.19.1
-pykalman
+git+https://github.com/FIU-Neuro/brainconn.git

@@ -3,7 +3,11 @@
 from .helpers import isfc, autofc, laplace_weights, format_data, r2z, z2r
 import hypertools as hyp
 import numpy as np
+import brainconn as bc
 
+graph_measures = {'eigenvector_centrality': bc.centrality.eigenvector_centrality_und,
+                  'pagerank_centrality': lambda x: bc.centrality.pagerank_centrality(x, d=0.85),
+                  'strength': bc.degree.strengths_und}
 
 
 def timecorr(data, weights_function=laplace_weights,
@@ -147,6 +151,10 @@ def levelup(data, combine=False, weight_function=laplace_weights,
 
         See scikit-learn specific model docs for details on parameters supported
         for each model.
+
+        Another option is to use graph theoretic measures computed for each node.
+        The following measures are supported (via the brainconn toolbox):
+        eigenvector_centrality, pagerank_centrality, and strength.
 
     Outputs
     ----------

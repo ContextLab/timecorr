@@ -133,9 +133,9 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     if subject_weights is None: #similarity-based weights
         K = data[0].shape[1]
         connectomes = np.zeros([len(data), int((K ** 2 - K) / 2)])
-        for s in subjects:
+        for s in np.arange(len(data)):
             connectomes[s, :] = 1 - sd.pdist(data[s].T, metric='correlation')
-        subject_weights = 1 - sd.squareform(sd.pdist(connectomes.T, metric='correlation'))
+        subject_weights = 1 - sd.squareform(sd.pdist(connectomes, metric='correlation'))
         np.fill_diagonal(subject_weights, 0)
     elif np.isscalar(subject_weights):
         subject_weights = subject_weights * np.ones([len(data), len(data)])

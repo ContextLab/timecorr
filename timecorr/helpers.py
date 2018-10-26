@@ -161,6 +161,25 @@ def autofc(data, timepoint_weights):
 
     return wisfc(data, timepoint_weights, subject_weights=np.eye(len(data)))
 
+def apply_by_row(corrs, f):
+    '''
+    apply the function f to the correlation matrix specified in each row, and return a
+    matrix of the concatenated results
+
+    :param corrs: a matrix of vectorized correlation matrices (output of mat2vec), or a list
+                  of such matrices
+    :param f: a function to apply to each vectorized correlation matrix
+    :return: a matrix of function outputs (for each row of the given matrices), or a list of
+            such matrices
+    '''
+
+    if type(corrs) is list:
+        return list(map(lambda x: apply_by_row(x, f), corrs))
+
+    corrs = vec2mat(corrs) #V by V by T
+    return np.stack(list(map(f, np.split(corrs, np.arange(corrs.shape[2]), axis=2))), axis=0)
+
+
 
 # TODO: UPDATE THIS FUNCTION FOR USE WITH TIMECORR
 def smooth(w, windowsize):

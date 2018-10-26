@@ -1,6 +1,6 @@
 # coding: utf-8
 
-from .helpers import isfc, autofc, laplace_weights, format_data, r2z, z2r
+from .helpers import isfc, laplace_weights, format_data, r2z, z2r, apply_by_row
 import hypertools as hyp
 import numpy as np
 import brainconn as bc
@@ -168,6 +168,8 @@ def levelup(data, combine=False, weight_function=laplace_weights,
         V = get_V(corrs[0].shape[1])
     else:
         V = get_V(corrs.shape[1])
-        
-    #TODO: add support for graph theory reduce operations
-    return hyp.reduce(corrs, reduce=reduce, ndims=V)
+
+    if reduce in graph_measures.keys():
+        return apply_by_row(corrs, graph_measures[reduce])
+    else: #use hypertools
+        return hyp.reduce(corrs, reduce=reduce, ndims=V)

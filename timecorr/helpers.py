@@ -66,10 +66,6 @@ def mexican_hat_weights(T, params=mexican_hat_params):
     return np.multiply(a, np.multiply(b, c))
 
 def format_data(data):
-    if isinstance(data, list): #extract data from all TimeCrystal objects
-        data = list(map(lambda x: x.get_data() if isinstance(x, TimeCrystal) else x, data))
-    elif isinstance(data, TimeCrystal):
-        data = data.get_data()
     return hyp.tools.format_data(data)
 
 def _is_empty(dict):

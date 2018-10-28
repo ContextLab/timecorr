@@ -172,18 +172,17 @@ del pieman_data
 
 x = [x[i] for i in np.where(np.array(conds) == 'intact')[0]]
 
-isfc_eig = tc.levelup(x, cfun=isfc, combine=True, reduce='eigenvector_centrality')
-isfc_pagerank = tc.levelup(x, cfun=isfc, combine=True, reduce='pagerank_centrality')
-isfc_strength = tc.levelup(x, cfun=isfc, combine=True, reduce='strength')
-isfc_PCA = tc.levelup(x, cfun=isfc, combine=True, reduce='IncrementalPCA')
+isfc_within = tc.timecorr(x, cfun=isfc)
+isfc_across = tc.helpers.corrmean_combine(isfc_within)
+isfc_eig = tc.helpers.reduce(isfc_across, rfun='eigenvector_centrality')
+isfc_pagerank = tc.helpers.reduce(isfc_across, rfun='pagerank_centrality')
+isfc_strength = tc.helpers.reduce(isfc_across, rfun='strength')
+isfc_PCA = tc.helpers.reduce(isfc_across, rfun='IncrementalPCA')
 
 hyp.plot([isfc_eig, isfc_pagerank, isfc_strength, isfc_PCA], legend=['eig', 'pagerank', 'strength', 'PCA'], align='hyper')
 
-isfc_across = tc.timecorr(x, cfun=isfc, combine=True)
-isfc_within = tc.timecorr(x, cfun=isfc, combine=False)
-
-wisfc_across = tc.timecorr(x, cfun=wisfc, combine=True)
-wisfc_within = tc.timecorr(x, cfun=wisfc, combine=False)
+wisfc_within = tc.timecorr(x, cfun=wisfc)
+wisfc_across = tc.helpers.corrmean_combine(isfc_within)
 
 hyp.plot([isfc_across, wisfc_across])
 hyp.plot(x)
@@ -191,13 +190,4 @@ hyp.plot(x)
 sns.heatmap(isfc_across)
 sns.heatmap(wisfc_across)
 
-levelup_isfc = tc.levelup(x)
-levelup_wisfc = tc.levelup(x, cfun=wisfc)
-
-level2_isfc_across = tc.timecorr(levelup_isfc, cfun=isfc)
-level2_wisfc_across = tc.timecorr(levelup_wisfc, cfun=wisfc)
-
-hyp.plot([isfc_across, wisfc_across, level2_isfc_across, level2_wisfc_across], legend=['isfc', 'wisfc', 'l2 isfc', 'l2 wisfc'])
-
-sns.heatmap(level2_isfc_across)
 

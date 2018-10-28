@@ -4,9 +4,13 @@ import numpy as np
 import scipy.spatial.distance as sd
 from scipy.special import gamma
 from scipy.linalg import toeplitz
-from .timecrystal import TimeCrystal
-import pykalman
+from scipy.stats import ttest_1samp as ttest
 import hypertools as hyp
+import brainconn as bc
+
+graph_measures = {'eigenvector_centrality': bc.centrality.eigenvector_centrality_und,
+                  'pagerank_centrality': lambda x: bc.centrality.pagerank_centrality(x, d=0.85),
+                  'strength': bc.degree.strengths_und}
 
 gaussian_params = {'var': 100}
 laplace_params = {'scale': 100}
@@ -62,10 +66,6 @@ def mexican_hat_weights(T, params=mexican_hat_params):
     return np.multiply(a, np.multiply(b, c))
 
 def format_data(data):
-    if isinstance(data, list): #extract data from all TimeCrystal objects
-        data = list(map(lambda x: x.get_data() if isinstance(x, TimeCrystal) else x, data))
-    elif isinstance(data, TimeCrystal):
-        data = data.get_data()
     return hyp.tools.format_data(data)
 
 def _is_empty(dict):
@@ -121,70 +121,146 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     '''
     Compute moment-by-moment correlations between sets of observations
 
+    :data: a list of number-of-timepoints by V matrices
     :timepoint weights: a number-of-timepoints by number-of-timepoints weights matrix
         specifying the per-timepoint weights to be considered (for each timepoint)
-    :subject weights: ignore all weights less than or equal (in absolute value) to tol
-    :return: a a.shape[1] by b.shape[1] by weights.shape[0] array of per-timepoint
-        correlation matrices.
+    :subject weights: number-of-subjects by number-of-subjects weights matrix
+    :return: a list of number-of-timepoints by (V^2 - V)/2 + V correlation matrices
     '''
     if type(data) != list:
-        sum = 2 * wcorr(data, data, timepoint_weights)
-        sum[np.isinf(sum) | np.isnan(sum)] = 0
-        S = 1
-        K = data.shape[1]
-        T = data.shape[0]
-    elif len(data) == 1:
-        sum = 2 * wcorr(data[0], data[0], timepoint_weights)
-        sum[np.isinf(sum) | np.isnan(sum)] = 0
-        S = 1
+        return wisfc([data], timepoint_weights, subject_weights=subject_weights)[0]
+
+    if subject_weights is None: #similarity-based weights
         K = data[0].shape[1]
-        T = data[0].shape[0]
-    else:
-        subjects = np.arange(len(data))
-        S = len(subjects)
-        K = data[0].shape[1]
-        T = data[0].shape[0]
+        connectomes = np.zeros([len(data), int((K ** 2 - K) / 2)])
+        for s in np.arange(len(data)):
+            connectomes[s, :] = 1 - sd.pdist(data[s].T, metric='correlation')
+        subject_weights = 1 - sd.squareform(sd.pdist(connectomes, metric='correlation'))
+        np.fill_diagonal(subject_weights, 0)
+    elif np.isscalar(subject_weights):
+        subject_weights = subject_weights * np.ones([len(data), len(data)])
+        np.fill_diagonal(subject_weights, 0)
 
-        if subject_weights is None:
-            connectomes = np.zeros([S, int((K**2 - K) / 2)])
-            for s in subjects:
-                connectomes[s, :] = 1 - sd.pdist(data[s].T, metric='correlation')
-            subject_weights = 1 - sd.squareform(sd.pdist(connectomes.T,
-                                                metric='correlation'))
-        else:
-            subject_weights = np.tile(subject_weights, [S, 1])
+    corrs = []
+    for s, a in enumerate(data):
+        b = weighted_mean(np.stack(data, axis=2), axis=2, weights=subject_weights[s, :])
+        corrs.append(mat2vec(wcorr(a, b, timepoint_weights)))
 
-        sum = np.zeros([K, K, T])
-        for s in subjects:
-            a = data[s]
-            other_inds = list([subjects[subjects != s]][0])
-            b = weighted_mean(np.stack([data[x] for x in other_inds], axis=2),
-                              axis=2, weights=subject_weights[s, other_inds])
-
-            next = wcorr(a, b, timepoint_weights)
-            for t in np.arange(T):
-                x = next[:, :, t]
-                x[np.isinf(x) | np.isnan(x)] = 0
-                z = r2z(x)
-                sum[:, :, t] = np.nansum(np.stack([sum[:, :, t], z + z.T],
-                                                  axis=2), axis=2)
-
-    corrs = np.zeros([T, int(((K**2 - K) / 2) + K)])
-    for t in np.arange(T):
-        corrs[t, :] = mat2vec(np.squeeze(z2r(np.divide(sum[:, :, t], 2*S))))
-
-    corrs[np.isinf(corrs)] = np.sign(corrs[np.isinf(corrs)])
-    corrs[np.isnan(corrs)] = 0
     return corrs
 
 
 def isfc(data, timepoint_weights):
+    if type(data) != list:
+        return isfc([data], timepoint_weights)[0]
 
-    if type(data) == list:
-        subject_weights = np.ones([1, len(data)])
+    return wisfc(data, timepoint_weights, subject_weights=1 - np.eye(len(data)))
+
+def autofc(data, timepoint_weights):
+    if type(data) != list:
+        return autofc([data], timepoint_weights)[0]
+
+    return wisfc(data, timepoint_weights, subject_weights=np.eye(len(data)))
+
+def apply_by_row(corrs, f):
+    '''
+    apply the function f to the correlation matrix specified in each row, and return a
+    matrix of the concatenated results
+
+    :param corrs: a matrix of vectorized correlation matrices (output of mat2vec), or a list
+                  of such matrices
+    :param f: a function to apply to each vectorized correlation matrix
+    :return: a matrix of function outputs (for each row of the given matrices), or a list of
+            such matrices
+    '''
+
+    if type(corrs) is list:
+        return list(map(lambda x: apply_by_row(x, f), corrs))
+
+    corrs = vec2mat(corrs) #V by V by T
+    return np.stack(list(map(lambda x: f(np.squeeze(x)), np.split(corrs, corrs.shape[2], axis=2))), axis=0)
+
+def corrmean_combine(corrs):
+    '''
+    Compute the mean element-wise correlation across each matrix in a list.
+
+    :param corrs: a matrix of vectorized correlation matrices (output of mat2vec), or a list
+                  of such matrices
+    :return: a mean vectorized correlation matrix
+    '''
+    if not (type(corrs) == list):
+        return corrs
     else:
-        subject_weights = None
-    return wisfc(data, timepoint_weights, subject_weights=subject_weights)
+        return z2r(np.mean(r2z(np.stack(corrs, axis=2)), axis=2))
+
+def tstat_combine(corrs):
+    '''
+    Compute element-wise t-tests (comparing distribution means to 0) across each
+    correlation matrix in a list.
+
+    :param corrs: a matrix of vectorized correlation matrices (output of mat2vec), or a list
+                  of such matrices
+
+    :return: a matrix of t-statistics of the same shape as a matrix of vectorized correlation
+             matrices
+    '''
+    if not (type(corrs) == list):
+        return corrs
+    else:
+        return ttest(r2z(np.stack(corrs, axis=2)), popmean=0, axis=2)[0]
+
+def null_combine(corrs):
+    '''
+    Placeholder function that returns the input
+
+    :param corrs: a matrix of vectorized correlation matrices (output of mat2vec), or a list
+                  of such matrices
+
+    :return: the input
+    '''
+    return corrs
+
+def reduce(corrs, rfun=None):
+    '''
+    :param corrs: a matrix of vectorized correlation matrices (output of mat2vec), or a list
+                  of such matrices
+
+    :param rfun: function to use for dimensionality reduction.  All hypertools and
+        scikit-learn functions are supported: PCA, IncrementalPCA, SparsePCA,
+        MiniBatchSparsePCA, KernelPCA, FastICA, FactorAnalysis, TruncatedSVD,
+        DictionaryLearning, MiniBatchDictionaryLearning, TSNE, Isomap,
+        SpectralEmbedding, LocallyLinearEmbedding, MDS, and UMAP.
+
+        Can be passed as a string, but for finer control of the model
+        parameters, pass as a dictionary, e.g.
+        reduce={‘model’ : ‘PCA’, ‘params’ : {‘whiten’ : True}}.
+
+        See scikit-learn specific model docs for details on parameters supported
+        for each model.
+
+        Another option is to use graph theoretic measures computed for each node.
+        The following measures are supported (via the brainconn toolbox):
+        eigenvector_centrality, pagerank_centrality, and strength.  (Each
+        of these must be specified as a string; dictionaries not supported.)
+
+        Default: None (no dimensionality reduction)
+
+    :return: dimensionality-reduced (or original) correlation matrices
+    '''
+
+    if rfun is None:
+        return corrs
+
+    get_V = lambda x: int(np.divide(np.sqrt(8 * x + 1) - 1, 2))
+
+    if type(corrs) is list:
+        V = get_V(corrs[0].shape[1])
+    else:
+        V = get_V(corrs.shape[1])
+
+    if rfun in graph_measures.keys():
+        return apply_by_row(corrs, graph_measures[rfun])
+    else:  # use hypertools
+        return hyp.reduce(corrs, reduce=rfun, ndims=V)
 
 
 # TODO: UPDATE THIS FUNCTION FOR USE WITH TIMECORR
@@ -275,35 +351,35 @@ def timepoint_decoder(data, windowsize=0, mu=0, nfolds=2, connectivity_fun=isfc)
     results['rank'] /= nfolds
     return results
 
-def predict(x, n=1):
-    '''
-    Use a Kalman filter (with automatically inferred parameters) to estimate
-    future states of a signal, n timepoints into the future.
-
-    x: timepoints by features signal (numpy array)
-    n: number of timepoints into the future (must be an integer)
-
-    Returns a new numpy array with x.shape[0] + n rows and x.shape[1] columns,
-    where the last n rows contain the predicted future states.  The other
-    entries contain "smoothed" estimates of the observed signals.
-    '''
-
-    if n == 0:
-        return kf.em(x).smooth(x)[0]
-
-    x_masked = np.ma.MaskedArray(np.vstack((x, np.tile(np.nan, (1, x.shape[1])))))
-    x_masked[-1, :] = np.ma.masked
-
-    kf = pykalman.KalmanFilter(initial_state_mean=np.mean(x, axis=0), n_dim_obs=x.shape[1], n_dim_state=x.shape[1])
-    x_predicted = kf.em(x_masked, em_vars='all').smooth(x_masked)
-
-    if n == 1:
-        return x_predicted[0] #x_predicted[1] contains timepoint-by-timepoint covariance estimates
-    elif n > 1:
-        next_x_predicted = predict(x_predicted[0], n-1)
-        diff = next_x_predicted.shape[0] - x_predicted[0].shape[0]
-        next_x_predicted[:-diff, :] = x_predicted[0]
-        return next_x_predicted
+# def predict(x, n=1):
+#     '''
+#     Use a Kalman filter (with automatically inferred parameters) to estimate
+#     future states of a signal, n timepoints into the future.
+#
+#     x: timepoints by features signal (numpy array)
+#     n: number of timepoints into the future (must be an integer)
+#
+#     Returns a new numpy array with x.shape[0] + n rows and x.shape[1] columns,
+#     where the last n rows contain the predicted future states.  The other
+#     entries contain "smoothed" estimates of the observed signals.
+#     '''
+#
+#     if n == 0:
+#         return kf.em(x).smooth(x)[0]
+#
+#     x_masked = np.ma.MaskedArray(np.vstack((x, np.tile(np.nan, (1, x.shape[1])))))
+#     x_masked[-1, :] = np.ma.masked
+#
+#     kf = pykalman.KalmanFilter(initial_state_mean=np.mean(x, axis=0), n_dim_obs=x.shape[1], n_dim_state=x.shape[1])
+#     x_predicted = kf.em(x_masked, em_vars='all').smooth(x_masked)
+#
+#     if n == 1:
+#         return x_predicted[0] #x_predicted[1] contains timepoint-by-timepoint covariance estimates
+#     elif n > 1:
+#         next_x_predicted = predict(x_predicted[0], n-1)
+#         diff = next_x_predicted.shape[0] - x_predicted[0].shape[0]
+#         next_x_predicted[:-diff, :] = x_predicted[0]
+#         return next_x_predicted
 
 
 def weighted_mean(x, axis=None, weights=None, tol=1e-5):

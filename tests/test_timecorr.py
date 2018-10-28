@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 import hypertools as hyp
 
-from timecorr.timecorr import timecorr, levelup
+from timecorr.timecorr import timecorr
 from timecorr.helpers import isfc, gaussian_weights, gaussian_params
 
 #TODO: need *real* tests-- e.g. generate a small dataset and verify that we actually get the correct answers
@@ -49,14 +49,6 @@ def test_timecorr():
 
 #unsure how to test 'across' mode
 
-
-def test_levelup ():
-    data = hyp.tools.format_data(numpy_array)
-    if type(data) == list:
-        V = data[0].shape[0]
-    else:
-        V = data.shape[1]
-
-corrs = timecorr(numpy_array, weights_function= gaussian_weights, weights_params=gaussian_params, mode="within", cfun=isfc)
+corrs = timecorr(numpy_array, weights_function=gaussian_weights, weights_params=gaussian_params, cfun=isfc)
 #assert()
 #assert len(corrs.get_time_data()[0]) == len(numpy_array)

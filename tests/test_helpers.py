@@ -1,11 +1,8 @@
-from past.utils import old_div
 import numpy as np
-import scipy.spatial.distance as sd
 from scipy.linalg import toeplitz
 
 #using method from supereeg
-from timecorr.helpers import gaussian_weights, gaussian_params, wcorr, wisfc, isfc, \
-    smooth, timepoint_decoder, predict, mat2vec, vec2mat
+from timecorr.helpers import gaussian_weights, gaussian_params, wcorr, wisfc, mat2vec, vec2mat
 
 T = 10
 D = 4
@@ -74,7 +71,7 @@ def test_wcorr():
 def test_wisfc():
     weights = gaussian_weights(T, params=gaussian_params)
     w_list = wisfc(data, weights)
-    assert isinstance(w_list, np.ndarray)
+    assert isinstance(w_list, list)
 
     w_array = wisfc(template_data, weights)
     assert isinstance(w_array, np.ndarray)

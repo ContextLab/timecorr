@@ -1,12 +1,10 @@
 # coding: utf-8
 
-from .helpers import isfc, laplace_weights, format_data
-import hypertools as hyp
-
-
+from .helpers import isfc, laplace_weights, format_data, null_combine, reduce
 
 def timecorr(data, weights_function=laplace_weights,
-             weights_params=None, mode="within", cfun=isfc):
+             weights_params=None, combine=null_combine,
+             cfun=isfc, rfun=None):
     """
     Computes dynamics correlations in single-subject or multi-subject data.
 
@@ -33,20 +31,15 @@ def timecorr(data, weights_function=laplace_weights,
         Options: gaussian_params, laplace_params, t_params, eye_params,
         mexican_hat_params.
 
-    mode: 'within' (default) or 'across'
-        When mode is 'within' (default), the cfun operation (defined below) is
-        applied independently to each data array.  The result is a list (of the
-        same length as data) containing the outputs of the cfun operation for
-        each array. #TODO: VERIFY THIS
+    combine: a function applied to either a single matrix of vectorized correlation
+        matrices, or a list of such matrices.  The function should return either
+        a numpy array or a list of numpy arrays.
 
-        When mode is 'across', the cfun operation is applied to the full data
-        list simultaneously.  This is useful for across-subject analyses or
-        other scenarios where the relevant function needs to account for all
-        data simultaneously.
+        Default: helpers.null_combine (a function that returns its input).  Other
+        useful functions:
 
-        If data is a numpy array (rather than a list), mode is ignored (both
-        'within' and 'across' mode return the output of cfun applied to the
-        single data array.
+        helpers.corrmean_combine: take the element-wise average correlations across matrices
+        helpers.tstat_combine: return element-wise t-statistics across matrices
 
     cfunc: function to apply to the data array(s)
         This function should be of the form
@@ -69,94 +62,7 @@ def timecorr(data, weights_function=laplace_weights,
         list), the default cfun returns the moment-by-moment correlations for
         that array.  (Reference: http://www.nature.com/articles/ncomms12141)
 
-    Outputs
-    ----------
-    corrmats: moment-by-moment correlations
-
-        If mode is 'within', corrmats is a list of the same length as data,
-        containing the outputs of cfun for each data array.
-
-        If mode is 'across', corrmats is an array with number-of-timepoints rows
-        and an arbitrary number of columns (determined by cfun).
-    """
-
-    data = format_data(data)
-
-    if type(data) == list:
-        T = data[0].shape[0]
-    else:
-        T = data.shape[0]
-
-    weights = weights_function(T, weights_params)
-
-    if (mode == 'across') or (type(data) != list) or (len(data) == 1):
-        return cfun(data, weights)
-    elif mode == 'within':
-        return list(map(lambda x: cfun(x, weights), data))
-    else:
-        raise Exception(f"'{mode}' is not a valid mode")
-
-
-
-def levelup(data, mode='within', weight_function=laplace_weights,
-            weights_params=None, cfun=isfc, reduce='IncrementalPCA'):
-    """
-    Convenience function that performs two steps:
-    1.) Uses timecorr to compute within-subject moment-by-moment correlations
-    2.) Uses dimensinality reduction to project the output onto the same number
-        of dimensions as the original data.
-
-    Inputs
-    ----------
-    data: numpy array, pandas dataframe, or a list of numpy arrays/dataframes
-        Each numpy array (or dataframe) should have size timepoints by features.
-        If a list of arrays are passed, there should be one array per subject.
-
-    mode: 'within' (default) or 'across'
-        When mode is 'within' (default), the cfun operation (defined below) is
-        applied independently to each data array.  The result is a list (of the
-        same length as data) containing the outputs of the cfun operation for
-        each array.
-
-        When mode is 'across', the cfun operation is applied to the full data
-        list simultaneously.  This is useful for across-subject analyses or
-        other scenarios where the relevant function needs to account for all
-        data simultaneously.
-
-        If data is a numpy array (rather than a list), mode is ignored (both
-        'within' and 'across' mode return the output of cfun applied to the
-        single data array.
-
-    weights_function: see description from timecorr
-
-        Default: laplace_weights
-
-    weights_params: see description from timecorr
-
-        Default: None
-
-    cfunc: function to apply to the data array(s)
-        This function should be of the form
-        func(data, weights)
-
-        The function should support data as a numpy array or list of numpy
-        arrays.  When a list of numpy arrays is passed, the function should
-        apply the "across subjects" version of the analysis.  When a single
-        numpy array is passed, the function should apply the "within subjects"
-        version of the analysis.
-
-        weights is a numpy array with per-timepoint weights
-
-        The function should return a single numpy array with 1 row and an
-        arbitrary number of columns (the number of columns may be determined by
-        the function).
-
-        Default: A continuous version of Inter-Subject Functional Connectivity
-        (Simony et al. 2017).  If only one data array is passed (rather than a
-        list), the default cfun returns the moment-by-moment correlations for
-        that array.
-
-    reduce: function to use for dimensionality reduction.  All hypertools and
+    rfun: function to use for dimensionality reduction.  All hypertools and
         scikit-learn functions are supported: PCA, IncrementalPCA, SparsePCA,
         MiniBatchSparsePCA, KernelPCA, FastICA, FactorAnalysis, TruncatedSVD,
         DictionaryLearning, MiniBatchDictionaryLearning, TSNE, Isomap,
@@ -169,18 +75,36 @@ def levelup(data, mode='within', weight_function=laplace_weights,
         See scikit-learn specific model docs for details on parameters supported
         for each model.
 
+        Another option is to use graph theoretic measures computed for each node.
+        The following measures are supported (via the brainconn toolbox):
+        eigenvector_centrality, pagerank_centrality, and strength.  (Each
+        of these must be specified as a string; dictionaries not supported.)
+
+        Default: None (no dimensionality reduction)
+
     Outputs
     ----------
-    A single data array or list of arrays, of the same size(s) as the original
-    dataset(s)
+    corrmats: moment-by-moment correlations
     """
+
+    if type(data) == list:
+        T = data[0].shape[0]
+        return_list = True
+    else:
+        T = data.shape[0]
+        data = [data]
+        return_list = False
 
     data = format_data(data)
 
-    if type(data) == list:
-        V = data[0].shape[1]
-    else:
-        V = data.shape[1]
+    weights = weights_function(T, weights_params)
+    corrs = reduce(combine(cfun(data, weights)), rfun=rfun)
 
-    corrs = timecorr(data, weights_function=weight_function, weights_params=weights_params, mode=mode, cfun=cfun)
-    return hyp.reduce(corrs, reduce=reduce, ndims=V)
+    if return_list and (not (type(corrs) == list)):
+        return [corrs]
+    elif (not return_list) and (type(corrs) == list) and (len(corrs) == 1):
+        return corrs[0]
+    else:
+        return corrs
+
+

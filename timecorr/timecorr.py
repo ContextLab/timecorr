@@ -1,6 +1,6 @@
 # coding: utf-8
 
-from .helpers import isfc, laplace_weights, format_data, null_combine, reduce
+from .helpers import isfc, laplace_weights, format_data, null_combine, reduction
 
 def timecorr(data, weights_function=laplace_weights,
              weights_params=None, combine=null_combine,
@@ -70,7 +70,7 @@ def timecorr(data, weights_function=laplace_weights,
 
         Can be passed as a string, but for finer control of the model
         parameters, pass as a dictionary, e.g.
-        reduce={‘model’ : ‘PCA’, ‘params’ : {‘whiten’ : True}}.
+        reduction={‘model’ : ‘PCA’, ‘params’ : {‘whiten’ : True}}.
 
         See scikit-learn specific model docs for details on parameters supported
         for each model.
@@ -98,7 +98,7 @@ def timecorr(data, weights_function=laplace_weights,
     data = format_data(data)
 
     weights = weights_function(T, weights_params)
-    corrs = reduce(combine(cfun(data, weights)), rfun=rfun)
+    corrs = reduction(combine(cfun(data, weights)), rfun=rfun)
 
     if return_list and (not (type(corrs) == list)):
         return [corrs]

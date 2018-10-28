@@ -219,7 +219,7 @@ def null_combine(corrs):
     '''
     return corrs
 
-def reduce(corrs, rfun=None):
+def reduction(corrs, rfun=None):
     '''
     :param corrs: a matrix of vectorized correlation matrices (output of mat2vec), or a list
                   of such matrices
@@ -232,7 +232,7 @@ def reduce(corrs, rfun=None):
 
         Can be passed as a string, but for finer control of the model
         parameters, pass as a dictionary, e.g.
-        reduce={‘model’ : ‘PCA’, ‘params’ : {‘whiten’ : True}}.
+        reduction={‘model’ : ‘PCA’, ‘params’ : {‘whiten’ : True}}.
 
         See scikit-learn specific model docs for details on parameters supported
         for each model.

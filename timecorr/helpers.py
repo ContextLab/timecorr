@@ -219,7 +219,7 @@ def null_combine(corrs):
     '''
     return corrs
 
-def reduction(corrs, rfun=None):
+def reduce(corrs, rfun=None):
     '''
     :param corrs: a matrix of vectorized correlation matrices (output of mat2vec), or a list
                   of such matrices

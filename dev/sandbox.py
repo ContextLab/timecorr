@@ -174,10 +174,10 @@ x = [x[i] for i in np.where(np.array(conds) == 'intact')[0]]
 
 isfc_within = tc.timecorr(x, cfun=isfc)
 isfc_across = tc.helpers.corrmean_combine(isfc_within)
-isfc_eig = tc.helpers.reduction(isfc_across, rfun='eigenvector_centrality')
-isfc_pagerank = tc.helpers.reduction(isfc_across, rfun='pagerank_centrality')
-isfc_strength = tc.helpers.reduction(isfc_across, rfun='strength')
-isfc_PCA = tc.helpers.reduction(isfc_across, rfun='IncrementalPCA')
+isfc_eig = tc.helpers.reduce(isfc_across, rfun='eigenvector_centrality')
+isfc_pagerank = tc.helpers.reduce(isfc_across, rfun='pagerank_centrality')
+isfc_strength = tc.helpers.reduce(isfc_across, rfun='strength')
+isfc_PCA = tc.helpers.reduce(isfc_across, rfun='IncrementalPCA')
 
 hyp.plot([isfc_eig, isfc_pagerank, isfc_strength, isfc_PCA], legend=['eig', 'pagerank', 'strength', 'PCA'], align='hyper')
 

@@ -295,7 +295,7 @@ def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=laplace_p
     return x
 
 
-# TODO: UPDATE THIS FUNCTION FOR USE WITH TIMECORR
+# TODO: need to debug this...
 # WISHLIST:
 #   - support passing in a list of connectivity (or activity) functions, a list of reduce functions,
 #     and a mixing proportions vector; compute stats for all non-zero mixing proportions and use those

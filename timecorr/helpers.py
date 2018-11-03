@@ -302,7 +302,7 @@ def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=laplace_p
 #     stats (weighted appropriately) to do the decoding
 def timepoint_decoder(data, nfolds=2, cfun=isfc, weights_fun=laplace_weights, weights_params=laplace_params, combine=corrmean_combine, rfun=None):
     """
-    :param data: a number-of-observations by number-of-features matrix
+    :param data: a list of number-of-observations by number-of-features matrices
     :param nfolds: number of cross-validation folds (train using out-of-fold data;
                    test using in-fold data)
     :param cfun: function for transforming the group data (default: isfc)
@@ -318,21 +318,30 @@ def timepoint_decoder(data, nfolds=2, cfun=isfc, weights_fun=laplace_weights, we
                 the decoded and actual window numbers, expressed as a percentage
                 of the total number of windows
     """
+    assert len(np.unique(
+        list(map(lambda x: x.shape[0], data)))) == 1, 'all data matrices must have the same number of timepoints'
+    assert len(np.unique(
+        list(map(lambda x: x.shape[1], data)))) == 1, 'all data matrices must have the same number of features'
+
+    T = data[0].shape[0]
+    timepoint_weights = weights_fun(T, params=weights_params)
+
     group_assignments = get_xval_assignments(len(data), nfolds)
 
     results_template = {'rank': 0, 'accuracy': 0, 'error': 0}
+    results = copy(results_template)
     for i in range(0, nfolds):
         next_results = copy(results_template)
 
-        in_fold = reduce(combine(cfun(data[group_assignments == i])), rfun=rfun)
-        out_fold = reduce(combine(cfun(data[group_assignments != i])), rfun=rfun)
+        in_fold = reduce(combine(cfun(data[group_assignments == i].tolist(), timepoint_weights)), rfun=rfun)
+        out_fold = reduce(combine(cfun(data[group_assignments != i].tolist(), timepoint_weights)), rfun=rfun)
 
         corrs = sd.cdist(in_fold, out_fold)
         for t in np.arange(corrs.shape[0]):
             decoded_inds = np.argmax(corrs[t, :])
             next_results['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / (corrs.shape[0] - 1)
             next_results['accuracy'] += np.mean(decoded_inds == np.array(t))
-            next_results['rank'] += np.mean(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t])))
+            next_results['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
 
         results['error'] += next_results['error'] / corrs.shape[0]
         results['accuracy'] += next_results['accuracy'] / corrs.shape[0]

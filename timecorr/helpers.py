@@ -44,7 +44,7 @@ def eye_weights(T, params=eye_params):
     return np.eye(T)
 
 def uniform_weights(T, params=uniform_params):
-    return np.ones(T, T)
+    return np.ones([T, T])
 
 def t_weights(T, params=t_params):
     if params is None:
@@ -276,7 +276,6 @@ def reduce(corrs, rfun=None):
         return hyp.reduce(corrs, reduce=rfun, ndims=V)
 
 
-# TODO: debug this
 def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=laplace_params):
     assert type(windowsize) == int, 'smoothing kernel must have integer width'
     k = kernel_fun(windowsize, params=kernel_params)

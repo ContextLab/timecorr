@@ -17,6 +17,7 @@ laplace_params = {'scale': 100}
 eye_params = {}
 t_params = {'df': 100}
 mexican_hat_params = {'sigma': 10}
+uniform_params = {}
 
 
 def gaussian_weights(T, params=gaussian_params):
@@ -41,6 +42,9 @@ def eye_weights(T, params=eye_params):
     #    params = eye_params
 
     return np.eye(T)
+
+def uniform_weights(T, params=uniform_params):
+    return np.ones(T, T)
 
 def t_weights(T, params=t_params):
     if params is None:
@@ -192,7 +196,7 @@ def corrmean_combine(corrs):
     else:
         return z2r(np.mean(r2z(np.stack(corrs, axis=2)), axis=2))
 
-def tstat_combine(corrs):
+def tstat_combine(corrs, return_pvals=False):
     '''
     Compute element-wise t-tests (comparing distribution means to 0) across each
     correlation matrix in a list.
@@ -200,13 +204,22 @@ def tstat_combine(corrs):
     :param corrs: a matrix of vectorized correlation matrices (output of mat2vec), or a list
                   of such matrices
 
+    :param return_pvals: Boolean (default: False).  If True, return a second matrix (or list)
+                         of the corresponding t-tests' p-values
+
     :return: a matrix of t-statistics of the same shape as a matrix of vectorized correlation
              matrices
     '''
     if not (type(corrs) == list):
-        return corrs
+        ts = corrs
+        ps = np.nan * np.zeros_like(corrs)
     else:
-        return ttest(r2z(np.stack(corrs, axis=2)), popmean=0, axis=2)[0]
+        ts, ps = ttest(r2z(np.stack(corrs, axis=2)), popmean=0, axis=2)
+
+    if return_pvals:
+        return ts, ps
+    else:
+        return ts
 
 def null_combine(corrs):
     '''
@@ -263,13 +276,19 @@ def reduce(corrs, rfun=None):
         return hyp.reduce(corrs, reduce=rfun, ndims=V)
 
 
-# TODO: UPDATE THIS FUNCTION FOR USE WITH TIMECORR
-def smooth(w, windowsize):
-    kernel = np.ones(windowsize)
-    w /= kernel.sum()
-    x = np.zeros([w.shape[0] - windowsize + 1, w.shape[1]])
+# TODO: debug this
+def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=laplace_params):
+    assert type(windowsize) == int, 'smoothing kernel must have integer width'
+    k = kernel_fun(windowsize, params=kernel_params)
+    if iseven(windowsize):
+        kernel = np.divide(k[int(np.floor(windowsize/2) - 1), :] + k[int(np.ceil(windowsize/2) - 1), :], 2)
+    else:
+        kernel = k[int(np.floor(windowsize/2)), :]
+
+    kernel /= kernel.sum()
+    x = np.zeros_like(w)
     for i in range(0, w.shape[1]):
-        x[:, i] = np.convolve(kernel, w[:, i], mode='valid')
+        x[:, i] = np.convolve(kernel, w[:, i], mode='same')
     return x
 
 
@@ -418,8 +437,11 @@ def z2r(z):
     r[np.isinf(r)] = np.sign(r)[np.isinf(r)]
     return r
 
+def isodd(x):
+    return np.remainder(x, 2) == 1
 
-
+def iseven(x):
+    return np.remainder(x, 2) == 0
 
 def mat2vec(m):
     K = m.shape[0]

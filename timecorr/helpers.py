@@ -197,6 +197,18 @@ def corrmean_combine(corrs):
     else:
         return z2r(np.mean(r2z(np.stack(corrs, axis=2)), axis=2))
 
+def mean_combine(vals):
+    '''
+    Compute the element-wise mean across each matrix in a list.
+
+    :param vals: a matrix, or a list of matrices
+    :return: a mean matrix
+    '''
+    if not (type(vals) == list):
+        return vals
+    else:
+        return np.mean(np.stack(vals, axis=2), axis=2)
+
 def tstat_combine(corrs, return_pvals=False):
     '''
     Compute element-wise t-tests (comparing distribution means to 0) across each
@@ -300,16 +312,17 @@ def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=laplace_p
 #   - support passing in a list of connectivity (or activity) functions, a list of reduce functions,
 #     and a mixing proportions vector; compute stats for all non-zero mixing proportions and use those
 #     stats (weighted appropriately) to do the decoding
-def timepoint_decoder(data, nfolds=2, cfun=isfc, weights_fun=laplace_weights, weights_params=laplace_params,
-                      combine=corrmean_combine, rfun=None, level=1):
+def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_weights, weights_params=laplace_params,
+                      combine=mean_combine, rfun=None):
     """
     :param data: a list of number-of-observations by number-of-features matrices
     :param nfolds: number of cross-validation folds (train using out-of-fold data;
                    test using in-fold data)
+    :param level: integer or list of integers for levels to be evaluated(default:0)
     :param cfun: function for transforming the group data (default: isfc)
     :param weights_fun: used to compute per-timepoint weights for cfun; default: laplace_weights
     :param  weights_params: parameters passed to weights_fun; default: laplace_params
-    :params combine: function for combining data within each group (default: corrmean_combine)
+    :params combine: function for combining data within each group, or a list of such functions (default: mean_combine)
     :param rfun: function for reducing output (default: None)
     :return: results dictionary with the following keys:
        'rank': mean percentile rank (across all timepoints and folds) in the
@@ -319,6 +332,9 @@ def timepoint_decoder(data, nfolds=2, cfun=isfc, weights_fun=laplace_weights, we
                 the decoded and actual window numbers, expressed as a percentage
                 of the total number of windows
     """
+
+    from .timecorr import timecorr
+
     assert len(np.unique(
         list(map(lambda x: x.shape[0], data)))) == 1, 'all data matrices must have the same number of timepoints'
     assert len(np.unique(
@@ -331,27 +347,49 @@ def timepoint_decoder(data, nfolds=2, cfun=isfc, weights_fun=laplace_weights, we
 
     results_template = {'rank': 0, 'accuracy': 0, 'error': 0}
     results = copy(results_template)
+
+    if type(level) is not list:
+        level = np.arange(level+1).tolist()
+
+    if type(combine) is not list:
+        combine = [combine] * np.shape(level)[0]
+
+    if type(cfun) is not list:
+        cfun = [cfun] * np.shape(level)[0]
+
+    if type(rfun) is not list:
+        rfun = [rfun] * np.shape(level)[0]
+
+    assert len(level)==len(combine)
+
+    nested_dict = {}
     for i in range(0, nfolds):
         next_results = copy(results_template)
 
-        in_fold = reduce(combine(cfun(data[group_assignments == i].tolist(), timepoint_weights)), rfun=rfun)
-        out_fold = reduce(combine(cfun(data[group_assignments != i].tolist(), timepoint_weights)), rfun=rfun)
+        for l in level:
 
-        corrs = sd.cdist(in_fold, out_fold)
-        for t in np.arange(corrs.shape[0]):
-            decoded_inds = np.argmax(corrs[t, :])
-            next_results['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / (corrs.shape[0] - 1)
-            next_results['accuracy'] += np.mean(decoded_inds == np.array(t))
-            next_results['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
+            in_fold = timecorr(data[group_assignments == i].tolist(), cfun=cfun[l], rfun=rfun[l], combine=combine[l], weights_function=weights_fun, weights_params=weights_params)
+            out_fold = timecorr(data[group_assignments != i].tolist(), cfun=cfun[l], rfun=rfun[l], combine=combine[l], weights_function=weights_fun, weights_params=weights_params)
 
-        results['error'] += next_results['error'] / corrs.shape[0]
-        results['accuracy'] += next_results['accuracy'] / corrs.shape[0]
-        results['rank'] += next_results['rank'] / corrs.shape[0]
+            corrs = sd.cdist(in_fold, out_fold)
+            for t in np.arange(corrs.shape[0]):
+                decoded_inds = np.argmax(corrs[t, :])
+                next_results['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / (corrs.shape[0] - 1)
+                next_results['accuracy'] += np.mean(decoded_inds == np.array(t))
+                next_results['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
 
-    results['error'] /= nfolds
-    results['accuracy'] /= nfolds
-    results['rank'] /= nfolds
-    return results
+            results['error'] += next_results['error'] / corrs.shape[0]
+            results['accuracy'] += next_results['accuracy'] / corrs.shape[0]
+            results['rank'] += next_results['rank'] / corrs.shape[0]
+
+
+        results['error'] /= nfolds
+        results['accuracy'] /= nfolds
+        results['rank'] /= nfolds
+
+        
+
+        return results
 
 # def predict(x, n=1):
 #     '''

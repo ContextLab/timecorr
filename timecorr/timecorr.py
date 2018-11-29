@@ -1,6 +1,6 @@
 # coding: utf-8
 
-from .helpers import isfc, laplace_weights, format_data, null_combine, reduce
+from .helpers import isfc, laplace_weights, format_data, null_combine, reduce, smooth
 
 def timecorr(data, weights_function=laplace_weights,
              weights_params=None, combine=null_combine,
@@ -98,7 +98,11 @@ def timecorr(data, weights_function=laplace_weights,
     data = format_data(data)
 
     weights = weights_function(T, weights_params)
-    corrs = reduce(combine(cfun(data, weights)), rfun=rfun)
+
+    if cfun:
+        corrs = reduce(combine(cfun(data, weights)), rfun=rfun).tolist()
+    else:
+        corrs = combine(smooth(data, kernel_fun=weights_function, kernel_params=weights_params)).tolist()
 
     if return_list and (not (type(corrs) == list)):
         return [corrs]

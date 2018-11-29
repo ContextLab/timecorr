@@ -7,6 +7,7 @@ from scipy.linalg import toeplitz
 from scipy.stats import ttest_1samp as ttest
 import hypertools as hyp
 import brainconn as bc
+from copy import copy
 
 graph_measures = {'eigenvector_centrality': bc.centrality.eigenvector_centrality_und,
                   'pagerank_centrality': lambda x: bc.centrality.pagerank_centrality(x, d=0.85),
@@ -17,6 +18,7 @@ laplace_params = {'scale': 100}
 eye_params = {}
 t_params = {'df': 100}
 mexican_hat_params = {'sigma': 10}
+uniform_params = {}
 
 
 def gaussian_weights(T, params=gaussian_params):
@@ -41,6 +43,9 @@ def eye_weights(T, params=eye_params):
     #    params = eye_params
 
     return np.eye(T)
+
+def uniform_weights(T, params=uniform_params):
+    return np.ones([T, T])
 
 def t_weights(T, params=t_params):
     if params is None:
@@ -192,7 +197,7 @@ def corrmean_combine(corrs):
     else:
         return z2r(np.mean(r2z(np.stack(corrs, axis=2)), axis=2))
 
-def tstat_combine(corrs):
+def tstat_combine(corrs, return_pvals=False):
     '''
     Compute element-wise t-tests (comparing distribution means to 0) across each
     correlation matrix in a list.
@@ -200,13 +205,22 @@ def tstat_combine(corrs):
     :param corrs: a matrix of vectorized correlation matrices (output of mat2vec), or a list
                   of such matrices
 
+    :param return_pvals: Boolean (default: False).  If True, return a second matrix (or list)
+                         of the corresponding t-tests' p-values
+
     :return: a matrix of t-statistics of the same shape as a matrix of vectorized correlation
              matrices
     '''
     if not (type(corrs) == list):
-        return corrs
+        ts = corrs
+        ps = np.nan * np.zeros_like(corrs)
     else:
-        return ttest(r2z(np.stack(corrs, axis=2)), popmean=0, axis=2)[0]
+        ts, ps = ttest(r2z(np.stack(corrs, axis=2)), popmean=0, axis=2)
+
+    if return_pvals:
+        return ts, ps
+    else:
+        return ts
 
 def null_combine(corrs):
     '''
@@ -263,33 +277,39 @@ def reduce(corrs, rfun=None):
         return hyp.reduce(corrs, reduce=rfun, ndims=V)
 
 
-# TODO: UPDATE THIS FUNCTION FOR USE WITH TIMECORR
-def smooth(w, windowsize):
-    kernel = np.ones(windowsize)
-    w /= kernel.sum()
-    x = np.zeros([w.shape[0] - windowsize + 1, w.shape[1]])
+def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=laplace_params):
+    if type(w) is list:
+        return list(map(lambda x: smooth(x, windowsize=windowsize, kernel_fun=kernel_fun, kernel_params=kernel_params), w))
+
+    assert type(windowsize) == int, 'smoothing kernel must have integer width'
+    k = kernel_fun(windowsize, params=kernel_params)
+    if iseven(windowsize):
+        kernel = np.divide(k[int(np.floor(windowsize/2) - 1), :] + k[int(np.ceil(windowsize/2) - 1), :], 2)
+    else:
+        kernel = k[int(np.floor(windowsize/2)), :]
+
+    kernel /= kernel.sum()
+    x = np.zeros_like(w)
     for i in range(0, w.shape[1]):
-        x[:, i] = np.convolve(kernel, w[:, i], mode='valid')
+        x[:, i] = np.convolve(kernel, w[:, i], mode='same')
     return x
 
 
-# TODO: UPDATE THIS FUNCTION FOR USE WITH TIMECORR
+# TODO: need to debug this...
 # WISHLIST:
-#   - support passing in a list of connectivity functions and a mixing
-#     proportions vector; compute stats for all non-zero
-#     mixing proportions and use those stats (weighted appropriately) to do the
-#     decoding
-def timepoint_decoder(data, windowsize=0, mu=0, nfolds=2, connectivity_fun=isfc):
+#   - support passing in a list of connectivity (or activity) functions, a list of reduce functions,
+#     and a mixing proportions vector; compute stats for all non-zero mixing proportions and use those
+#     stats (weighted appropriately) to do the decoding
+def timepoint_decoder(data, nfolds=2, cfun=isfc, weights_fun=laplace_weights, weights_params=laplace_params, combine=corrmean_combine, rfun=None):
     """
-    :param data: a number-of-observations by number-of-features matrix
-    :param windowsize: number of observations to include in each sliding window
-                      (set to 0 or don't specify if all timepoints should be used)
-    :param mu: mixing parameter-- mu = 0 means decode using raw features;
-               mu = 1 means decode using ISFC; 0 < mu < 1 means decode using a
-               weighted mixture of the two estimates
+    :param data: a list of number-of-observations by number-of-features matrices
     :param nfolds: number of cross-validation folds (train using out-of-fold data;
                    test using in-fold data)
-    :param connectivity_fun: function for transforming the group data (default: isfc)
+    :param cfun: function for transforming the group data (default: isfc)
+    :param weights_fun: used to compute per-timepoint weights for cfun; default: laplace_weights
+    :param  weights_params: parameters passed to weights_fun; default: laplace_params
+    :params combine: function for combining data within each group (default: corrmean_combine)
+    :param rfun: function for reducing output (default: None)
     :return: results dictionary with the following keys:
        'rank': mean percentile rank (across all timepoints and folds) in the
                decoding distribution of the true timepoint
@@ -298,53 +318,34 @@ def timepoint_decoder(data, windowsize=0, mu=0, nfolds=2, connectivity_fun=isfc)
                 the decoded and actual window numbers, expressed as a percentage
                 of the total number of windows
     """
-    assert ((mu >= 0) and (mu <= 1))
+    assert len(np.unique(
+        list(map(lambda x: x.shape[0], data)))) == 1, 'all data matrices must have the same number of timepoints'
+    assert len(np.unique(
+        list(map(lambda x: x.shape[1], data)))) == 1, 'all data matrices must have the same number of features'
+
+    T = data[0].shape[0]
+    timepoint_weights = weights_fun(T, params=weights_params)
 
     group_assignments = get_xval_assignments(len(data), nfolds)
 
-    # fill in results
     results_template = {'rank': 0, 'accuracy': 0, 'error': 0}
     results = copy(results_template)
     for i in range(0, nfolds):
-        if mu > 0:
-            in_fold_isfc = squareform(connectivity_fun(data
-                                      [group_assignments == i], windowsize))
-            out_fold_isfc = squareform(connectivity_fun(data
-                                       [group_assignments != i], windowsize))
-            isfc_corrs = 1 - sd.cdist(in_fold_isfc, out_fold_isfc, 'correlation')
-            if mu == 1:
-                corrs = isfc_corrs
-
-        if mu < 1:
-            in_fold_raw = smooth(np.mean(data[np.where(group_assignments == i)[0]], axis=0), windowsize)
-            out_fold_raw = smooth(np.mean(data[np.where(group_assignments != i)[0]], axis=0), windowsize)
-            raw_corrs = 1 - sd.cdist(in_fold_raw, out_fold_raw, 'correlation')
-            if mu == 0:
-                corrs = raw_corrs
-
-        if 0 < mu < 1:
-            corrs = z2r(mu*r2z(raw_corrs) + (1 - mu)*r2z(isfc_corrs))
-
         next_results = copy(results_template)
 
-        timepoint_dists = la.toeplitz(np.arange(corrs.shape[0]))
-        for t in range(0, corrs.shape[0]):
-            include_inds = np.unique(np.append(np.where(timepoint_dists[t, :] > 0), np.array(t)))
-            # include_inds = np.unique(np.append(np.where(timepoint_dists[t, :] >
-            # windowsize), np.array(t))) # more liberal test
+        in_fold = reduce(combine(cfun(data[group_assignments == i].tolist(), timepoint_weights)), rfun=rfun)
+        out_fold = reduce(combine(cfun(data[group_assignments != i].tolist(), timepoint_weights)), rfun=rfun)
 
-            decoded_inds = include_inds[np.where(corrs[t, include_inds] ==
-                                        np.max(corrs[t, include_inds]))]
-            next_results['error'] += np.mean(np.abs(decoded_inds - np.array(t)))/(corrs.shape[0] - 1)
+        corrs = sd.cdist(in_fold, out_fold)
+        for t in np.arange(corrs.shape[0]):
+            decoded_inds = np.argmax(corrs[t, :])
+            next_results['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / (corrs.shape[0] - 1)
             next_results['accuracy'] += np.mean(decoded_inds == np.array(t))
-            next_results['rank'] += np.mean(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t])))
-        next_results['error'] /= corrs.shape[0]
-        next_results['accuracy'] /= corrs.shape[0]
-        next_results['rank'] /= corrs.shape[0]
+            next_results['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
 
-        results['error'] += next_results['error']
-        results['accuracy'] += next_results['accuracy']
-        results['rank'] += next_results['rank']
+        results['error'] += next_results['error'] / corrs.shape[0]
+        results['accuracy'] += next_results['accuracy'] / corrs.shape[0]
+        results['rank'] += next_results['rank'] / corrs.shape[0]
 
     results['error'] /= nfolds
     results['accuracy'] /= nfolds
@@ -418,8 +419,11 @@ def z2r(z):
     r[np.isinf(r)] = np.sign(r)[np.isinf(r)]
     return r
 
+def isodd(x):
+    return np.remainder(x, 2) == 1
 
-
+def iseven(x):
+    return np.remainder(x, 2) == 0
 
 def mat2vec(m):
     K = m.shape[0]

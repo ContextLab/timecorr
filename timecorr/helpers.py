@@ -300,7 +300,8 @@ def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=laplace_p
 #   - support passing in a list of connectivity (or activity) functions, a list of reduce functions,
 #     and a mixing proportions vector; compute stats for all non-zero mixing proportions and use those
 #     stats (weighted appropriately) to do the decoding
-def timepoint_decoder(data, nfolds=2, cfun=isfc, weights_fun=laplace_weights, weights_params=laplace_params, combine=corrmean_combine, rfun=None):
+def timepoint_decoder(data, nfolds=2, cfun=isfc, weights_fun=laplace_weights, weights_params=laplace_params,
+                      combine=corrmean_combine, rfun=None, level=1):
     """
     :param data: a list of number-of-observations by number-of-features matrices
     :param nfolds: number of cross-validation folds (train using out-of-fold data;

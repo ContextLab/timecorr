@@ -39,7 +39,7 @@ If there's no "to do" item for what you want to contribue, please add a [new iss
 
 Once you've defined what you want to do and moved your issue to the "in progress" column, *Fork* this repository (click the button in the upper right).  That's the version of the project that you'll be editing directly.  Clone that (forked) repository into the mount point of your Docker image (probably `~/Desktop`).  Then:
 - Navigate to `/mnt/timecorr` (from within the Docker terminal)
-- Set up the Summer-MIND fork of timecorr as your "upstream" repository: `git remote add upstream https://github.com/Summer-MIND/timecorr.git`
+- Set up a fork of timecorr as your "upstream" repository: `git remote add upstream https://github.com/timecorr.git`
 - Make sure your fork is up to date with the Summer-MIND fork: `git pull upstream master`
 - Now load up your favorite coding envornment, and code away!  Remember to commit frequently!
 - When you're ready to back up your code, do another `git pull upstream master` to pull in any new changes.  Then `git add` any files you changed (`git status` will tell you what's changed) and `git commit -a -m "your description of what changed"` to commit a snapshot of your code locally.  Finally, type `git pull` to put your local changes on your forked copy of timecorr.

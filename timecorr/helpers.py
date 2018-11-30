@@ -362,7 +362,7 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
 
     assert len(level)==len(combine)
 
-    nested_dict = {}
+    level_dict = dict.fromkeys(level, copy(results_template))
     for i in range(0, nfolds):
         next_results = copy(results_template)
 
@@ -378,18 +378,24 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
                 next_results['accuracy'] += np.mean(decoded_inds == np.array(t))
                 next_results['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
 
-            results['error'] += next_results['error'] / corrs.shape[0]
-            results['accuracy'] += next_results['accuracy'] / corrs.shape[0]
-            results['rank'] += next_results['rank'] / corrs.shape[0]
+            level_dict[l]['error'] += next_results['error'] / corrs.shape[0]
+            level_dict[l]['accuracy'] += next_results['accuracy'] / corrs.shape[0]
+            level_dict[l]['rank'] += next_results['rank'] / corrs.shape[0]
+
+            #level_dict.update({l:results})
+
+    # level_dict['error'] /= nfolds
+    # level_dict['accuracy'] /= nfoldsL
+    # level_dict['rank'] /= nfolds
+
+    for l, r in level_dict.items():
+        r['error']/= nfolds
+        r['accuracy'] /= nfolds
+        r['rank'] /= nfolds
 
 
-        results['error'] /= nfolds
-        results['accuracy'] /= nfolds
-        results['rank'] /= nfolds
 
-        
-
-        return results
+    return results
 
 # def predict(x, n=1):
 #     '''

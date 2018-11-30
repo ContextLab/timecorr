@@ -342,12 +342,9 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
         list(map(lambda x: x.shape[1], data)))) == 1, 'all data matrices must have the same number of features'
 
     T = data[0].shape[0]
-    timepoint_weights = weights_fun(T, params=weights_params)
+    # timepoint_weights = weights_fun(T, params=weights_params)
 
     group_assignments = get_xval_assignments(len(data), nfolds)
-
-    #results_template = {'rank': 0, 'accuracy': 0, 'error': 0}
-    #results = copy(results_template)
 
     if type(level) is not list:
         level = np.arange(level+1).tolist()
@@ -364,8 +361,6 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
     assert len(level)==len(combine)
 
     results_pd = pd.DataFrame({'level': level, 'rank': [0] * len(level), 'accuracy': [0] * len(level), 'error': [0] * len(level)})
-    #level_dict_template = dict.fromkeys(level, deepcopy(results_template))
-    #level_dict = deepcopy(level_dict_template)
 
     for i in range(0, nfolds):
         next_results_pd = pd.DataFrame({'rank': [0], 'accuracy': [0], 'error': [0]})
@@ -382,24 +377,18 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
                 next_results_pd['accuracy'] += np.mean(decoded_inds == np.array(t))
                 next_results_pd['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
 
-            results_pd[results_pd['level'] == 0]['error'] += next_results_pd['error'] / corrs.shape[0]
-            results_pd[results_pd['level'] == 0]['accuracy'] += next_results_pd['accuracy'] / corrs.shape[0]
-            results_pd[results_pd['level'] == 0]['rank'] += next_results_pd['rank'] / corrs.shape[0]
+            results_pd.loc[results_pd['level'] == l, 'error']+= next_results_pd['error'].values / corrs.shape[0]
+            results_pd.loc[results_pd['level'] == l, 'accuracy']+= next_results_pd['accuracy'].values / corrs.shape[0]
+            results_pd.loc[results_pd['level'] == l, 'rank']+= next_results_pd['rank'].values / corrs.shape[0]
 
-            #level_dict.update({l:results})
-
-    # level_dict['error'] /= nfolds
-    # level_dict['accuracy'] /= nfoldsL
-    # level_dict['rank'] /= nfolds
-    #
-    # for l, r in level_dict.items():
-    #     r['error']/= nfolds
-    #     r['accuracy'] /= nfolds
-    #     r['rank'] /= nfolds
+    results_pd['error'] /= nfolds
+    results_pd['accuracy'] /= nfolds
+    results_pd['rank'] /= nfolds
 
 
 
-    return results
+
+    return results_pd
 
 # def predict(x, n=1):
 #     '''

@@ -362,24 +362,42 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
 
     results_pd = pd.DataFrame({'level': level, 'rank': [0] * len(level), 'accuracy': [0] * len(level), 'error': [0] * len(level)})
 
+
     for i in range(0, nfolds):
         next_results_pd = pd.DataFrame({'rank': [0], 'accuracy': [0], 'error': [0]})
 
-        for l in level:
+        in_fold_raw = []
+        out_fold_raw = []
 
-            in_fold = timecorr(data[group_assignments == i].tolist(), cfun=cfun[l], rfun=rfun[l], combine=combine[l], weights_function=weights_fun, weights_params=weights_params)
-            out_fold = timecorr(data[group_assignments != i].tolist(), cfun=cfun[l], rfun=rfun[l], combine=combine[l], weights_function=weights_fun, weights_params=weights_params)
+        for v in level:
 
-            corrs = sd.cdist(in_fold, out_fold)
+            if v==0:
+                in_fold_smooth = timecorr(data[group_assignments == i].tolist(), cfun=cfun[v], rfun=rfun[v], combine=combine[v],
+                                   weights_function=weights_fun, weights_params=weights_params)
+                out_fold_smooth = timecorr(data[group_assignments != i].tolist(), cfun=cfun[v], rfun=rfun[v], combine=combine[v],
+                                    weights_function=weights_fun, weights_params=weights_params)
+                in_fold_raw = data[group_assignments == i].tolist()
+                out_fold_raw = data[group_assignments != i].tolist()
+            else:
+                in_fold_smooth = timecorr(in_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=combine[v],
+                                   weights_function=weights_fun, weights_params=weights_params)
+                out_fold_smooth = timecorr(out_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=combine[v],
+                                   weights_function=weights_fun, weights_params=weights_params)
+                in_fold_raw = timecorr(in_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=null_combine,
+                                       weights_function=eye_weights, weights_params=eye_params)
+                out_fold_raw = timecorr(out_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=null_combine,
+                                   weights_function=eye_weights, weights_params=eye_params)
+
+            corrs = sd.cdist(in_fold_smooth, out_fold_smooth)
             for t in np.arange(corrs.shape[0]):
                 decoded_inds = np.argmax(corrs[t, :])
-                next_results_pd['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / (corrs.shape[0] - 1)
+                next_results_pd['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / corrs.shape[0]
                 next_results_pd['accuracy'] += np.mean(decoded_inds == np.array(t))
                 next_results_pd['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
 
-            results_pd.loc[results_pd['level'] == l, 'error']+= next_results_pd['error'].values / corrs.shape[0]
-            results_pd.loc[results_pd['level'] == l, 'accuracy']+= next_results_pd['accuracy'].values / corrs.shape[0]
-            results_pd.loc[results_pd['level'] == l, 'rank']+= next_results_pd['rank'].values / corrs.shape[0]
+            results_pd.loc[results_pd['level'] == v, 'error']+= next_results_pd['error'].values / corrs.shape[0]
+            results_pd.loc[results_pd['level'] == v, 'accuracy']+= next_results_pd['accuracy'].values / corrs.shape[0]
+            results_pd.loc[results_pd['level'] == v, 'rank']+= next_results_pd['rank'].values / corrs.shape[0]
 
     results_pd['error'] /= nfolds
     results_pd['accuracy'] /= nfolds

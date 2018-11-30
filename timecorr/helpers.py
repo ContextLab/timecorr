@@ -7,7 +7,8 @@ from scipy.linalg import toeplitz
 from scipy.stats import ttest_1samp as ttest
 import hypertools as hyp
 import brainconn as bc
-from copy import copy
+import pandas as pd
+from copy import copy, deepcopy
 
 graph_measures = {'eigenvector_centrality': bc.centrality.eigenvector_centrality_und,
                   'pagerank_centrality': lambda x: bc.centrality.pagerank_centrality(x, d=0.85),
@@ -345,8 +346,8 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
 
     group_assignments = get_xval_assignments(len(data), nfolds)
 
-    results_template = {'rank': 0, 'accuracy': 0, 'error': 0}
-    results = copy(results_template)
+    #results_template = {'rank': 0, 'accuracy': 0, 'error': 0}
+    #results = copy(results_template)
 
     if type(level) is not list:
         level = np.arange(level+1).tolist()
@@ -362,9 +363,12 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
 
     assert len(level)==len(combine)
 
-    level_dict = dict.fromkeys(level, copy(results_template))
+    results_pd = pd.DataFrame({'level': level, 'rank': [0] * len(level), 'accuracy': [0] * len(level), 'error': [0] * len(level)})
+    #level_dict_template = dict.fromkeys(level, deepcopy(results_template))
+    #level_dict = deepcopy(level_dict_template)
+
     for i in range(0, nfolds):
-        next_results = copy(results_template)
+        next_results_pd = pd.DataFrame({'rank': [0], 'accuracy': [0], 'error': [0]})
 
         for l in level:
 
@@ -374,24 +378,24 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
             corrs = sd.cdist(in_fold, out_fold)
             for t in np.arange(corrs.shape[0]):
                 decoded_inds = np.argmax(corrs[t, :])
-                next_results['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / (corrs.shape[0] - 1)
-                next_results['accuracy'] += np.mean(decoded_inds == np.array(t))
-                next_results['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
+                next_results_pd['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / (corrs.shape[0] - 1)
+                next_results_pd['accuracy'] += np.mean(decoded_inds == np.array(t))
+                next_results_pd['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
 
-            level_dict[l]['error'] += next_results['error'] / corrs.shape[0]
-            level_dict[l]['accuracy'] += next_results['accuracy'] / corrs.shape[0]
-            level_dict[l]['rank'] += next_results['rank'] / corrs.shape[0]
+            results_pd[results_pd['level'] == 0]['error'] += next_results_pd['error'] / corrs.shape[0]
+            results_pd[results_pd['level'] == 0]['accuracy'] += next_results_pd['accuracy'] / corrs.shape[0]
+            results_pd[results_pd['level'] == 0]['rank'] += next_results_pd['rank'] / corrs.shape[0]
 
             #level_dict.update({l:results})
 
     # level_dict['error'] /= nfolds
     # level_dict['accuracy'] /= nfoldsL
     # level_dict['rank'] /= nfolds
-
-    for l, r in level_dict.items():
-        r['error']/= nfolds
-        r['accuracy'] /= nfolds
-        r['rank'] /= nfolds
+    #
+    # for l, r in level_dict.items():
+    #     r['error']/= nfolds
+    #     r['accuracy'] /= nfolds
+    #     r['rank'] /= nfolds
 
 
 

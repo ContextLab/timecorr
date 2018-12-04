@@ -372,11 +372,11 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
         for v in level:
 
             if v==0:
-                in_fold_smooth = np.asarray(timecorr([x for x in data[group_assignments == i]], cfun=cfun[v],
-                                                     rfun=rfun[v], combine=combine[v], weights_function=weights_fun,
+                in_fold_smooth = np.asarray(timecorr([x for x in data[group_assignments == i]], cfun=None,
+                                                     rfun=None, combine=mean_combine, weights_function=weights_fun,
                                                      weights_params=weights_params))
-                out_fold_smooth = np.asarray(timecorr([x for x in data[group_assignments != i]], cfun=cfun[v],
-                                                      rfun=rfun[v], combine=combine[v], weights_function=weights_fun,
+                out_fold_smooth = np.asarray(timecorr([x for x in data[group_assignments != i]], cfun=None,
+                                                      rfun=None, combine=mean_combine, weights_function=weights_fun,
                                                       weights_params=weights_params))
                 in_fold_raw = mean_combine([x for x in data[group_assignments == i]])
                 out_fold_raw = mean_combine([x for x in data[group_assignments != i]])

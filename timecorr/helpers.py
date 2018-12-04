@@ -364,7 +364,7 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
 
 
     for i in range(0, nfolds):
-        next_results_pd = pd.DataFrame({'rank': [0], 'accuracy': [0], 'error': [0]})
+        # next_results_pd = pd.DataFrame({'rank': [0], 'accuracy': [0], 'error': [0]})
 
         in_fold_raw = []
         out_fold_raw = []
@@ -372,23 +372,27 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
         for v in level:
 
             if v==0:
-                in_fold_smooth = timecorr(data[group_assignments == i].tolist(), cfun=cfun[v], rfun=rfun[v], combine=combine[v],
-                                   weights_function=weights_fun, weights_params=weights_params)
-                out_fold_smooth = timecorr(data[group_assignments != i].tolist(), cfun=cfun[v], rfun=rfun[v], combine=combine[v],
-                                    weights_function=weights_fun, weights_params=weights_params)
-                in_fold_raw = data[group_assignments == i].tolist()
-                out_fold_raw = data[group_assignments != i].tolist()
+                in_fold_smooth = np.asarray(timecorr([x for x in data[group_assignments == i]], cfun=cfun[v],
+                                                     rfun=rfun[v], combine=combine[v], weights_function=weights_fun,
+                                                     weights_params=weights_params))
+                out_fold_smooth = np.asarray(timecorr([x for x in data[group_assignments != i]], cfun=cfun[v],
+                                                      rfun=rfun[v], combine=combine[v], weights_function=weights_fun,
+                                                      weights_params=weights_params))
+                in_fold_raw = mean_combine([x for x in data[group_assignments == i]])
+                out_fold_raw = mean_combine([x for x in data[group_assignments != i]])
             else:
-                in_fold_smooth = timecorr(in_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=combine[v],
-                                   weights_function=weights_fun, weights_params=weights_params)
-                out_fold_smooth = timecorr(out_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=combine[v],
-                                   weights_function=weights_fun, weights_params=weights_params)
-                in_fold_raw = timecorr(in_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=null_combine,
-                                       weights_function=eye_weights, weights_params=eye_params)
-                out_fold_raw = timecorr(out_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=null_combine,
-                                   weights_function=eye_weights, weights_params=eye_params)
+                in_fold_smooth = np.asarray(timecorr(in_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=combine[v],
+                                                     weights_function=weights_fun, weights_params=weights_params))
+                out_fold_smooth = np.asarray(timecorr(out_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=combine[v],
+                                                     weights_function=weights_fun, weights_params=weights_params))
+                in_fold_raw = np.asarray(timecorr(in_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=null_combine,
+                                                  weights_function=eye_weights, weights_params=eye_params))
+                out_fold_raw = np.asarray(timecorr(out_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=null_combine,
+                                                   weights_function=eye_weights, weights_params=eye_params))
 
-            corrs = sd.cdist(in_fold_smooth, out_fold_smooth)
+            next_results_pd = pd.DataFrame({'rank': [0], 'accuracy': [0], 'error': [0]})
+
+            corrs = (1-sd.cdist(in_fold_smooth, out_fold_smooth, 'correlation'))
             for t in np.arange(corrs.shape[0]):
                 decoded_inds = np.argmax(corrs[t, :])
                 next_results_pd['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / corrs.shape[0]

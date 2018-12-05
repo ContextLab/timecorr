@@ -319,7 +319,7 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
     :param data: a list of number-of-observations by number-of-features matrices
     :param nfolds: number of cross-validation folds (train using out-of-fold data;
                    test using in-fold data)
-    :param level: integer or list of integers for levels to be evaluated(default:0)
+    :param level: integer or list of integers for levels to be evaluated (default:0)
     :param cfun: function for transforming the group data (default: isfc)
     :param weights_fun: used to compute per-timepoint weights for cfun; default: laplace_weights
     :param  weights_params: parameters passed to weights_fun; default: laplace_params
@@ -341,16 +341,22 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
     assert len(np.unique(
         list(map(lambda x: x.shape[1], data)))) == 1, 'all data matrices must have the same number of features'
 
-    T = data[0].shape[0]
-    # timepoint_weights = weights_fun(T, params=weights_params)
-
     group_assignments = get_xval_assignments(len(data), nfolds)
 
-    if type(level) is not list:
-        level = np.arange(level+1).tolist()
+    if type(level) is int:
+        level = np.arange(level + 1)
 
-    if type(combine) is not list:
+    level = np.ravel(level)
+
+    assert type(level) is np.ndarray, 'Level needs be an integer, list, or np.ndarray'
+    assert np.allclose(np.arange(level.max()+1), level), 'Level needs to be in sequential order starting with 0'
+
+
+    if isinstance(combine, function):
         combine = [combine] * np.shape(level)[0]
+
+    combine = np.ravel(combine)
+    assert type(combine) is np.ndarray, 'Level needs be a function, list of functions, or np.ndarray of functions'
 
     if type(cfun) is not list:
         cfun = [cfun] * np.shape(level)[0]

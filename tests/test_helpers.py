@@ -1,8 +1,12 @@
 import numpy as np
 from scipy.linalg import toeplitz
+from scipy.io import loadmat
+import os
+import pytest
 
 #using method from supereeg
-from timecorr.helpers import gaussian_weights, gaussian_params, wcorr, wisfc, mat2vec, vec2mat
+from timecorr.helpers import gaussian_weights, gaussian_params, wcorr, wisfc, mat2vec, vec2mat, isfc, mean_combine, \
+    corrmean_combine, timepoint_decoder, laplace_params, laplace_weights
 
 T = 10
 D = 4
@@ -15,6 +19,16 @@ n_samples = 1000
 R = toeplitz(np.linspace(0, 1, n_elecs)[::-1])
 
 data_sim = np.random.multivariate_normal(np.zeros(n_elecs), R, size=n_samples)
+
+width = 10
+laplace = {'name': 'Laplace', 'weights': laplace_weights, 'params': {'scale': width}}
+try_data = []
+repdata = 4
+for i in range(repdata):
+    try_data.append(data_sim)
+
+try_data = np.array(try_data)
+
 
 gps = {'var': 100}
 
@@ -96,6 +110,22 @@ def test_mat2vec_vec2mat():
 
     assert (np.allclose(M, corrs))
     assert (np.allclose(m, corrs[:, :, 50]))
+
+def test_timepoint_decoder_level_type():
+     is_int = timepoint_decoder(try_data, level=1, combine=corrmean_combine, cfun=isfc,
+                      rfun='eigenvector_centrality', weights_params=laplace['params'])
+     is_array = timepoint_decoder(try_data, level=np.array([0,1]), combine=corrmean_combine, cfun=isfc,
+                                rfun='eigenvector_centrality', weights_params=laplace['params'])
+     is_list = timepoint_decoder(try_data, level=[0,1], combine=corrmean_combine, cfun=isfc,
+                                rfun='eigenvector_centrality', weights_params=laplace['params'])
+     assert np.allclose(is_int, is_array, is_list)
+
+def test_timepoint_decoder_level_error():
+    with pytest.raises(ValueError):
+        is_list = timepoint_decoder(try_data, level=[1, 2], combine=corrmean_combine, cfun=isfc,
+                                    rfun='eigenvector_centrality', weights_params=laplace['params'])
+
+
 
 #commenting out: smoothing not implemented #TODO: implement smooth function
 #def test_smooth():

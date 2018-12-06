@@ -78,7 +78,7 @@ def test_wcorr():
     # check if corresponding columns in 3d array produces 1
     assert (np.isclose(corrs_col_arrays[4,4,500],1))
     # check if toeplitz matrix is produced
-    assert (np.allclose(corrs_col_arrays[:, :, 500], R, atol=.1))
+    assert (np.allclose(corrs_col_arrays[:, :, 500], R, atol=.2))
     # check if corrs is a numpy array
     assert isinstance(corrs, np.ndarray)
 

@@ -351,8 +351,8 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
 
     level = np.ravel(level)
 
-    assert type(level) is np.ndarray, 'Level needs be an integer, list, or np.ndarray'
-    assert not np.any(level < 0), 'Level cannot contain negative numbers'
+    assert type(level) is np.ndarray, 'level needs be an integer, list, or np.ndarray'
+    assert not np.any(level < 0), 'level cannot contain negative numbers'
 
     if not np.all(np.arange(level.max()+1)==level):
         level = np.arange(level.max()+1)
@@ -362,22 +362,22 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
 
     combine = np.ravel(combine)
 
-    assert type(combine) is np.ndarray and type(combine[0]) is not np.str_, 'Combine needs to be a function, list of functions, or np.ndarray of functions'
-    assert len(level)==len(combine), 'Combine length need to be the same as level if input is type np.ndarray or list'
+    assert type(combine) is np.ndarray and type(combine[0]) is not np.str_, 'combine needs to be a function, list of functions, or np.ndarray of functions'
+    assert len(level)==len(combine), 'combine length need to be the same as level if input is type np.ndarray or list'
 
     if callable(cfun):
         cfun = [cfun] * np.shape(level)[0]
 
     cfun = np.ravel(cfun)
 
-    assert type(cfun) is np.ndarray and type(cfun[0]) is not np.str_, 'Combine needs be a function, list of functions, or np.ndarray of functions'
-    assert len(level)==len(cfun), 'Cfun length need to be the same as level if input is type np.ndarray or list'
+    assert type(cfun) is np.ndarray and type(cfun[0]) is not np.str_, 'combine needs be a function, list of functions, or np.ndarray of functions'
+    assert len(level)==len(cfun), 'cfun length need to be the same as level if input is type np.ndarray or list'
 
 
     if type(rfun) not in [list, np.ndarray]:
         rfun = [rfun] * np.shape(level)[0]
 
-    assert len(level)==len(rfun), 'Parameter lengths need to be the same as level if input is ' \
+    assert len(level)==len(rfun), 'parameter lengths need to be the same as level if input is ' \
                                                            'type np.ndarray or list'
 
     results_pd = pd.DataFrame({'level': orig_level, 'rank': [0] * len(orig_level), 'accuracy': [0] * len(orig_level), 'error': [0] * len(orig_level)})
@@ -393,10 +393,10 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
 
             if v==0:
                 in_fold_smooth = np.asarray(timecorr([x for x in data[group_assignments == i]], cfun=None,
-                                                     rfun=None, combine=mean_combine, weights_function=weights_fun,
+                                                     rfun=rfun[v], combine=combine[v], weights_function=weights_fun,
                                                      weights_params=weights_params))
                 out_fold_smooth = np.asarray(timecorr([x for x in data[group_assignments != i]], cfun=None,
-                                                      rfun=None, combine=mean_combine, weights_function=weights_fun,
+                                                      rfun=rfun[v], combine=combine[v], weights_function=weights_fun,
                                                       weights_params=weights_params))
                 in_fold_raw = mean_combine([x for x in data[group_assignments == i]])
                 out_fold_raw = mean_combine([x for x in data[group_assignments != i]])

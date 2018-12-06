@@ -28,31 +28,21 @@ for i in range(repdata):
     try_data.append(data_sim)
 
 try_data = np.array(try_data)
-## check if level is integer
 
-# results_level_int = tc.timepoint_decoder(try_data, level=np.array([0,1]), combine= corrmean_combine, cfun=isfc,
-#                                    rfun='eigenvector_centrality', weights_params=laplace['params'])
-#
-# results_level_array = tc.timepoint_decoder(try_data, level=np.array([0,1]), combine= corrmean_combine, cfun=isfc,
-#                                    rfun='eigenvector_centrality', weights_params=laplace['params'])
-#
-# results_level_list = tc.timepoint_decoder(try_data, level=[0,1], combine= corrmean_combine, cfun=isfc,
-#                                    rfun='eigenvector_centrality', weights_params=laplace['params'])
-#
-#
-# results_level_wrong_list = tc.timepoint_decoder(try_data, level=[1,2], combine= corrmean_combine, cfun=isfc,
-#                                    rfun='eigenvector_centrality', weights_params=laplace['params'])
-#
-# results_level_wrong_array = tc.timepoint_decoder(try_data, level=np.array([1,2]), combine= corrmean_combine, cfun=isfc,
-#                                    rfun='eigenvector_centrality', weights_params=laplace['params'])
+### check non sequential level given:
 
-results_combine_int = tc.timepoint_decoder(try_data, level=1, combine=corrmean_combine, cfun=isfc,
+
+results_level_nonseq_level = tc.timepoint_decoder(try_data, level=[0, 2], combine= corrmean_combine, cfun=isfc,
+                                   rfun='eigenvector_centrality', weights_params=laplace['params'])
+## check type  level
+
+results_level_int = tc.timepoint_decoder(try_data, level=1, combine= corrmean_combine, cfun=isfc,
                                    rfun='eigenvector_centrality', weights_params=laplace['params'])
 
-results_combine_list= tc.timepoint_decoder(try_data, level=np.array([0,1]), combine=[mean_combine, corrmean_combine], cfun=isfc,
+results_level_array = tc.timepoint_decoder(try_data, level=np.array([0,1]), combine= corrmean_combine, cfun=isfc,
                                    rfun='eigenvector_centrality', weights_params=laplace['params'])
 
-results_combine_array = tc.timepoint_decoder(try_data, level=[0,1], combine= np.array([mean_combine, corrmean_combine]), cfun=isfc,
+results_level_list = tc.timepoint_decoder(try_data, level=[0,1], combine= corrmean_combine, cfun=isfc,
                                    rfun='eigenvector_centrality', weights_params=laplace['params'])
 
 
@@ -61,3 +51,4 @@ results_level_wrong_list = tc.timepoint_decoder(try_data, level=[1,2], combine= 
 
 results_level_wrong_array = tc.timepoint_decoder(try_data, level=np.array([1,2]), combine= corrmean_combine, cfun=isfc,
                                    rfun='eigenvector_centrality', weights_params=laplace['params'])
+

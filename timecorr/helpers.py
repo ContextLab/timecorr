@@ -343,30 +343,44 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
 
     group_assignments = get_xval_assignments(len(data), nfolds)
 
+    orig_level = level
+    orig_level = np.ravel(orig_level)
+
     if type(level) is int:
         level = np.arange(level + 1)
 
     level = np.ravel(level)
 
     assert type(level) is np.ndarray, 'Level needs be an integer, list, or np.ndarray'
-    assert np.allclose(np.arange(level.max()+1), level), 'Level needs to be in sequential order starting with 0'
+    assert not np.any(level < 0), 'Level cannot contain negative numbers'
 
+    if not np.all(np.arange(level.max()+1)==level):
+        level = np.arange(level.max()+1)
 
-    if isinstance(combine, function):
+    if callable(combine):
         combine = [combine] * np.shape(level)[0]
 
     combine = np.ravel(combine)
-    assert type(combine) is np.ndarray, 'Level needs be a function, list of functions, or np.ndarray of functions'
 
-    if type(cfun) is not list:
+    assert type(combine) is np.ndarray and type(combine[0]) is not np.str_, 'Combine needs to be a function, list of functions, or np.ndarray of functions'
+    assert len(level)==len(combine), 'Combine length need to be the same as level if input is type np.ndarray or list'
+
+    if callable(cfun):
         cfun = [cfun] * np.shape(level)[0]
 
-    if type(rfun) is not list:
+    cfun = np.ravel(cfun)
+
+    assert type(cfun) is np.ndarray and type(cfun[0]) is not np.str_, 'Combine needs be a function, list of functions, or np.ndarray of functions'
+    assert len(level)==len(cfun), 'Cfun length need to be the same as level if input is type np.ndarray or list'
+
+
+    if type(rfun) not in [list, np.ndarray]:
         rfun = [rfun] * np.shape(level)[0]
 
-    assert len(level)==len(combine)
+    assert len(level)==len(rfun), 'Parameter lengths need to be the same as level if input is ' \
+                                                           'type np.ndarray or list'
 
-    results_pd = pd.DataFrame({'level': level, 'rank': [0] * len(level), 'accuracy': [0] * len(level), 'error': [0] * len(level)})
+    results_pd = pd.DataFrame({'level': orig_level, 'rank': [0] * len(orig_level), 'accuracy': [0] * len(orig_level), 'error': [0] * len(orig_level)})
 
 
     for i in range(0, nfolds):
@@ -396,18 +410,19 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
                 out_fold_raw = np.asarray(timecorr(out_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=null_combine,
                                                    weights_function=eye_weights, weights_params=eye_params))
 
-            next_results_pd = pd.DataFrame({'rank': [0], 'accuracy': [0], 'error': [0]})
+            if v in orig_level:
+                next_results_pd = pd.DataFrame({'rank': [0], 'accuracy': [0], 'error': [0]})
 
-            corrs = (1-sd.cdist(in_fold_smooth, out_fold_smooth, 'correlation'))
-            for t in np.arange(corrs.shape[0]):
-                decoded_inds = np.argmax(corrs[t, :])
-                next_results_pd['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / corrs.shape[0]
-                next_results_pd['accuracy'] += np.mean(decoded_inds == np.array(t))
-                next_results_pd['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
+                corrs = (1-sd.cdist(in_fold_smooth, out_fold_smooth, 'correlation'))
+                for t in np.arange(corrs.shape[0]):
+                    decoded_inds = np.argmax(corrs[t, :])
+                    next_results_pd['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / corrs.shape[0]
+                    next_results_pd['accuracy'] += np.mean(decoded_inds == np.array(t))
+                    next_results_pd['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
 
-            results_pd.loc[results_pd['level'] == v, 'error']+= next_results_pd['error'].values / corrs.shape[0]
-            results_pd.loc[results_pd['level'] == v, 'accuracy']+= next_results_pd['accuracy'].values / corrs.shape[0]
-            results_pd.loc[results_pd['level'] == v, 'rank']+= next_results_pd['rank'].values / corrs.shape[0]
+                results_pd.loc[results_pd['level'] == v, 'error']+= next_results_pd['error'].values / corrs.shape[0]
+                results_pd.loc[results_pd['level'] == v, 'accuracy']+= next_results_pd['accuracy'].values / corrs.shape[0]
+                results_pd.loc[results_pd['level'] == v, 'rank']+= next_results_pd['rank'].values / corrs.shape[0]
 
     results_pd['error'] /= nfolds
     results_pd['accuracy'] /= nfolds

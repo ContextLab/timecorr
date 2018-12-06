@@ -114,18 +114,104 @@ def test_mat2vec_vec2mat():
 def test_timepoint_decoder_level_type():
      is_int = timepoint_decoder(try_data, level=1, combine=corrmean_combine, cfun=isfc,
                       rfun='eigenvector_centrality', weights_params=laplace['params'])
-     is_array = timepoint_decoder(try_data, level=np.array([0,1]), combine=corrmean_combine, cfun=isfc,
+     is_array = timepoint_decoder(try_data, level=np.array([1]), combine=corrmean_combine, cfun=isfc,
                                 rfun='eigenvector_centrality', weights_params=laplace['params'])
-     is_list = timepoint_decoder(try_data, level=[0,1], combine=corrmean_combine, cfun=isfc,
+     is_list = timepoint_decoder(try_data, level=[1], combine=corrmean_combine, cfun=isfc,
                                 rfun='eigenvector_centrality', weights_params=laplace['params'])
      assert np.allclose(is_int, is_array, is_list)
 
 def test_timepoint_decoder_level_error():
     with pytest.raises(ValueError):
-        is_list = timepoint_decoder(try_data, level=[1, 2], combine=corrmean_combine, cfun=isfc,
+
+        assert timepoint_decoder(try_data, level=[1, 2], combine=corrmean_combine, cfun=isfc,
                                     rfun='eigenvector_centrality', weights_params=laplace['params'])
 
+        assert timepoint_decoder(try_data, level=[-1, 0], combine=corrmean_combine, cfun=isfc,
+                                 rfun='eigenvector_centrality', weights_params=laplace['params'])
 
+        assert timepoint_decoder(try_data, level='1', combine=corrmean_combine, cfun=isfc,
+                                 rfun='eigenvector_centrality', weights_params=laplace['params'])
+
+
+def test_timepoint_decoder_comine_type():
+    is_fun = timepoint_decoder(try_data, level=[1], combine=corrmean_combine, cfun=isfc,
+                                   rfun='eigenvector_centrality', weights_params=laplace['params'])
+
+    is_list= timepoint_decoder(try_data, level=[1], combine=[mean_combine, corrmean_combine], cfun=isfc,
+                                   rfun='eigenvector_centrality', weights_params=laplace['params'])
+
+    is_array = timepoint_decoder(try_data, level=[1], combine= np.array([mean_combine, corrmean_combine]), cfun=isfc,
+                                   rfun='eigenvector_centrality', weights_params=laplace['params'])
+
+    assert np.allclose(is_fun, is_array, is_list)
+
+
+def timepoint_decoder_combine_wrong():
+    with pytest.raises(ValueError):
+
+        assert timepoint_decoder(try_data, level=[0, 1], combine=[corrmean_combine], cfun=isfc,
+                                 rfun='eigenvector_centrality', weights_params=laplace['params'])
+
+        assert timepoint_decoder(try_data, level=[0, 1], combine=np.array([corrmean_combine]), cfun=isfc,
+                                 rfun='eigenvector_centrality', weights_params=laplace['params'])
+
+        assert timepoint_decoder(try_data, level=[0, 1], combine='corrmean_combine', cfun=isfc, rfun='eigenvector_centrality',
+                                 weights_params=laplace['params'])
+
+
+def test_timepoint_decoder_cfun_type():
+    is_fun = timepoint_decoder(try_data, level=np.array([0, 1]), combine=corrmean_combine, cfun=isfc,
+                                               rfun='eigenvector_centrality', weights_params=laplace['params'])
+
+    is_list = timepoint_decoder(try_data, level=np.array([0, 1]), combine=corrmean_combine,
+                                                cfun=[None, isfc], rfun='eigenvector_centrality',
+                                                weights_params=laplace['params'])
+
+    is_array = timepoint_decoder(try_data, level=np.array([0, 1]), combine=corrmean_combine,
+                                                 cfun=np.array([None, isfc]),
+                                                 rfun='eigenvector_centrality', weights_params=laplace['params'])
+
+    assert np.allclose(is_fun, is_array, is_list)
+
+
+def timepoint_decoder_cfun_wrong():
+    with pytest.raises(ValueError):
+        assert timepoint_decoder(try_data, level=1, combine=corrmean_combine,
+                                                                 cfun=['isfc', 'isfc'],
+                                                                 rfun='eigenvector_centrality',
+                                                                 weights_params=laplace['params'])
+
+        assert timepoint_decoder(try_data, level=[0, 1], combine=corrmean_combine, cfun=[isfc],
+                                                        rfun='eigenvector_centrality', weights_params=laplace['params'])
+
+        assert timepoint_decoder(try_data, level=np.array([0, 1]), combine=corrmean_combine,
+                                                         cfun=np.array([isfc]),
+                                                         rfun='eigenvector_centrality',
+                                                         weights_params=laplace['params'])
+
+def test_timepoint_decode_rfun_type():
+    is_str = timepoint_decoder(try_data, level=np.array([0, 1]), combine=corrmean_combine, cfun=np.array([None, isfc]),
+                                               rfun='eigenvector_centrality', weights_params=laplace['params'])
+
+    is_list = timepoint_decoder(try_data, level=np.array([0, 1]), combine=corrmean_combine,
+                                cfun=np.array([None, isfc]),
+                                                rfun=['eigenvector_centrality', 'eigenvector_centrality'],
+                                                weights_params=laplace['params'])
+
+    is_array = timepoint_decoder(try_data, level=np.array([0, 1]), combine=corrmean_combine,
+                                                 cfun=np.array([None, isfc]),
+                                                 rfun=np.array(['eigenvector_centrality', 'eigenvector_centrality']),
+                                                 weights_params=laplace['params'])
+
+    assert np.allclose(is_str, is_array, is_list)
+
+
+def timepoint_decoder_rfun_wrong():
+    with pytest.raises(ValueError):
+        assert timepoint_decoder(try_data, level=1, combine=corrmean_combine,
+                                                             cfun=['isfc', 'isfc'],
+                                                             rfun=['eigenvector_centrality'],
+                                                             weights_params=laplace['params'])
 
 #commenting out: smoothing not implemented #TODO: implement smooth function
 #def test_smooth():

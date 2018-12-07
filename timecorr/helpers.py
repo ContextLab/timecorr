@@ -384,7 +384,6 @@ def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_we
 
 
     for i in range(0, nfolds):
-        # next_results_pd = pd.DataFrame({'rank': [0], 'accuracy': [0], 'error': [0]})
 
         in_fold_raw = []
         out_fold_raw = []

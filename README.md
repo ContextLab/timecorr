@@ -33,7 +33,7 @@ Toolbox documentation, including a full API specification, tutorials, and galler
 <h2>Installation</h2>
 
 <h3>Recommended way of installing the toolbox</h3>
-You may install the latest stable version of our toolbox using [pip](https://pypi.org):
+You may install the latest stable version of our toolbox using [pip](https://pypi.org>):
 
 `pip install timecorr`
 
@@ -42,7 +42,7 @@ or if you have a previous version already installed:
 `pip install --upgrade timecorr`
 
 
-<h3>Dangerous/hacker/developer way of installing the toolbox (use caution!)</h3>
+<h3>Dangerous (hacker) developer way of installing the toolbox (use caution!)</h3>
 To install the latest (bleeding edge) version directly from this repository use:
 
 `pip install --upgrade git+https://github.com/ContextLab/timecorr.git`
@@ -64,7 +64,7 @@ Dependencies:
 
 <h2>Contributing</h2>
 
-Thanks for considering adding to our toolbox!  Some text below hoas been borrowed from the [Matplotlib contributing guide](http://matplotlib.org/devdocs/devel/contributing.html).
+Thanks for considering adding to our toolbox!  Some text below has been borrowed from the [Matplotlib contributing guide](http://matplotlib.org/devdocs/devel/contributing.html).
 
 <h3>Submitting a bug report</h3>
 

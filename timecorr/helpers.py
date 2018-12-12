@@ -8,6 +8,8 @@ from scipy.stats import ttest_1samp as ttest
 import hypertools as hyp
 import brainconn as bc
 import pandas as pd
+from matplotlib import pyplot as plt
+
 from copy import copy, deepcopy
 
 graph_measures = {'eigenvector_centrality': bc.centrality.eigenvector_centrality_und,
@@ -558,3 +560,63 @@ def get_xval_assignments(ndata, nfolds):
         group_assignments[inds] = i
     np.random.shuffle(group_assignments)
     return group_assignments
+
+# set some defaults for plots
+SMALL_SIZE = 18
+MEDIUM_SIZE = 21
+BIGGER_SIZE = 24
+
+plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
+plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
+plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
+plt.rc('xtick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
+plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
+plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
+plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
+
+def plot_weights(weights, t=None, color='k', ax=None, xlab='Time (samples)', ylab='Weights', title=None, outfile=None):
+    """
+    Plot weights
+
+
+    Parameters
+    ----------
+    weights : int or float or None
+        Weights to plot
+
+    t : int or float
+        Time
+
+    Returns
+    ----------
+    results : png
+         Plot of weights
+
+    """
+    T = weights.shape[0]
+    if t is None:
+        t = np.round(T / 2)
+    ts = np.arange(1, T + 1)
+
+    if ax is None:
+        ax = plt.gca()
+
+    ax.plot(ts, weights[int(t), :], color=color)
+    plt.xlim([1, T])
+
+    if not (xlab is None):
+        plt.xlabel(xlab)
+
+    if not (ylab is None):
+        plt.ylabel(ylab)
+
+    if not (title is None):
+        plt.title(title)
+
+    plt.tight_layout()
+
+    if outfile:
+        plt.savefig(outfile)
+
+    else:
+        plt.show()

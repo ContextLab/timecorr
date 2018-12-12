@@ -33,7 +33,8 @@ level = 2
 results = tc.timepoint_decoder(np.array(data), level=level, combine=corrmean_combine,
                                cfun=isfc, rfun='eigenvector_centrality', weights_fun=laplace['weights'],
                                weights_params=laplace['params'])
-# print results
+
+# returns only decoding results for level 2
 print(results)
 
 # set your number of levels
@@ -45,5 +46,5 @@ results = tc.timepoint_decoder(np.array(data), level=levels, combine=corrmean_co
                                cfun=isfc, rfun='eigenvector_centrality', weights_fun=laplace['weights'],
                                weights_params=laplace['params'])
 
-# print results
+# returns decoding results for all levels up to level 2
 print(results)

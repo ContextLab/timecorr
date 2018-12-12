@@ -28,11 +28,12 @@ Choose `rfun` for reducing the data and exploring higher order structure
 + By specifiying a reduction technique, `rfun`, `timecorr` takes a timeseries of observations and returns a timeseries of correlations _with the same number of features_. This is useful in that it prevents "dimension blowup" whereby running timecorr its own output squares the number of features-- thereby preventing the efficient exploration of higher-order correlations.
 + This function may be called recursively to compute dynamic correlations ("level 1"), dynamic correlations _between_ correlations ("level 2"), dynamic correlations between correlations between correlations ("level 3"), etc. If `rfun` is not specified, the returned data matrix will have number-of-timepoints rows and $\frac{n^2 - n}{2}$ features.
 
+Toolbox documentation, including a full API specification, tutorials, and gallery of examples may be found [here](http://timecorr.readthedocs.io/) on our readthedocs page.
 
 <h2>Installation</h2>
 
 <h3>Recommended way of installing the toolbox</h3>
-You may install the latest stable version of our toolbox using [pip](https://pypi.python.org/pypi/pip):
+You may install the latest stable version of our toolbox using [pip](https://pypi.org):
 
 `pip install timecorr`
 

@@ -4,29 +4,30 @@ The TimeCorr toolbox provides tools for computing and exploring the correlationa
 + `timecorr` is used to compute dynamic correlations from a timeseries of observations and to find higher order structure in the data, organized as a number-of-timepoints by number-of-features matrix.
 
 
-<h3>Basic usage</h3>
+<h2>Basic usage</h2>
 
 
-## `timecorr`
+<h3>`timecorr`</h3>
 The `timecorr` function takes your data and returns moment-by-moment correlations during the same timepoints. `timecorr` also lets you explore higher order structure in the data in a computationally tractable way by specifiying a dimensionality reduction technique.
 + `timecorr` computes dynamic correlations and return a result in the same format, but where each data matrix has number-of-timepoints rows and $\frac{n^2 - n}{2}$ features (i.e. a vectorized version of the upper triangle of each timepoint's correlation matrix).
 + `timecorr` also lets you explore higher order structure in the data by projecting the correlations back onto the original number-of-timepoints by number-of-featuers space.
 
-### Format your data
-You should format your data as a Numpy array or Pandas dataframe with one row per observation and one column per feature (i.e. things you're tracking over time-- e.g. a voxel, electrode, channel, etc.).  You can then pass timecorr a single dataframe or a list of dataframes (each with the same numbers of timepoints and features).
+<h4>Format your data</h4>
++ You should format your data as a Numpy array or Pandas dataframe with one row per observation and one column per feature (i.e. things you're tracking over time-- e.g. a voxel, electrode, channel, etc.).  You can then pass timecorr a single dataframe or a list of dataframes (each with the same numbers of timepoints and features).
 
-### Pick a `weights_function`
-How much the observed data at every timepoint contributes to the correlations at each timepoint.
+<h4>Pick a `weights_function`</h4>
++ How much the observed data at every timepoint contributes to the correlations at each timepoint.
 
-### Specifiy the `weights_params`
-Parameters for `weights_function`
+<h4>Specifiy the `weights_params`</h4>
++ Parameters for `weights_function`
 
-### Choose `cfun` for computing dynamic correlations
-The correlations may be computed _within_ a single matrix, or _across_ a list of such matrices. If a list of data matrices are passed, each data matrix is compared to the average of the other data matrices (`isfc` mode) or a similarity-weighted average of the other data matrices (`wisfc` mode).  If only a single data matrix is passed, the correlations are computed with respect to the same data matrix.
-Computing correlations _across_ a list is for finding shared correlation across sets of observations (e.g. from different experimental participants).  If only a single data matrix is passed, `across` mode will behave the same as `within` mode.  If a list of data matrices is passed, `isfc` mode computes each matrix's correlations with respect to the average of the others, and then averages across all of those correlations.  `wisfc` mode behaves similarly, but computes weighted averages (e.g. based on inter-matrix similarities).
+<h4>Choose `cfun` for computing dynamic correlations</h4>
++ The correlations may be computed _within_ a single matrix, or _across_ a list of such matrices. If a list of data matrices are passed, each data matrix is compared to the average of the other data matrices (`isfc` mode) or a similarity-weighted average of the other data matrices (`wisfc` mode).  If only a single data matrix is passed, the correlations are computed with respect to the same data matrix.
++ Computing correlations _across_ a list is for finding shared correlation across sets of observations (e.g. from different experimental participants).  If only a single data matrix is passed, `across` mode will behave the same as `within` mode.  If a list of data matrices is passed, `isfc` mode computes each matrix's correlations with respect to the average of the others, and then averages across all of those correlations.  `wisfc` mode behaves similarly, but computes weighted averages (e.g. based on inter-matrix similarities).
 
-### Choose `rfun` for reducing the data and exploring higher order structure
-By specifiying a reduction technique, `rfun`, `timecorr` takes a timeseries of observations and returns a timeseries of correlations _with the same number of features_. This is useful in that it prevents "dimension blowup" whereby running timecorr its own output squares the number of features-- thereby preventing the efficient exploration of higher-order correlations. This function may be called recursively to compute dynamic correlations ("level 1"), dynamic correlations _between_ correlations ("level 2"), dynamic correlations between correlations between correlations ("level 3"), etc. If `rfun` is not specified, the returned data matrix will have number-of-timepoints rows and $\frac{n^2 - n}{2}$ features.
+<h4>Choose `rfun` for reducing the data and exploring higher order structure</h4>
++ By specifiying a reduction technique, `rfun`, `timecorr` takes a timeseries of observations and returns a timeseries of correlations _with the same number of features_. This is useful in that it prevents "dimension blowup" whereby running timecorr its own output squares the number of features-- thereby preventing the efficient exploration of higher-order correlations.
++ This function may be called recursively to compute dynamic correlations ("level 1"), dynamic correlations _between_ correlations ("level 2"), dynamic correlations between correlations between correlations ("level 3"), etc. If `rfun` is not specified, the returned data matrix will have number-of-timepoints rows and $\frac{n^2 - n}{2}$ features.
 
 
 <h2>Installation</h2>

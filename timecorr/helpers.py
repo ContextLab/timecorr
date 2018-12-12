@@ -492,10 +492,38 @@ def rmdiag(m):
 
 
 def r2z(r):
+    """
+    Function that calculates the Fisher z-transformation
+
+    Parameters
+    ----------
+    r : int or ndarray
+        Correlation value
+
+    Returns
+    ----------
+    result : int or ndarray
+        Fishers z transformed correlation value
+
+    """
     return 0.5*(np.log(1+r) - np.log(1-r))
 
 
 def z2r(z):
+    """
+    Function that calculates the inverse Fisher z-transformation
+
+    Parameters
+    ----------
+    z : int or ndarray
+        Fishers z transformed correlation value
+
+    Returns
+    ----------
+    result : int or ndarray
+        Correlation value
+
+    """
     r = np.divide((np.exp(2*z) - 1), (np.exp(2*z) + 1))
     r[np.isnan(r)] = 0
     r[np.isinf(r)] = np.sign(r)[np.isinf(r)]
@@ -508,6 +536,20 @@ def iseven(x):
     return np.remainder(x, 2) == 0
 
 def mat2vec(m):
+    """
+    Function that converts correlation matrix to a vector
+
+    Parameters
+    ----------
+    m : ndarray
+        Correlation matix
+
+    Returns
+    ----------
+    result : ndarray
+        Vector
+
+    """
     K = m.shape[0]
     V = int((((K ** 2) - K) / 2) + K)
 
@@ -532,6 +574,20 @@ def mat2vec(m):
 
 
 def vec2mat(v):
+    """
+    Function that converts vector back to correlation matrix
+
+    Parameters
+    ----------
+    result : ndarray
+        Vector
+
+    Returns
+    ----------
+    m : ndarray
+        Correlation matix
+
+    """
     if (v.ndim == 1) or (v.shape[0] == 1):
         x = int(0.5*(np.sqrt(8*len(v) + 1) - 1))
         return sd.squareform(v[x:]) + np.diag(v[0:x])

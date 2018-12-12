@@ -3,19 +3,12 @@
    You can adapt this file completely to your liking, but it should at least
    contain the root `toctree` directive.
 
-Welcome to sample's documentation!
-==================================
+**timecorr**: A Python toolbox for calculating dynamic correlations and exploring higher order correlations
+===========================================================================================================
 
-Contents:
+   .. image:: _static/try_it.png
+       :width: 400pt
 
-.. toctree::
-   :maxdepth: 2
+ .. toctree::
 
-
-
-Indices and tables
-==================
-
-* :ref:`genindex`
-* :ref:`modindex`
-* :ref:`search`
+blah blah

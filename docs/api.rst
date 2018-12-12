@@ -17,12 +17,4 @@ timecorr
 
   timecorr
 
-levelup
-------------------
 
-.. autosummary::
-  :toctree:
-
-  levelup
-
- .. toctree::

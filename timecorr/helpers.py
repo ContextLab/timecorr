@@ -444,12 +444,9 @@ def weighted_timepoint_decoder(data, mu=None, nfolds=2, level=0, cfun=isfc, weig
     results_pd['accuracy'] /= nfolds
     results_pd['rank'] /= nfolds
 
-
-
-
     return results_pd
 
-def optimize_weighted_timepoint_decoder(data, mu=None, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_weights, weights_params=laplace_params,
+def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_weights, weights_params=laplace_params,
                       combine=mean_combine, rfun=None):
     """
     :param data: a list of number-of-observations by number-of-features matrices
@@ -471,11 +468,7 @@ def optimize_weighted_timepoint_decoder(data, mu=None, nfolds=2, level=0, cfun=i
     """
 
     from .timecorr import timecorr
-    ## assert all mu values ((mu >= 0) and (mu <= 1)) and sum to 1 and equal to number of levels
 
-    # assert np.sum(mu)==1
-    # assert np.shape(mu[1])== np.max(level)
-    #assert ((mu >= 0) and (mu <= 1))
     assert len(np.unique(
         list(map(lambda x: x.shape[0], data)))) == 1, 'all data matrices must have the same number of timepoints'
     assert len(np.unique(
@@ -521,6 +514,10 @@ def optimize_weighted_timepoint_decoder(data, mu=None, nfolds=2, level=0, cfun=i
     assert len(level)==len(rfun), 'parameter lengths need to be the same as level if input is ' \
                                                            'type np.ndarray or list'
 
+    results_pd = pd.DataFrame({'level': orig_level, 'rank': [0] * len(orig_level), 'accuracy': [0] * len(orig_level),
+                               'error': [0] * len(orig_level)})
+
+    mus = np.zeros(np.max(level)+1)
 
     for i in range(0, nfolds):
 
@@ -581,25 +578,36 @@ def optimize_weighted_timepoint_decoder(data, mu=None, nfolds=2, level=0, cfun=i
             corrs.append(next_corrs)
             sub_corrs.append(next_subcorrs)
 
-        b = (0, 1)
-        bns = (b, b, b)
+        mu = optimize_weights(sub_corrs)
 
-        con1 = {'type': 'eq', 'fun': constraint1}
-
-        #cons = [con1]
-        #sub_corrs = weight_corrs(sub_corrs, mu)
-        #minimize(optimize_weights, x0=[.5,.3,.2], args=sub_corrs)
-        x0 = np.array([0, 0, 0])
-        sol = minimize(optimize_weights, x0, args=sub_corrs, bounds=bns, constraints=con1, options={'disp': True ,'eps' : 1e0})
+        mus += mu
 
         corrs = weight_corrs(corrs, mu)
-        results_pd = decoder(corrs)
+        results_pd += decoder(corrs)
 
+    results_pd['level'] = v
     results_pd['error'] /= nfolds
     results_pd['accuracy'] /= nfolds
     results_pd['rank'] /= nfolds
 
-    return results_pd
+    mu_pd = pd.DataFrame(mus/nfolds).T
+    column_list = []
+    for c in np.arange(v + 1):
+        column_list.append('level_' + str(c))
+
+    return results_pd, mu_pd
+
+def optimize_weights(corrs):
+
+    b = (0, 1)
+    bns = (b,) * np.shape(corrs)[0]
+    con1 = {'type': 'eq', 'fun': constraint1}
+    # x0 = np.repeat(1/np.shape(corrs)[0], np.shape(corrs)[0])
+    x0 = np.zeros(np.shape(corrs)[0])
+    min_mu = minimize(calculate_error, x0, args=corrs, bounds=bns, constraints=con1, options={'disp': True, 'eps': 1e0})
+
+    return min_mu.x
+
 
 def constraint1(x):
     sum_xs=1
@@ -608,30 +616,10 @@ def constraint1(x):
 
     return sum_xs
 
-def optimize_weights(mu, corrs):
-    #results = decoder(weight_corrs(np.squeeze(corrs, axis=0), mu))
+def calculate_error(mu, corrs):
+
     results = decoder(weight_corrs(corrs, mu))
     return results['error'].values
-
-    # weighted_corrs = 0
-    #
-    # for i in np.arange(np.shape(corrs)[0]):
-    #     weighted_corrs += mu[i] * z2r(corrs[i])
-    #
-    # corrs = r2z(weighted_corrs)
-    #
-    # next_results_pd = pd.DataFrame({'rank': [0], 'accuracy': [0], 'error': [0]})
-    # for t in np.arange(corrs.shape[0]):
-    #     decoded_inds = np.argmax(corrs[t, :])
-    #     next_results_pd['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / corrs.shape[0]
-    #     next_results_pd['accuracy'] += np.mean(decoded_inds == np.array(t))
-    #     next_results_pd['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
-    #
-    # next_results_pd['error'] = next_results_pd['error'].values / corrs.shape[0]
-    # next_results_pd['accuracy'] = next_results_pd['accuracy'].values / corrs.shape[0]
-    # next_results_pd['rank'] = next_results_pd['rank'].values / corrs.shape[0]
-    #
-    # return next_results_pd['error'].values
 
 
 def weight_corrs(corrs, mu):

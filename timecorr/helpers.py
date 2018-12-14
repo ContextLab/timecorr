@@ -589,8 +589,8 @@ def optimize_weighted_timepoint_decoder(data, mu=None, nfolds=2, level=0, cfun=i
         #cons = [con1]
         #sub_corrs = weight_corrs(sub_corrs, mu)
         #minimize(optimize_weights, x0=[.5,.3,.2], args=sub_corrs)
-        x0 = [.5, .3, .2]
-        sol = minimize(optimize_weights, x0, args=sub_corrs, bounds=bns, constraints=con1)
+        x0 = np.array([0, 0, 0])
+        sol = minimize(optimize_weights, x0, args=sub_corrs, bounds=bns, constraints=con1, options={'disp': True ,'eps' : 1e0})
 
         corrs = weight_corrs(corrs, mu)
         results_pd = decoder(corrs)
@@ -610,28 +610,28 @@ def constraint1(x):
 
 def optimize_weights(mu, corrs):
     #results = decoder(weight_corrs(np.squeeze(corrs, axis=0), mu))
-    #results = decoder(weight_corrs(corrs, mu))
-    #return results['error']
+    results = decoder(weight_corrs(corrs, mu))
+    return results['error'].values
 
-    weighted_corrs = 0
-
-    for i in np.arange(np.shape(corrs)[0]):
-        weighted_corrs += mu[i] * z2r(corrs[i])
-
-    corrs = r2z(weighted_corrs)
-
-    next_results_pd = pd.DataFrame({'rank': [0], 'accuracy': [0], 'error': [0]})
-    for t in np.arange(corrs.shape[0]):
-        decoded_inds = np.argmax(corrs[t, :])
-        next_results_pd['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / corrs.shape[0]
-        next_results_pd['accuracy'] += np.mean(decoded_inds == np.array(t))
-        next_results_pd['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
-
-    next_results_pd['error'] = next_results_pd['error'].values / corrs.shape[0]
-    next_results_pd['accuracy'] = next_results_pd['accuracy'].values / corrs.shape[0]
-    next_results_pd['rank'] = next_results_pd['rank'].values / corrs.shape[0]
-
-    return next_results_pd['error'].values
+    # weighted_corrs = 0
+    #
+    # for i in np.arange(np.shape(corrs)[0]):
+    #     weighted_corrs += mu[i] * z2r(corrs[i])
+    #
+    # corrs = r2z(weighted_corrs)
+    #
+    # next_results_pd = pd.DataFrame({'rank': [0], 'accuracy': [0], 'error': [0]})
+    # for t in np.arange(corrs.shape[0]):
+    #     decoded_inds = np.argmax(corrs[t, :])
+    #     next_results_pd['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / corrs.shape[0]
+    #     next_results_pd['accuracy'] += np.mean(decoded_inds == np.array(t))
+    #     next_results_pd['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
+    #
+    # next_results_pd['error'] = next_results_pd['error'].values / corrs.shape[0]
+    # next_results_pd['accuracy'] = next_results_pd['accuracy'].values / corrs.shape[0]
+    # next_results_pd['rank'] = next_results_pd['rank'].values / corrs.shape[0]
+    #
+    # return next_results_pd['error'].values
 
 
 def weight_corrs(corrs, mu):

@@ -29,10 +29,13 @@ laplace = {'name': 'Laplace', 'weights': tc.laplace_weights, 'params': {'scale':
 # if integer, returns decoding accuracy, error, and rank for specified level
 level = 2
 
+## optimize mu:
+
+
 mu = [.5,.3,.2]
 
 # run timecorr with specified functions for calculating correlations, as well as combining and reducing
-results = tc.weighted_timepoint_decoder(np.array(data), level=level, mu=mu, combine=corrmean_combine,
+results = tc.optimize_weighted_timepoint_decoder(np.array(data), mu=mu, level=level, combine=corrmean_combine,
                                cfun=isfc, rfun='eigenvector_centrality', weights_fun=laplace['weights'],
                                weights_params=laplace['params'])
 

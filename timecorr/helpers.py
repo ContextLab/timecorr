@@ -500,13 +500,7 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
     assert len(level)==len(rfun), 'parameter lengths need to be the same as level if input is ' \
                                                            'type np.ndarray or list'
 
-
     results_pd = pd.DataFrame()
-
-    mu_pd = pd.DataFrame()
-    for c in np.arange(np.max(level) + 1):
-        mu_pd['level_' + str(c)] = [0]
-
 
     for i in range(0, nfolds):
 
@@ -563,7 +557,11 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
         next_results_pd['level'] = v
         next_results_pd['folds'] = i
 
-        mu_pd = mu
+        mu_pd = pd.DataFrame()
+        for c in np.arange(np.max(level) + 1):
+            mu_pd['level_' + str(c)] = [0]
+
+        mu_pd += mu
 
         next_results_pd = pd.concat([next_results_pd, mu_pd], axis=1, join_axes=[next_results_pd.index])
 

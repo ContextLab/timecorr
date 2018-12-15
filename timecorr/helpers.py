@@ -446,8 +446,8 @@ def weighted_timepoint_decoder(data, mu=None, nfolds=2, level=0, cfun=isfc, weig
 
     return results_pd
 
-def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_weights, weights_params=laplace_params,
-                      combine=mean_combine, rfun=None):
+def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_weights,
+                                        weights_params=laplace_params, combine=mean_combine, rfun=None):
     """
     :param data: a list of number-of-observations by number-of-features matrices
     :param nfolds: number of cross-validation folds (train using out-of-fold data;
@@ -496,7 +496,8 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
 
     combine = np.ravel(combine)
 
-    assert type(combine) is np.ndarray and type(combine[0]) is not np.str_, 'combine needs to be a function, list of functions, or np.ndarray of functions'
+    assert type(combine) is np.ndarray and type(combine[0]) is not np.str_, 'combine needs to be a function, list of ' \
+                                                                            'functions, or np.ndarray of functions'
     assert len(level)==len(combine), 'combine length need to be the same as level if input is type np.ndarray or list'
 
     if callable(cfun):
@@ -504,7 +505,8 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
 
     cfun = np.ravel(cfun)
 
-    assert type(cfun) is np.ndarray and type(cfun[0]) is not np.str_, 'combine needs be a function, list of functions, or np.ndarray of functions'
+    assert type(cfun) is np.ndarray and type(cfun[0]) is not np.str_, 'combine needs be a function, list of functions, ' \
+                                                                      'or np.ndarray of functions'
     assert len(level)==len(cfun), 'cfun length need to be the same as level if input is type np.ndarray or list'
 
 
@@ -513,77 +515,71 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
 
     assert len(level)==len(rfun), 'parameter lengths need to be the same as level if input is ' \
                                                            'type np.ndarray or list'
+    # mu_pd = pd.DataFrame()
+    # column_list = []
+    # for c in np.arange(np.max(level) + 1):
+    #     column_list.append('level_' + str(c))
 
-    results_pd = pd.DataFrame({'level': orig_level, 'rank': [0] * len(orig_level), 'accuracy': [0] * len(orig_level),
-                               'error': [0] * len(orig_level)})
+    results_pd = pd.DataFrame({'level': orig_level*nfolds, 'rank': [0] * len(orig_level*nfolds),
+                               'accuracy': [0] * len(orig_level*nfolds),
+                               'error': [0] * len(orig_level*nfolds)})
 
     mus = np.zeros(np.max(level)+1)
 
     for i in range(0, nfolds):
 
-        in_fold_raw = []
-        out_fold_raw = []
-        sub_in_fold_raw = []
-        sub_out_fold_raw = []
+        in_raw = []
+        out_raw = []
+        sub_in_raw = []
+        sub_out_raw = []
         sub_corrs = []
         corrs = []
         for v in level:
 
             if v==0:
-                in_fold_smooth = np.asarray(timecorr([x for x in data[group_assignments == i]], cfun=None,
-                                                     rfun=rfun[v], combine=combine[v], weights_function=weights_fun,
-                                                     weights_params=weights_params))
-                out_fold_smooth = np.asarray(timecorr([x for x in data[group_assignments != i]], cfun=None,
-                                                      rfun=rfun[v], combine=combine[v], weights_function=weights_fun,
-                                                      weights_params=weights_params))
-                in_fold_raw = mean_combine([x for x in data[group_assignments == i]])
-                out_fold_raw = mean_combine([x for x in data[group_assignments != i]])
+                in_data = [x for x in data[group_assignments == i]]
+                out_data = [x for x in data[group_assignments != i]]
+
+                in_smooth, out_smooth, in_raw, out_raw = folding_levels(in_data, out_data, level=v, cfun=None,rfun=rfun,
+                                                                        combine=combine, weights_fun=weights_fun,
+                                                                        weights_params=weights_params)
+
                 for s in range(0, nfolds):
-                    sub_in_fold_smooth = np.asarray(timecorr([x for x in data[group_assignments == i][subgroup_assignments==s]], cfun=None,
-                                                         rfun=rfun[v], combine=combine[v], weights_function=weights_fun,
-                                                         weights_params=weights_params))
-                    sub_out_fold_smooth = np.asarray(timecorr([x for x in data[group_assignments != i][subgroup_assignments!=s]], cfun=None,
-                                                          rfun=rfun[v], combine=combine[v],
-                                                          weights_function=weights_fun,
-                                                          weights_params=weights_params))
-                    sub_in_fold_raw = mean_combine([x for x in data[group_assignments == i][subgroup_assignments==s]])
-                    sub_out_fold_raw = mean_combine([x for x in data[group_assignments != i][subgroup_assignments!=s]])
+                    sub_in_data = [x for x in data[group_assignments == i][subgroup_assignments==s]]
+                    sub_out_data = [x for x in data[group_assignments == i][subgroup_assignments!=s]]
+
+                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_data, sub_out_data,
+                                                                                            level=v, cfun=None, rfun=rfun,
+                                                                                            combine=combine,
+                                                                                            weights_fun=weights_fun,
+                                                                                            weights_params=weights_params)
 
             else:
 
-                in_fold_smooth = np.asarray(timecorr(in_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=combine[v],
-                                                     weights_function=weights_fun, weights_params=weights_params))
-
-                out_fold_smooth = np.asarray(timecorr(out_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=combine[v],
-                                                     weights_function=weights_fun, weights_params=weights_params))
-                in_fold_raw = np.asarray(timecorr(in_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=null_combine,
-                                                  weights_function=eye_weights, weights_params=eye_params))
-                out_fold_raw = np.asarray(timecorr(out_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=null_combine,
-                                                   weights_function=eye_weights, weights_params=eye_params))
-
+                in_smooth, out_smooth, in_raw, out_raw = folding_levels(in_raw, out_raw, level=v, cfun=cfun,
+                                                                        rfun=rfun, combine=combine,
+                                                                        weights_fun=weights_fun,
+                                                                        weights_params=weights_params)
                 for s in range(0, nfolds):
-                    sub_in_fold_smooth = np.asarray(timecorr(sub_in_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=combine[v],
-                                                     weights_function=weights_fun, weights_params=weights_params))
-                    sub_out_fold_smooth = np.asarray(timecorr(sub_out_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=combine[v],
-                                                     weights_function=weights_fun, weights_params=weights_params))
+                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_raw, sub_out_raw,
+                                                                                            level=v, cfun=cfun,
+                                                                                            rfun=rfun, combine=combine,
+                                                                                            weights_fun=weights_fun,
+                                                                                            weights_params=weights_params)
 
-                    sub_in_fold_raw = np.asarray(timecorr(sub_in_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=null_combine,
-                                                      weights_function=eye_weights, weights_params=eye_params))
-                    sub_out_fold_raw = np.asarray(timecorr(sub_out_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=null_combine,
-                                                       weights_function=eye_weights, weights_params=eye_params))
-
-            next_corrs = (1 - sd.cdist(in_fold_smooth, out_fold_smooth, 'correlation'))
-            next_subcorrs = (1 - sd.cdist(sub_in_fold_smooth, sub_out_fold_smooth, 'correlation'))
+            next_corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
+            next_subcorrs = (1 - sd.cdist(sub_in_smooth, sub_out_smooth, 'correlation'))
 
             corrs.append(next_corrs)
             sub_corrs.append(next_subcorrs)
 
         mu = optimize_weights(sub_corrs)
 
-        mus += mu
-
         corrs = weight_corrs(corrs, mu)
         results_pd += decoder(corrs)
+
+        ## number of folds by number of mus array - store that whole matrix
+        mus += mu
 
     results_pd['level'] = v
     results_pd['error'] /= nfolds
@@ -597,29 +593,49 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
 
     return results_pd, mu_pd
 
+def folding_levels(infold_data, outfold_data, level=0, cfun=None, weights_fun=None, weights_params=None, combine=None,
+                   rfun=None):
+
+    from .timecorr import timecorr
+
+    if level == 0:
+
+        in_fold_smooth = np.asarray(timecorr([x for x in infold_data], cfun=None,
+                                             rfun=rfun[level], combine=combine[level], weights_function=weights_fun,
+                                             weights_params=weights_params))
+        out_fold_smooth = np.asarray(timecorr([x for x in outfold_data], cfun=None,
+                                                  rfun=rfun[level], combine=combine[level], weights_function=weights_fun,
+                     weights_params=weights_params))
+        in_fold_raw = mean_combine([x for x in infold_data])
+        out_fold_raw = mean_combine([x for x in outfold_data])
+
+    else:
+        in_fold_smooth = np.asarray(timecorr(infold_data, cfun=cfun[level], rfun=rfun[level], combine=combine[level],
+                                                 weights_function=weights_fun, weights_params=weights_params))
+        out_fold_smooth = np.asarray(timecorr(outfold_data, cfun=cfun[level], rfun=rfun[level], combine=combine[level],
+                                                  weights_function=weights_fun, weights_params=weights_params))
+        in_fold_raw = np.asarray(timecorr(infold_data, cfun=cfun[level], rfun=rfun[level], combine=null_combine,
+                                              weights_function=eye_weights, weights_params=eye_params))
+        out_fold_raw = np.asarray(timecorr(outfold_data, cfun=cfun[level], rfun=rfun[level], combine=null_combine,
+                                               weights_function=eye_weights, weights_params=eye_params))
+
+    return in_fold_smooth, out_fold_smooth, in_fold_raw, out_fold_raw
+
 def optimize_weights(corrs):
 
     b = (0, 1)
     bns = (b,) * np.shape(corrs)[0]
-    con1 = {'type': 'eq', 'fun': constraint1}
-    # x0 = np.repeat(1/np.shape(corrs)[0], np.shape(corrs)[0])
-    x0 = np.zeros(np.shape(corrs)[0])
-    min_mu = minimize(calculate_error, x0, args=corrs, bounds=bns, constraints=con1, options={'disp': True, 'eps': 1e0})
+    con1 = {'type': 'eq', 'fun': lambda x: 1 - np.sum(x)}
+    x0 = np.repeat(1/np.shape(corrs)[0], np.shape(corrs)[0])
+
+    min_mu = minimize(calculate_error, x0, args=corrs, bounds=bns, constraints=con1, options={'disp': True, 'eps': 1e-2})
 
     return min_mu.x
 
-
-def constraint1(x):
-    sum_xs=1
-    for i in range(len(x)):
-        sum_xs = sum_xs - x[i]
-
-    return sum_xs
-
-def calculate_error(mu, corrs):
+def calculate_error(mu, corrs, metric='error', sign=1):
 
     results = decoder(weight_corrs(corrs, mu))
-    return results['error'].values
+    return sign * results[metric].values
 
 
 def weight_corrs(corrs, mu):

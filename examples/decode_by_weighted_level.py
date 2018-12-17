@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-=============================
-Decode by level
-=============================
+=======================================
+Optimized weights by level for decoding
+=======================================
 
-In this example, we load in some example data, and decode by level of higher order correlation.
+In this example, we load in some example data, and find optimal level weights for decoding.
 
 """
 # Code source: Lucy Owen

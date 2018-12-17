@@ -333,9 +333,6 @@ def timepoint_decoder(data, mu=None, nfolds=2, level=0, cfun=isfc, weights_fun=l
                 of the total number of windows
     """
 
-    from .timecorr import timecorr
-
-
     assert len(np.unique(
         list(map(lambda x: x.shape[0], data)))) == 1, 'all data matrices must have the same number of timepoints'
     assert len(np.unique(
@@ -640,130 +637,6 @@ def decoder(corrs):
 
     return next_results_pd
 
-#
-# # TODO: need to debug this...
-# # WISHLIST:
-# #   - support passing in a list of connectivity (or activity) functions, a list of reduce functions,
-# #     and a mixing proportions vector; compute stats for all non-zero mixing proportions and use those
-# #     stats (weighted appropriately) to do the decoding
-# def timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_weights, weights_params=laplace_params,
-#                       combine=mean_combine, rfun=None):
-#     """
-#     :param data: a list of number-of-observations by number-of-features matrices
-#     :param nfolds: number of cross-validation folds (train using out-of-fold data;
-#                    test using in-fold data)
-#     :param level: integer or list of integers for levels to be evaluated (default:0)
-#     :param cfun: function for transforming the group data (default: isfc)
-#     :param weights_fun: used to compute per-timepoint weights for cfun; default: laplace_weights
-#     :param  weights_params: parameters passed to weights_fun; default: laplace_params
-#     :params combine: function for combining data within each group, or a list of such functions (default: mean_combine)
-#     :param rfun: function for reducing output (default: None)
-#     :return: results dictionary with the following keys:
-#        'rank': mean percentile rank (across all timepoints and folds) in the
-#                decoding distribution of the true timepoint
-#        'accuracy': mean percent accuracy (across all timepoints and folds)
-#        'error': mean estimation error (across all timepoints and folds) between
-#                 the decoded and actual window numbers, expressed as a percentage
-#                 of the total number of windows
-#     """
-#
-#     from .timecorr import timecorr
-#
-#     assert len(np.unique(
-#         list(map(lambda x: x.shape[0], data)))) == 1, 'all data matrices must have the same number of timepoints'
-#     assert len(np.unique(
-#         list(map(lambda x: x.shape[1], data)))) == 1, 'all data matrices must have the same number of features'
-#
-#     group_assignments = get_xval_assignments(len(data), nfolds)
-#
-#     orig_level = level
-#     orig_level = np.ravel(orig_level)
-#
-#     if type(level) is int:
-#         level = np.arange(level + 1)
-#
-#     level = np.ravel(level)
-#
-#     assert type(level) is np.ndarray, 'level needs be an integer, list, or np.ndarray'
-#     assert not np.any(level < 0), 'level cannot contain negative numbers'
-#
-#     if not np.all(np.arange(level.max()+1)==level):
-#         level = np.arange(level.max()+1)
-#
-#     if callable(combine):
-#         combine = [combine] * np.shape(level)[0]
-#
-#     combine = np.ravel(combine)
-#
-#     assert type(combine) is np.ndarray and type(combine[0]) is not np.str_, 'combine needs to be a function, list of functions, or np.ndarray of functions'
-#     assert len(level)==len(combine), 'combine length need to be the same as level if input is type np.ndarray or list'
-#
-#     if callable(cfun):
-#         cfun = [cfun] * np.shape(level)[0]
-#
-#     cfun = np.ravel(cfun)
-#
-#     assert type(cfun) is np.ndarray and type(cfun[0]) is not np.str_, 'combine needs be a function, list of functions, or np.ndarray of functions'
-#     assert len(level)==len(cfun), 'cfun length need to be the same as level if input is type np.ndarray or list'
-#
-#
-#     if type(rfun) not in [list, np.ndarray]:
-#         rfun = [rfun] * np.shape(level)[0]
-#
-#     assert len(level)==len(rfun), 'parameter lengths need to be the same as level if input is ' \
-#                                                            'type np.ndarray or list'
-#
-#     results_pd = pd.DataFrame({'level': orig_level, 'rank': [0] * len(orig_level), 'accuracy': [0] * len(orig_level), 'error': [0] * len(orig_level)})
-#
-#
-#     for i in range(0, nfolds):
-#
-#         in_fold_raw = []
-#         out_fold_raw = []
-#
-#         for v in level:
-#
-#             if v==0:
-#                 in_fold_smooth = np.asarray(timecorr([x for x in data[group_assignments == i]], cfun=None,
-#                                                      rfun=rfun[v], combine=combine[v], weights_function=weights_fun,
-#                                                      weights_params=weights_params))
-#                 out_fold_smooth = np.asarray(timecorr([x for x in data[group_assignments != i]], cfun=None,
-#                                                       rfun=rfun[v], combine=combine[v], weights_function=weights_fun,
-#                                                       weights_params=weights_params))
-#                 in_fold_raw = mean_combine([x for x in data[group_assignments == i]])
-#                 out_fold_raw = mean_combine([x for x in data[group_assignments != i]])
-#             else:
-#                 in_fold_smooth = np.asarray(timecorr(in_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=combine[v],
-#                                                      weights_function=weights_fun, weights_params=weights_params))
-#                 out_fold_smooth = np.asarray(timecorr(out_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=combine[v],
-#                                                      weights_function=weights_fun, weights_params=weights_params))
-#                 in_fold_raw = np.asarray(timecorr(in_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=null_combine,
-#                                                   weights_function=eye_weights, weights_params=eye_params))
-#                 out_fold_raw = np.asarray(timecorr(out_fold_raw, cfun=cfun[v], rfun=rfun[v], combine=null_combine,
-#                                                    weights_function=eye_weights, weights_params=eye_params))
-#
-#             if v in orig_level:
-#                 next_results_pd = pd.DataFrame({'rank': [0], 'accuracy': [0], 'error': [0]})
-#
-#                 corrs = (1-sd.cdist(in_fold_smooth, out_fold_smooth, 'correlation'))
-#                 for t in np.arange(corrs.shape[0]):
-#                     decoded_inds = np.argmax(corrs[t, :])
-#                     next_results_pd['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / corrs.shape[0]
-#                     next_results_pd['accuracy'] += np.mean(decoded_inds == np.array(t))
-#                     next_results_pd['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
-#
-#                 results_pd.loc[results_pd['level'] == v, 'error']+= next_results_pd['error'].values / corrs.shape[0]
-#                 results_pd.loc[results_pd['level'] == v, 'accuracy']+= next_results_pd['accuracy'].values / corrs.shape[0]
-#                 results_pd.loc[results_pd['level'] == v, 'rank']+= next_results_pd['rank'].values / corrs.shape[0]
-#
-#     results_pd['error'] /= nfolds
-#     results_pd['accuracy'] /= nfolds
-#     results_pd['rank'] /= nfolds
-#
-#
-#
-#
-#     return results_pd
 
 # def predict(x, n=1):
 #     '''
@@ -820,6 +693,30 @@ def weighted_mean(x, axis=None, weights=None, tol=1e-5):
 
 def rmdiag(m):
     return m - np.diag(np.diag(m))
+
+
+def generate_random_covariance_matrix(N):
+    template = np.random.randn(N, N)
+    cov = np.multiply(template, template.T)
+    return mat2vec(cov)
+
+def generate_data(sq_cov, T):
+    import warnings
+    warnings.simplefilter('ignore')
+    covmat = vec2mat(sq_cov)
+    return np.random.multivariate_normal(np.zeros(covmat.shape[0]), covmat, (T))
+
+def generate_template_data(covs, T):
+    data = []
+    for i in np.arange(covs.shape[0]):
+        data.extend(generate_data(covs[i, :], T))
+    return np.vstack(data)
+
+def generate_subject_data(T, E, template):
+    noise = np.random.randn(T*E, template.shape[1])
+    return np.add(template, noise)
+
+
 
 
 def r2z(r):

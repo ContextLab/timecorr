@@ -24,7 +24,7 @@ width = 10
 laplace = {'name': 'Laplace', 'weights': tc.laplace_weights, 'params': {'scale': width}}
 
 # create synthetic data with specified paramters
-S = 1  # number of subjects
+S = 5  # number of subjects
 T = 100  # number of timepoints per event
 E = 10  # number of events
 K = 100  # number of features
@@ -34,11 +34,16 @@ covs = np.zeros((E, int((K**2 - K)/2 + K)))
 for event in np.arange(E):
     covs[event, :] = generate_random_covariance_matrix(K)
 
-# generate 2 synthetic datasets from same covariance matrices
+# generate synthetic data from covariance matrices
 template_data = generate_template_data(covs, T)
-data_1 = generate_subject_data(T, E, template_data)
-data_2 = generate_subject_data(T, E, template_data)
 
-# calculate the dynamic correlation of the two datasets
-# total time = T*E
-try_wcorr = wcorr(np.array(data_1),  np.array(data_2), weights=laplace['weights'](T*E))
+data_1 = []
+for s in np.arange(S):
+    data_1.append(generate_subject_data(T, E, template_data))
+
+data_2 = []
+for s in np.arange(S):
+    data_2.append(generate_subject_data(T, E, template_data))
+
+
+try_wcorr = wcorr(np.array(data_1),  np.array(data_2), weights=laplace['weights'])

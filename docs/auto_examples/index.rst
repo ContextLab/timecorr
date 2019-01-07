@@ -9,6 +9,26 @@ Gallery of Examples
 
 .. raw:: html
 
+    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we simulate data">
+
+.. only:: html
+
+    .. figure:: /auto_examples/images/thumb/sphx_glr_simulate_data_thumb.png
+
+        :ref:`sphx_glr_auto_examples_simulate_data.py`
+
+.. raw:: html
+
+    </div>
+
+
+.. toctree::
+   :hidden:
+
+   /auto_examples/simulate_data
+
+.. raw:: html
+
     <div class="sphx-glr-thumbcontainer" tooltip="In this example, we plot the kernel options provided.">
 
 .. only:: html
@@ -26,6 +46,46 @@ Gallery of Examples
    :hidden:
 
    /auto_examples/plot_explore_kernels
+
+.. raw:: html
+
+    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we load in some example data, and find optimal level weights for decoding.">
+
+.. only:: html
+
+    .. figure:: /auto_examples/images/thumb/sphx_glr_decode_by_weighted_level_thumb.png
+
+        :ref:`sphx_glr_auto_examples_decode_by_weighted_level.py`
+
+.. raw:: html
+
+    </div>
+
+
+.. toctree::
+   :hidden:
+
+   /auto_examples/decode_by_weighted_level
+
+.. raw:: html
+
+    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we calculate dynamic correlations">
+
+.. only:: html
+
+    .. figure:: /auto_examples/images/thumb/sphx_glr_calculate_dynamic_correlations_thumb.png
+
+        :ref:`sphx_glr_auto_examples_calculate_dynamic_correlations.py`
+
+.. raw:: html
+
+    </div>
+
+
+.. toctree::
+   :hidden:
+
+   /auto_examples/calculate_dynamic_correlations
 
 .. raw:: html
 

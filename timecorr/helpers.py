@@ -546,23 +546,28 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
             corrs.append(next_corrs)
             sub_corrs.append(next_subcorrs)
 
-        mu = optimize_weights(sub_corrs)
+        sub_corrs = np.array(sub_corrs)
+        corrs = np.array(corrs)
 
-        corrs = weight_corrs(corrs, mu)
+        for lev in range(v+1):
 
-        next_results_pd = decoder(corrs)
-        next_results_pd['level'] = v
-        next_results_pd['folds'] = i
+            mu = optimize_weights(sub_corrs[0:lev+1,:,:])
+            w_corrs = weight_corrs(corrs[0:lev+1,:,:], mu)
 
-        mu_pd = pd.DataFrame()
-        for c in np.arange(np.max(level) + 1):
-            mu_pd['level_' + str(c)] = [0]
+            next_results_pd = decoder(w_corrs)
+            next_results_pd['level'] = v
+            next_results_pd['folds'] = i
 
-        mu_pd += mu
+            mu_pd = pd.DataFrame()
+            for c in np.arange(lev + 1):
+                mu_pd['level_' + str(c)] = [0]
 
-        next_results_pd = pd.concat([next_results_pd, mu_pd], axis=1, join_axes=[next_results_pd.index])
+            #mu_pd['level_' + str(lev)] = [0]
+            mu_pd += mu
 
-        results_pd = pd.concat([results_pd, next_results_pd])
+            next_results_pd = pd.concat([next_results_pd, mu_pd], axis=1, join_axes=[next_results_pd.index])
+
+            results_pd = pd.concat([results_pd, next_results_pd])
 
 
     return results_pd

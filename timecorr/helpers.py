@@ -632,7 +632,7 @@ def optimize_weights(corrs):
     con1 = {'type': 'eq', 'fun': lambda x: 1 - np.sum(x)}
     x0 = np.repeat(1/np.shape(corrs)[0], np.shape(corrs)[0])
 
-    min_mu = minimize(calculate_error, x0, args=corrs, bounds=bns, constraints=con1, options={'disp': True, 'eps': 1e-2})
+    min_mu = minimize(calculate_error, x0, args=corrs, bounds=bns, constraints=con1, options={'disp': True, 'eps': 1e-4})
 
     return min_mu.x
 

@@ -459,6 +459,7 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
 
     if nfolds == 1:
         sub_nfolds = 2
+        warnings.warn('When nfolds is set to one, the analysis will be circular.')
     else:
         sub_nfolds = nfolds
 

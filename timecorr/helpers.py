@@ -526,15 +526,16 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
                                                                         combine=combine, weights_fun=weights_fun,
                                                                         weights_params=weights_params)
 
-                for s in range(0, sub_nfolds):
-                    sub_in_data = [x for x in data[group_assignments == i][subgroup_assignments==s]]
-                    sub_out_data = [x for x in data[group_assignments == i][subgroup_assignments!=s]]
+                #for s in range(0, sub_nfolds):
+                s = sub_nfolds-1
+                sub_in_data = [x for x in data[group_assignments == i][subgroup_assignments==s]]
+                sub_out_data = [x for x in data[group_assignments == i][subgroup_assignments!=s]]
 
-                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_data, sub_out_data,
-                                                                                            level=v, cfun=None, rfun=rfun,
-                                                                                            combine=combine,
-                                                                                            weights_fun=weights_fun,
-                                                                                            weights_params=weights_params)
+                sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_data, sub_out_data,
+                                                                                        level=v, cfun=None, rfun=rfun,
+                                                                                        combine=combine,
+                                                                                        weights_fun=weights_fun,
+                                                                                        weights_params=weights_params)
 
             else:
 
@@ -542,14 +543,14 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
                                                                         rfun=rfun, combine=combine,
                                                                         weights_fun=weights_fun,
                                                                         weights_params=weights_params)
-                for s in range(0, nfolds):
+                #for s in range(0, nfolds):
 
-
-                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_raw, sub_out_raw,
-                                                                                            level=v, cfun=cfun,
-                                                                                            rfun=rfun, combine=combine,
-                                                                                            weights_fun=weights_fun,
-                                                                                            weights_params=weights_params)
+                s = sub_nfolds-1
+                sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_raw, sub_out_raw,
+                                                                                        level=v, cfun=cfun,
+                                                                                        rfun=rfun, combine=combine,
+                                                                                        weights_fun=weights_fun,
+                                                                                        weights_params=weights_params)
 
 
             next_corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
@@ -635,9 +636,9 @@ def weight_corrs(corrs, mu):
     weighted_corrs = 0
 
     for i in np.arange(np.shape(corrs)[0]):
-        weighted_corrs += mu[i] * z2r(corrs[i])
+        weighted_corrs += mu[i] * r2z(corrs[i])
 
-    return r2z(weighted_corrs)
+    return z2r(weighted_corrs)
 
 def decoder(corrs):
 

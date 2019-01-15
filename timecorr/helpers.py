@@ -9,6 +9,7 @@ from scipy.stats import ttest_1samp as ttest
 import hypertools as hyp
 import brainconn as bc
 import pandas as pd
+import warnings
 from matplotlib import pyplot as plt
 
 from copy import copy, deepcopy
@@ -455,13 +456,20 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
     assert len(np.unique(
         list(map(lambda x: x.shape[1], data)))) == 1, 'all data matrices must have the same number of features'
 
-    group_assignments = get_xval_assignments(len(data), nfolds)
-
     if nfolds == 1:
-        sub_nfolds = 2
+        sub_nfolds = 1
+        nfolds = 2
         warnings.warn('When nfolds is set to one, the analysis will be circular.')
     else:
         sub_nfolds = nfolds
+
+    group_assignments = get_xval_assignments(len(data), nfolds)
+
+    # if nfolds == 1:
+    #     sub_nfolds = 1
+    #     nfolds = 2
+    #     warnings.warn('When nfolds is set to one, the analysis will be circular.')
+
 
     subgroup_assignments = get_xval_assignments(len(data[group_assignments == 0]), nfolds)
 
@@ -527,16 +535,16 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
                                                                         combine=combine, weights_fun=weights_fun,
                                                                         weights_params=weights_params)
                 #
-                # for s in range(0, nfolds):
-                s = sub_nfolds - 1
-                sub_in_data = [x for x in data[group_assignments == i][subgroup_assignments==s]]
-                sub_out_data = [x for x in data[group_assignments == i][subgroup_assignments!=s]]
+                for s in range(0, nfolds):
 
-                sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_data, sub_out_data,
-                                                                                        level=v, cfun=None, rfun=rfun,
-                                                                                        combine=combine,
-                                                                                        weights_fun=weights_fun,
-                                                                                        weights_params=weights_params)
+                    sub_in_data = [x for x in data[group_assignments == i][subgroup_assignments==s]]
+                    sub_out_data = [x for x in data[group_assignments == i][subgroup_assignments!=s]]
+
+                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_data, sub_out_data,
+                                                                                            level=v, cfun=None, rfun=rfun,
+                                                                                            combine=combine,
+                                                                                            weights_fun=weights_fun,
+                                                                                            weights_params=weights_params)
 
             else:
 
@@ -544,14 +552,14 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
                                                                         rfun=rfun, combine=combine,
                                                                         weights_fun=weights_fun,
                                                                         weights_params=weights_params)
-                s = sub_nfolds - 1
-                # for s in range(0, nfolds):
 
-                sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_raw, sub_out_raw,
-                                                                                        level=v, cfun=cfun,
-                                                                                        rfun=rfun, combine=combine,
-                                                                                        weights_fun=weights_fun,
-                                                                                        weights_params=weights_params)
+                for s in range(0, nfolds):
+
+                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_raw, sub_out_raw,
+                                                                                            level=v, cfun=cfun,
+                                                                                            rfun=rfun, combine=combine,
+                                                                                            weights_fun=weights_fun,
+                                                                                            weights_params=weights_params)
 
 
             next_corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
@@ -563,7 +571,7 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
         sub_corrs = np.array(sub_corrs)
         corrs = np.array(corrs)
 
-        if nfolds == 1:
+        if sub_nfolds == 1:
             sub_corrs = corrs
 
         for lev in range(v+1):

@@ -22,7 +22,7 @@ from timecorr.helpers import generate_template_data, generate_subject_data, gene
 S = 5  #number of subjects
 T = 100  #number of timepoints per event
 E = 10  #number of events
-K = 100  #number of features
+K = 110  #number of features
 
 #make a timeseries of covariance matrices
 covs = np.zeros((E, int((K**2 - K)/2 + K)))

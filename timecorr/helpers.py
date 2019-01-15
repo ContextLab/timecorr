@@ -456,7 +456,13 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
         list(map(lambda x: x.shape[1], data)))) == 1, 'all data matrices must have the same number of features'
 
     group_assignments = get_xval_assignments(len(data), nfolds)
-    subgroup_assignments = get_xval_assignments(len(data[group_assignments == 0]), nfolds)
+
+    if nfolds == 1:
+        sub_nfolds = 2
+    else:
+        sub_nfolds = nfolds
+
+    subgroup_assignments = get_xval_assignments(len(data[group_assignments == 0]), sub_nfolds)
 
     orig_level = level
     orig_level = np.ravel(orig_level)
@@ -513,11 +519,14 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
                 in_data = [x for x in data[group_assignments == i]]
                 out_data = [x for x in data[group_assignments != i]]
 
+                if nfolds == 1:
+                    out_data = in_data
+
                 in_smooth, out_smooth, in_raw, out_raw = folding_levels(in_data, out_data, level=v, cfun=None,rfun=rfun,
                                                                         combine=combine, weights_fun=weights_fun,
                                                                         weights_params=weights_params)
 
-                for s in range(0, nfolds):
+                for s in range(0, sub_nfolds):
                     sub_in_data = [x for x in data[group_assignments == i][subgroup_assignments==s]]
                     sub_out_data = [x for x in data[group_assignments == i][subgroup_assignments!=s]]
 
@@ -534,11 +543,14 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
                                                                         weights_fun=weights_fun,
                                                                         weights_params=weights_params)
                 for s in range(0, nfolds):
+
+
                     sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_raw, sub_out_raw,
                                                                                             level=v, cfun=cfun,
                                                                                             rfun=rfun, combine=combine,
                                                                                             weights_fun=weights_fun,
                                                                                             weights_params=weights_params)
+
 
             next_corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
             next_subcorrs = (1 - sd.cdist(sub_in_smooth, sub_out_smooth, 'correlation'))

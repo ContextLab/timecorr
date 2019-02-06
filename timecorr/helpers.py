@@ -807,16 +807,17 @@ def pca_decoder(data, nfolds=2, dims=10, level=0, cfun=isfc, weights_fun=laplace
                                                                 combine=[mean_combine], weights_fun=weights_fun,
                                                                 weights_params=weights_params)
 
-            next_corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
-            corrs.append(next_corrs)
+            corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
 
-        corrs = np.array(corrs)
-        next_results_pd = decoder(w_corrs)
-        next_results_pd['level'] = v
-        next_results_pd['folds'] = i
+            corrs = np.array(corrs)
+            next_results_pd = decoder(corrs)
+            next_results_pd['dims'] = 10 - d
+            next_results_pd['folds'] = i
 
-    results_pd = pd.concat([results_pd, next_results_pd])
+            results_pd = pd.concat([results_pd, next_results_pd])
+
     return results_pd
+
 
 def folding_levels(infold_data, outfold_data, level=0, cfun=None, weights_fun=None, weights_params=None, combine=None,
                    rfun=None):

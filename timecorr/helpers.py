@@ -692,39 +692,39 @@ def optimize_pca_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, 
         for v in level:
 
             if v==0:
+
                 in_data = [x for x in data[group_assignments == i]]
                 out_data = [x for x in data[group_assignments != i]]
 
-                in_smooth, out_smooth, in_raw, out_raw = folding_levels(in_data, out_data, level=v, cfun=cfun,rfun=p_rfun,
-                                                                        combine=combine, weights_fun=weights_fun,
-                                                                        weights_params=weights_params)
-                try_reduce = reduce_same_space(in_smooth, out_smooth, in_raw, out_raw, level=v, rfun=rfun)
+                in_smooth, out_smooth, in_raw, out_raw = reduce_wrapper(folding_levels(in_data, out_data, level=v, cfun=None, rfun=p_rfun,
+                                        combine=combine, weights_fun=weights_fun,
+                                        weights_params=weights_params), level=v, rfun=rfun)
 
                 for s in range(0, nfolds):
 
                     sub_in_data = [x for x in data[group_assignments == i][subgroup_assignments==s]]
                     sub_out_data = [x for x in data[group_assignments == i][subgroup_assignments!=s]]
 
-                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_data, sub_out_data,
-                                                                                            level=v, cfun=None, rfun=None,
+                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = reduce_wrapper(folding_levels(sub_in_data, sub_out_data,
+                                                                                            level=v, cfun=None, rfun=p_rfun,
                                                                                             combine=combine,
                                                                                             weights_fun=weights_fun,
-                                                                                            weights_params=weights_params)
+                                                                                            weights_params=weights_params), level=v, rfun=rfun)
 
             else:
 
-                in_smooth, out_smooth, in_raw, out_raw = folding_levels(in_raw, out_raw, level=v, cfun=cfun,
-                                                                        rfun=rfun, combine=combine,
+                in_smooth, out_smooth, in_raw, out_raw = reduce_wrapper(folding_levels(in_raw, out_raw, level=v, cfun=cfun,
+                                                                        rfun=p_rfun, combine=combine,
                                                                         weights_fun=weights_fun,
-                                                                        weights_params=weights_params)
+                                                                        weights_params=weights_params), level=v, rfun=rfun)
 
                 for s in range(0, nfolds):
 
-                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_raw, sub_out_raw,
+                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = reduce_wrapper(folding_levels(sub_in_raw, sub_out_raw,
                                                                                             level=v, cfun=cfun,
-                                                                                            rfun=rfun, combine=combine,
+                                                                                            rfun=p_rfun, combine=combine,
                                                                                             weights_fun=weights_fun,
-                                                                                            weights_params=weights_params)
+                                                                                            weights_params=weights_params), level=v, rfun=rfun)
 
 
             next_corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
@@ -849,17 +849,22 @@ def folding_levels(infold_data, outfold_data, level=0, cfun=None, weights_fun=No
     return in_fold_smooth, out_fold_smooth, in_fold_raw, out_fold_raw
 
 
-def reduce_same_space(in_smooth, out_smooth, in_raw, out_raw, dims=10, level=0, rfun=None):
-
-    all_smooth = list(in_smooth)+list(out_smooth)
-    all_raw = list(in_raw) + list(out_raw)
-    all_smooth_reduced = reduce(all_smooth, rfun=rfun[level])
+def reduce_wrapper(data, dims=10, level=0, rfun=None):
 
     if not level == 0:
-        all_raw_reduced = reduce(all_smooth, rfun=rfun[level])
+
+        all_smooth = list(data[0][np.newaxis, :, :]) + list(data[1][np.newaxis, :, :])
+        all_raw = list(data[2][np.newaxis, :, :]) + list(data[3][np.newaxis, :, :])
+
+        all_smooth_reduced = reduce(all_smooth, rfun=rfun[level])
+        all_raw_reduced = reduce(all_raw, rfun=rfun[level])
 
 
-    return all_smooth
+        return all_smooth_reduced[0], all_smooth_reduced[1], all_raw_reduced[0], all_raw_reduced[1]
+
+    else:
+
+        return data[0], data[1], data[2], data[3]
 
 
 def optimize_weights(corrs):

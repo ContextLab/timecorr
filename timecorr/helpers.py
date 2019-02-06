@@ -284,7 +284,10 @@ def reduce(corrs, rfun=None):
     get_V = lambda x: int(np.divide(np.sqrt(8 * x + 1) - 1, 2))
 
     if type(corrs) is list:
-        V = get_V(corrs[0].shape[1])
+        if corrs[0].ndim == 1:
+            V = get_V(corrs[0].shape[0])
+        else:
+            V = get_V(corrs[0].shape[1])
     else:
         V = get_V(corrs.shape[1])
 
@@ -633,12 +636,6 @@ def optimize_pca_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, 
 
     group_assignments = get_xval_assignments(len(data), nfolds)
 
-    # if nfolds == 1:
-    #     sub_nfolds = 1
-    #     nfolds = 2
-    #     warnings.warn('When nfolds is set to one, the analysis will be circular.')
-
-
     subgroup_assignments = get_xval_assignments(len(data[group_assignments == 0]), nfolds)
 
     orig_level = level
@@ -698,9 +695,10 @@ def optimize_pca_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, 
                 in_data = [x for x in data[group_assignments == i]]
                 out_data = [x for x in data[group_assignments != i]]
 
-                in_smooth, out_smooth, in_raw, out_raw = folding_levels(in_data, out_data, level=v, cfun=None,rfun=p_rfun,
+                in_smooth, out_smooth, in_raw, out_raw = folding_levels(in_data, out_data, level=v, cfun=cfun,rfun=p_rfun,
                                                                         combine=combine, weights_fun=weights_fun,
                                                                         weights_params=weights_params)
+                try_reduce = reduce_same_space(in_smooth, out_smooth, in_raw, out_raw, level=v, rfun=rfun)
 
                 for s in range(0, nfolds):
 
@@ -851,9 +849,18 @@ def folding_levels(infold_data, outfold_data, level=0, cfun=None, weights_fun=No
     return in_fold_smooth, out_fold_smooth, in_fold_raw, out_fold_raw
 
 
-def reduce_same_space(in_smooth, out_smooth, in_raw, out_raw, rfun=None):
+def reduce_same_space(in_smooth, out_smooth, in_raw, out_raw, dims=10, level=0, rfun=None):
+
     all_smooth = list(in_smooth)+list(out_smooth)
+    all_raw = list(in_raw) + list(out_raw)
+    all_smooth_reduced = reduce(all_smooth, rfun=rfun[level])
+
+    if not level == 0:
+        all_raw_reduced = reduce(all_smooth, rfun=rfun[level])
+
+
     return all_smooth
+
 
 def optimize_weights(corrs):
 

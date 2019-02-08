@@ -382,6 +382,8 @@ def timepoint_decoder(data, mu=None, nfolds=2, level=0, cfun=isfc, weights_fun=l
     if type(rfun) not in [list, np.ndarray]:
         rfun = [rfun] * np.shape(level)[0]
 
+    p_rfun = [None] * np.shape(level)[0]
+
     assert len(level)==len(rfun), 'parameter lengths need to be the same as level if input is ' \
                                                            'type np.ndarray or list'
 
@@ -399,16 +401,16 @@ def timepoint_decoder(data, mu=None, nfolds=2, level=0, cfun=isfc, weights_fun=l
                 in_data = [x for x in data[group_assignments == i]]
                 out_data = [x for x in data[group_assignments != i]]
 
-                in_smooth, out_smooth, in_raw, out_raw = folding_levels(in_data, out_data, level=v, cfun=None,rfun=rfun,
+                in_smooth, out_smooth, in_raw, out_raw = reduce_wrapper(folding_levels(in_data, out_data, level=v, cfun=None,rfun=p_rfun,
                                                                         combine=combine, weights_fun=weights_fun,
-                                                                        weights_params=weights_params)
+                                                                        weights_params=weights_params), level=v, rfun=rfun)
 
             else:
 
-                in_smooth, out_smooth, in_raw, out_raw = folding_levels(in_raw, out_raw, level=v, cfun=cfun,
-                                                                        rfun=rfun, combine=combine,
+                in_smooth, out_smooth, in_raw, out_raw = reduce_wrapper(folding_levels(in_raw, out_raw, level=v, cfun=cfun,
+                                                                        rfun=p_rfun, combine=combine,
                                                                         weights_fun=weights_fun,
-                                                                        weights_params=weights_params)
+                                                                        weights_params=weights_params), level=v, rfun=rfun)
 
             if mu:
                 next_corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
@@ -429,6 +431,7 @@ def timepoint_decoder(data, mu=None, nfolds=2, level=0, cfun=isfc, weights_fun=l
 
 
     return results_pd
+
 
 def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_weights,
                                         weights_params=laplace_params, combine=mean_combine, rfun=None):
@@ -464,12 +467,6 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
         sub_nfolds = nfolds
 
     group_assignments = get_xval_assignments(len(data), nfolds)
-
-    # if nfolds == 1:
-    #     sub_nfolds = 1
-    #     nfolds = 2
-    #     warnings.warn('When nfolds is set to one, the analysis will be circular.')
-
 
     subgroup_assignments = get_xval_assignments(len(data[group_assignments == 0]), nfolds)
 
@@ -509,6 +506,8 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
     if type(rfun) not in [list, np.ndarray]:
         rfun = [rfun] * np.shape(level)[0]
 
+    p_rfun = [None] * np.shape(level)[0]
+
     assert len(level)==len(rfun), 'parameter lengths need to be the same as level if input is ' \
                                                            'type np.ndarray or list'
 
@@ -525,41 +524,39 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
         for v in level:
 
             if v==0:
+
                 in_data = [x for x in data[group_assignments == i]]
                 out_data = [x for x in data[group_assignments != i]]
 
-                # if nfolds == 1:
-                #     in_data = out_data
+                in_smooth, out_smooth, in_raw, out_raw = reduce_wrapper(folding_levels(in_data, out_data, level=v, cfun=None, rfun=p_rfun,
+                                        combine=combine, weights_fun=weights_fun,
+                                        weights_params=weights_params), level=v, rfun=rfun)
 
-                in_smooth, out_smooth, in_raw, out_raw = folding_levels(in_data, out_data, level=v, cfun=None,rfun=rfun,
-                                                                        combine=combine, weights_fun=weights_fun,
-                                                                        weights_params=weights_params)
-                #
                 for s in range(0, nfolds):
 
                     sub_in_data = [x for x in data[group_assignments == i][subgroup_assignments==s]]
                     sub_out_data = [x for x in data[group_assignments == i][subgroup_assignments!=s]]
 
-                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_data, sub_out_data,
-                                                                                            level=v, cfun=None, rfun=rfun,
+                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = reduce_wrapper(folding_levels(sub_in_data, sub_out_data,
+                                                                                            level=v, cfun=None, rfun=p_rfun,
                                                                                             combine=combine,
                                                                                             weights_fun=weights_fun,
-                                                                                            weights_params=weights_params)
+                                                                                            weights_params=weights_params), level=v, rfun=rfun)
 
             else:
 
-                in_smooth, out_smooth, in_raw, out_raw = folding_levels(in_raw, out_raw, level=v, cfun=cfun,
-                                                                        rfun=rfun, combine=combine,
+                in_smooth, out_smooth, in_raw, out_raw = reduce_wrapper(folding_levels(in_raw, out_raw, level=v, cfun=cfun,
+                                                                        rfun=p_rfun, combine=combine,
                                                                         weights_fun=weights_fun,
-                                                                        weights_params=weights_params)
+                                                                        weights_params=weights_params), level=v, rfun=rfun)
 
                 for s in range(0, nfolds):
 
-                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_raw, sub_out_raw,
+                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = reduce_wrapper(folding_levels(sub_in_raw, sub_out_raw,
                                                                                             level=v, cfun=cfun,
-                                                                                            rfun=rfun, combine=combine,
+                                                                                            rfun=p_rfun, combine=combine,
                                                                                             weights_fun=weights_fun,
-                                                                                            weights_params=weights_params)
+                                                                                            weights_params=weights_params), level=v, rfun=rfun)
 
 
             next_corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
@@ -587,7 +584,6 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
             for c in np.arange(lev + 1):
                 mu_pd['level_' + str(c)] = [0]
 
-            #mu_pd['level_' + str(lev)] = [0]
             mu_pd += mu
 
             next_results_pd = pd.concat([next_results_pd, mu_pd], axis=1, join_axes=[next_results_pd.index])
@@ -597,10 +593,72 @@ def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weig
 
     return results_pd
 
+
+def pca_decoder(data, nfolds=2, dims=10, level=0, cfun=isfc, weights_fun=laplace_weights,
+                                        weights_params=laplace_params, combine=mean_combine, rfun=None):
+    """
+    :param data: a list of number-of-observations by number-of-features matrices
+    :param nfolds: number of cross-validation folds (train using out-of-fold data;
+                   test using in-fold data)
+    :param level: integer or list of integers for levels to be evaluated (default:0)
+    :param cfun: function for transforming the group data (default: isfc)
+    :param weights_fun: used to compute per-timepoint weights for cfun; default: laplace_weights
+    :param  weights_params: parameters passed to weights_fun; default: laplace_params
+    :params combine: function for combining data within each group, or a list of such functions (default: mean_combine)
+    :param rfun: function for reducing output (default: None)
+    :return: results dictionary with the following keys:
+       'rank': mean percentile rank (across all timepoints and folds) in the
+               decoding distribution of the true timepoint
+       'accuracy': mean percent accuracy (across all timepoints and folds)
+       'error': mean estimation error (across all timepoints and folds) between
+                the decoded and actual window numbers, expressed as a percentage
+                of the total number of windows
+    """
+
+    assert len(np.unique(
+        list(map(lambda x: x.shape[0], data)))) == 1, 'all data matrices must have the same number of timepoints'
+    assert len(np.unique(
+        list(map(lambda x: x.shape[1], data)))) == 1, 'all data matrices must have the same number of features'
+
+
+    pca_data = np.asarray(hyp.reduce(list(data), ndims=dims))
+
+    group_assignments = get_xval_assignments(len(pca_data), nfolds)
+    results_pd = pd.DataFrame()
+
+    corrs = []
+    for i in range(0, nfolds):
+        for d in range(1, dims + 1):
+
+            in_data = np.asarray([x for x in pca_data[group_assignments == i]])[:, :, :d]
+            out_data = np.asarray([x for x in pca_data[group_assignments != i]])[:, :, :d]
+
+            in_smooth, out_smooth, in_raw, out_raw = folding_levels(in_data, out_data, level=0, cfun=isfc, rfun=[None],
+                                                                combine=[mean_combine], weights_fun=weights_fun,
+                                                                weights_params=weights_params)
+
+            if d < 3:
+                in_smooth = np.hstack((in_smooth, np.zeros((in_smooth.shape[0], 3 - in_smooth.shape[1]))))
+                out_smooth = np.hstack((out_smooth, np.zeros((out_smooth.shape[0], 3 - out_smooth.shape[1]))))
+            corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
+
+            corrs = np.array(corrs)
+            next_results_pd = decoder(corrs)
+            next_results_pd['dims'] = d
+            next_results_pd['folds'] = i
+
+            results_pd = pd.concat([results_pd, next_results_pd])
+
+    return results_pd
+
+
 def folding_levels(infold_data, outfold_data, level=0, cfun=None, weights_fun=None, weights_params=None, combine=None,
                    rfun=None):
 
     from .timecorr import timecorr
+
+    if rfun is None:
+        rfun = [None] * np.shape(level)[0]
 
     if level == 0:
 
@@ -608,8 +666,8 @@ def folding_levels(infold_data, outfold_data, level=0, cfun=None, weights_fun=No
                                              rfun=rfun[level], combine=combine[level], weights_function=weights_fun,
                                              weights_params=weights_params))
         out_fold_smooth = np.asarray(timecorr([x for x in outfold_data], cfun=None,
-                                                  rfun=rfun[level], combine=combine[level], weights_function=weights_fun,
-                     weights_params=weights_params))
+                                              rfun=rfun[level], combine=combine[level], weights_function=weights_fun,
+                                              weights_params=weights_params))
         in_fold_raw = mean_combine([x for x in infold_data])
         out_fold_raw = mean_combine([x for x in outfold_data])
 
@@ -624,6 +682,25 @@ def folding_levels(infold_data, outfold_data, level=0, cfun=None, weights_fun=No
                                                weights_function=eye_weights, weights_params=eye_params))
 
     return in_fold_smooth, out_fold_smooth, in_fold_raw, out_fold_raw
+
+
+def reduce_wrapper(data, dims=10, level=0, rfun=None):
+
+    if not level == 0:
+
+        all_smooth = list(data[0][np.newaxis, :, :]) + list(data[1][np.newaxis, :, :])
+        all_raw = list(data[2][np.newaxis, :, :]) + list(data[3][np.newaxis, :, :])
+
+        all_smooth_reduced = reduce(all_smooth, rfun=rfun[level])
+        all_raw_reduced = reduce(all_raw, rfun=rfun[level])
+
+
+        return all_smooth_reduced[0], all_smooth_reduced[1], all_raw_reduced[0], all_raw_reduced[1]
+
+    else:
+
+        return data[0], data[1], data[2], data[3]
+
 
 def optimize_weights(corrs):
 

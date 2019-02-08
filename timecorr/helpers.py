@@ -382,6 +382,8 @@ def timepoint_decoder(data, mu=None, nfolds=2, level=0, cfun=isfc, weights_fun=l
     if type(rfun) not in [list, np.ndarray]:
         rfun = [rfun] * np.shape(level)[0]
 
+    p_rfun = [None] * np.shape(level)[0]
+
     assert len(level)==len(rfun), 'parameter lengths need to be the same as level if input is ' \
                                                            'type np.ndarray or list'
 
@@ -399,14 +401,14 @@ def timepoint_decoder(data, mu=None, nfolds=2, level=0, cfun=isfc, weights_fun=l
                 in_data = [x for x in data[group_assignments == i]]
                 out_data = [x for x in data[group_assignments != i]]
 
-                in_smooth, out_smooth, in_raw, out_raw = reduce_wrapper(folding_levels(in_data, out_data, level=v, cfun=None,rfun=None,
+                in_smooth, out_smooth, in_raw, out_raw = reduce_wrapper(folding_levels(in_data, out_data, level=v, cfun=None,rfun=p_rfun,
                                                                         combine=combine, weights_fun=weights_fun,
                                                                         weights_params=weights_params), level=v, rfun=rfun)
 
             else:
 
                 in_smooth, out_smooth, in_raw, out_raw = reduce_wrapper(folding_levels(in_raw, out_raw, level=v, cfun=cfun,
-                                                                        rfun=None, combine=combine,
+                                                                        rfun=p_rfun, combine=combine,
                                                                         weights_fun=weights_fun,
                                                                         weights_params=weights_params), level=v, rfun=rfun)
 

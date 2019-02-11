@@ -4,10 +4,15 @@ import numpy as np
 import scipy.spatial.distance as sd
 from scipy.special import gamma
 from scipy.linalg import toeplitz
+from scipy.optimize import minimize
 from scipy.stats import ttest_1samp as ttest
 import hypertools as hyp
 import brainconn as bc
-from copy import copy
+import pandas as pd
+import warnings
+from matplotlib import pyplot as plt
+
+from copy import copy, deepcopy
 
 graph_measures = {'eigenvector_centrality': bc.centrality.eigenvector_centrality_und,
                   'pagerank_centrality': lambda x: bc.centrality.pagerank_centrality(x, d=0.85),
@@ -197,6 +202,18 @@ def corrmean_combine(corrs):
     else:
         return z2r(np.mean(r2z(np.stack(corrs, axis=2)), axis=2))
 
+def mean_combine(vals):
+    '''
+    Compute the element-wise mean across each matrix in a list.
+
+    :param vals: a matrix, or a list of matrices
+    :return: a mean matrix
+    '''
+    if not (type(vals) == list):
+        return vals
+    else:
+        return np.mean(np.stack(vals, axis=2), axis=2)
+
 def tstat_combine(corrs, return_pvals=False):
     '''
     Compute element-wise t-tests (comparing distribution means to 0) across each
@@ -295,20 +312,18 @@ def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=laplace_p
     return x
 
 
-# TODO: need to debug this...
-# WISHLIST:
-#   - support passing in a list of connectivity (or activity) functions, a list of reduce functions,
-#     and a mixing proportions vector; compute stats for all non-zero mixing proportions and use those
-#     stats (weighted appropriately) to do the decoding
-def timepoint_decoder(data, nfolds=2, cfun=isfc, weights_fun=laplace_weights, weights_params=laplace_params, combine=corrmean_combine, rfun=None):
+def timepoint_decoder(data, mu=None, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_weights, weights_params=laplace_params,
+                      combine=mean_combine, rfun=None):
     """
     :param data: a list of number-of-observations by number-of-features matrices
+    :param mu: list of floats sum to one for mixing proportions vector
     :param nfolds: number of cross-validation folds (train using out-of-fold data;
                    test using in-fold data)
+    :param level: integer or list of integers for levels to be evaluated (default:0)
     :param cfun: function for transforming the group data (default: isfc)
     :param weights_fun: used to compute per-timepoint weights for cfun; default: laplace_weights
     :param  weights_params: parameters passed to weights_fun; default: laplace_params
-    :params combine: function for combining data within each group (default: corrmean_combine)
+    :params combine: function for combining data within each group, or a list of such functions (default: mean_combine)
     :param rfun: function for reducing output (default: None)
     :return: results dictionary with the following keys:
        'rank': mean percentile rank (across all timepoints and folds) in the
@@ -318,39 +333,417 @@ def timepoint_decoder(data, nfolds=2, cfun=isfc, weights_fun=laplace_weights, we
                 the decoded and actual window numbers, expressed as a percentage
                 of the total number of windows
     """
+
     assert len(np.unique(
         list(map(lambda x: x.shape[0], data)))) == 1, 'all data matrices must have the same number of timepoints'
     assert len(np.unique(
         list(map(lambda x: x.shape[1], data)))) == 1, 'all data matrices must have the same number of features'
 
-    T = data[0].shape[0]
-    timepoint_weights = weights_fun(T, params=weights_params)
+    group_assignments = get_xval_assignments(len(data), nfolds)
+
+
+    orig_level = level
+    orig_level = np.ravel(orig_level)
+
+    if type(level) is int:
+        level = np.arange(level + 1)
+
+    level = np.ravel(level)
+
+    assert type(level) is np.ndarray, 'level needs be an integer, list, or np.ndarray'
+    assert not np.any(level < 0), 'level cannot contain negative numbers'
+
+    if mu:
+        orig_level = level.max()
+        orig_level = np.ravel(orig_level)
+        assert np.sum(mu)==1, 'weights must sum to one'
+        assert np.shape(mu)[0]== level.max()+1, 'weights lengths need to be the same as number of levels'
+
+    if not np.all(np.arange(level.max()+1)==level):
+        level = np.arange(level.max()+1)
+
+    if callable(combine):
+        combine = [combine] * np.shape(level)[0]
+
+    combine = np.ravel(combine)
+
+    assert type(combine) is np.ndarray and type(combine[0]) is not np.str_, 'combine needs to be a function, list of functions, or np.ndarray of functions'
+    assert len(level)==len(combine), 'combine length need to be the same as level if input is type np.ndarray or list'
+
+    if callable(cfun):
+        cfun = [cfun] * np.shape(level)[0]
+
+    cfun = np.ravel(cfun)
+
+    assert type(cfun) is np.ndarray and type(cfun[0]) is not np.str_, 'combine needs be a function, list of functions, or np.ndarray of functions'
+    assert len(level)==len(cfun), 'cfun length need to be the same as level if input is type np.ndarray or list'
+
+
+    if type(rfun) not in [list, np.ndarray]:
+        rfun = [rfun] * np.shape(level)[0]
+
+    p_rfun = [None] * np.shape(level)[0]
+
+    assert len(level)==len(rfun), 'parameter lengths need to be the same as level if input is ' \
+                                                           'type np.ndarray or list'
+
+    results_pd = pd.DataFrame()
+
+    corrs = 0
+    for i in range(0, nfolds):
+
+        in_raw = []
+        out_raw = []
+
+        for v in level:
+
+            if v==0:
+                in_data = [x for x in data[group_assignments == i]]
+                out_data = [x for x in data[group_assignments != i]]
+
+                in_smooth, out_smooth, in_raw, out_raw = reduce_wrapper(folding_levels(in_data, out_data, level=v, cfun=None,rfun=p_rfun,
+                                                                        combine=combine, weights_fun=weights_fun,
+                                                                        weights_params=weights_params), level=v, rfun=rfun)
+
+            else:
+
+                in_smooth, out_smooth, in_raw, out_raw = reduce_wrapper(folding_levels(in_raw, out_raw, level=v, cfun=cfun,
+                                                                        rfun=p_rfun, combine=combine,
+                                                                        weights_fun=weights_fun,
+                                                                        weights_params=weights_params), level=v, rfun=rfun)
+
+            if mu:
+                next_corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
+                corrs += mu[v] * z2r(next_corrs)
+
+            else:
+                corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
+
+            if v in orig_level:
+
+                if mu:
+                    corrs = r2z(corrs)
+
+                next_results_pd = decoder(corrs)
+                next_results_pd['level'] = v
+                next_results_pd['folds'] = i
+                results_pd = pd.concat([results_pd, next_results_pd])
+
+
+    return results_pd
+
+
+def optimize_weighted_timepoint_decoder(data, nfolds=2, level=0, cfun=isfc, weights_fun=laplace_weights,
+                                        weights_params=laplace_params, combine=mean_combine, rfun=None):
+    """
+    :param data: a list of number-of-observations by number-of-features matrices
+    :param nfolds: number of cross-validation folds (train using out-of-fold data;
+                   test using in-fold data)
+    :param level: integer or list of integers for levels to be evaluated (default:0)
+    :param cfun: function for transforming the group data (default: isfc)
+    :param weights_fun: used to compute per-timepoint weights for cfun; default: laplace_weights
+    :param  weights_params: parameters passed to weights_fun; default: laplace_params
+    :params combine: function for combining data within each group, or a list of such functions (default: mean_combine)
+    :param rfun: function for reducing output (default: None)
+    :return: results dictionary with the following keys:
+       'rank': mean percentile rank (across all timepoints and folds) in the
+               decoding distribution of the true timepoint
+       'accuracy': mean percent accuracy (across all timepoints and folds)
+       'error': mean estimation error (across all timepoints and folds) between
+                the decoded and actual window numbers, expressed as a percentage
+                of the total number of windows
+    """
+
+    assert len(np.unique(
+        list(map(lambda x: x.shape[0], data)))) == 1, 'all data matrices must have the same number of timepoints'
+    assert len(np.unique(
+        list(map(lambda x: x.shape[1], data)))) == 1, 'all data matrices must have the same number of features'
+
+    if nfolds == 1:
+        sub_nfolds = 1
+        nfolds = 2
+        warnings.warn('When nfolds is set to one, the analysis will be circular.')
+    else:
+        sub_nfolds = nfolds
 
     group_assignments = get_xval_assignments(len(data), nfolds)
 
-    results_template = {'rank': 0, 'accuracy': 0, 'error': 0}
-    results = copy(results_template)
+    subgroup_assignments = get_xval_assignments(len(data[group_assignments == 0]), nfolds)
+
+    orig_level = level
+    orig_level = np.ravel(orig_level)
+
+    if type(level) is int:
+        level = np.arange(level + 1)
+
+    level = np.ravel(level)
+
+    assert type(level) is np.ndarray, 'level needs be an integer, list, or np.ndarray'
+    assert not np.any(level < 0), 'level cannot contain negative numbers'
+
+    if not np.all(np.arange(level.max()+1)==level):
+        level = np.arange(level.max()+1)
+
+    if callable(combine):
+        combine = [combine] * np.shape(level)[0]
+
+    combine = np.ravel(combine)
+
+    assert type(combine) is np.ndarray and type(combine[0]) is not np.str_, 'combine needs to be a function, list of ' \
+                                                                            'functions, or np.ndarray of functions'
+    assert len(level)==len(combine), 'combine length need to be the same as level if input is type np.ndarray or list'
+
+    if callable(cfun):
+        cfun = [cfun] * np.shape(level)[0]
+
+    cfun = np.ravel(cfun)
+
+    assert type(cfun) is np.ndarray and type(cfun[0]) is not np.str_, 'combine needs be a function, list of functions, ' \
+                                                                      'or np.ndarray of functions'
+    assert len(level)==len(cfun), 'cfun length need to be the same as level if input is type np.ndarray or list'
+
+
+    if type(rfun) not in [list, np.ndarray]:
+        rfun = [rfun] * np.shape(level)[0]
+
+    p_rfun = [None] * np.shape(level)[0]
+
+    assert len(level)==len(rfun), 'parameter lengths need to be the same as level if input is ' \
+                                                           'type np.ndarray or list'
+
+    results_pd = pd.DataFrame()
+
     for i in range(0, nfolds):
-        next_results = copy(results_template)
 
-        in_fold = reduce(combine(cfun(data[group_assignments == i].tolist(), timepoint_weights)), rfun=rfun)
-        out_fold = reduce(combine(cfun(data[group_assignments != i].tolist(), timepoint_weights)), rfun=rfun)
+        in_raw = []
+        out_raw = []
+        sub_in_raw = []
+        sub_out_raw = []
+        sub_corrs = []
+        corrs = []
+        for v in level:
 
-        corrs = sd.cdist(in_fold, out_fold)
-        for t in np.arange(corrs.shape[0]):
-            decoded_inds = np.argmax(corrs[t, :])
-            next_results['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / (corrs.shape[0] - 1)
-            next_results['accuracy'] += np.mean(decoded_inds == np.array(t))
-            next_results['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
+            if v==0:
 
-        results['error'] += next_results['error'] / corrs.shape[0]
-        results['accuracy'] += next_results['accuracy'] / corrs.shape[0]
-        results['rank'] += next_results['rank'] / corrs.shape[0]
+                in_data = [x for x in data[group_assignments == i]]
+                out_data = [x for x in data[group_assignments != i]]
 
-    results['error'] /= nfolds
-    results['accuracy'] /= nfolds
-    results['rank'] /= nfolds
-    return results
+                in_smooth, out_smooth, in_raw, out_raw = reduce_wrapper(folding_levels(in_data, out_data, level=v, cfun=None, rfun=p_rfun,
+                                        combine=combine, weights_fun=weights_fun,
+                                        weights_params=weights_params), level=v, rfun=rfun)
+
+                for s in range(0, nfolds):
+
+                    sub_in_data = [x for x in data[group_assignments == i][subgroup_assignments==s]]
+                    sub_out_data = [x for x in data[group_assignments == i][subgroup_assignments!=s]]
+
+                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = reduce_wrapper(folding_levels(sub_in_data, sub_out_data,
+                                                                                            level=v, cfun=None, rfun=p_rfun,
+                                                                                            combine=combine,
+                                                                                            weights_fun=weights_fun,
+                                                                                            weights_params=weights_params), level=v, rfun=rfun)
+
+            else:
+
+                in_smooth, out_smooth, in_raw, out_raw = reduce_wrapper(folding_levels(in_raw, out_raw, level=v, cfun=cfun,
+                                                                        rfun=p_rfun, combine=combine,
+                                                                        weights_fun=weights_fun,
+                                                                        weights_params=weights_params), level=v, rfun=rfun)
+
+                for s in range(0, nfolds):
+
+                    sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = reduce_wrapper(folding_levels(sub_in_raw, sub_out_raw,
+                                                                                            level=v, cfun=cfun,
+                                                                                            rfun=p_rfun, combine=combine,
+                                                                                            weights_fun=weights_fun,
+                                                                                            weights_params=weights_params), level=v, rfun=rfun)
+
+
+            next_corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
+            next_subcorrs = (1 - sd.cdist(sub_in_smooth, sub_out_smooth, 'correlation'))
+
+            corrs.append(next_corrs)
+            sub_corrs.append(next_subcorrs)
+
+        sub_corrs = np.array(sub_corrs)
+        corrs = np.array(corrs)
+
+        if sub_nfolds == 1:
+            sub_corrs = corrs
+
+        for lev in range(v+1):
+
+            mu = optimize_weights(sub_corrs[0:lev+1,:,:])
+            w_corrs = weight_corrs(corrs[0:lev+1,:,:], mu)
+
+            next_results_pd = decoder(w_corrs)
+            next_results_pd['level'] = v
+            next_results_pd['folds'] = i
+
+            mu_pd = pd.DataFrame()
+            for c in np.arange(lev + 1):
+                mu_pd['level_' + str(c)] = [0]
+
+            mu_pd += mu
+
+            next_results_pd = pd.concat([next_results_pd, mu_pd], axis=1, join_axes=[next_results_pd.index])
+
+            results_pd = pd.concat([results_pd, next_results_pd])
+
+
+    return results_pd
+
+
+def pca_decoder(data, nfolds=2, dims=10, level=0, cfun=isfc, weights_fun=laplace_weights,
+                                        weights_params=laplace_params, combine=mean_combine, rfun=None):
+    """
+    :param data: a list of number-of-observations by number-of-features matrices
+    :param nfolds: number of cross-validation folds (train using out-of-fold data;
+                   test using in-fold data)
+    :param level: integer or list of integers for levels to be evaluated (default:0)
+    :param cfun: function for transforming the group data (default: isfc)
+    :param weights_fun: used to compute per-timepoint weights for cfun; default: laplace_weights
+    :param  weights_params: parameters passed to weights_fun; default: laplace_params
+    :params combine: function for combining data within each group, or a list of such functions (default: mean_combine)
+    :param rfun: function for reducing output (default: None)
+    :return: results dictionary with the following keys:
+       'rank': mean percentile rank (across all timepoints and folds) in the
+               decoding distribution of the true timepoint
+       'accuracy': mean percent accuracy (across all timepoints and folds)
+       'error': mean estimation error (across all timepoints and folds) between
+                the decoded and actual window numbers, expressed as a percentage
+                of the total number of windows
+    """
+
+    assert len(np.unique(
+        list(map(lambda x: x.shape[0], data)))) == 1, 'all data matrices must have the same number of timepoints'
+    assert len(np.unique(
+        list(map(lambda x: x.shape[1], data)))) == 1, 'all data matrices must have the same number of features'
+
+
+    pca_data = np.asarray(hyp.reduce(list(data), ndims=dims))
+
+    group_assignments = get_xval_assignments(len(pca_data), nfolds)
+    results_pd = pd.DataFrame()
+
+    corrs = []
+    for i in range(0, nfolds):
+        for d in range(1, dims + 1):
+
+            in_data = np.asarray([x for x in pca_data[group_assignments == i]])[:, :, :d]
+            out_data = np.asarray([x for x in pca_data[group_assignments != i]])[:, :, :d]
+
+            in_smooth, out_smooth, in_raw, out_raw = folding_levels(in_data, out_data, level=0, cfun=isfc, rfun=[None],
+                                                                combine=[mean_combine], weights_fun=weights_fun,
+                                                                weights_params=weights_params)
+
+            if d < 3:
+                in_smooth = np.hstack((in_smooth, np.zeros((in_smooth.shape[0], 3 - in_smooth.shape[1]))))
+                out_smooth = np.hstack((out_smooth, np.zeros((out_smooth.shape[0], 3 - out_smooth.shape[1]))))
+            corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
+
+            corrs = np.array(corrs)
+            next_results_pd = decoder(corrs)
+            next_results_pd['dims'] = d
+            next_results_pd['folds'] = i
+
+            results_pd = pd.concat([results_pd, next_results_pd])
+
+    return results_pd
+
+
+def folding_levels(infold_data, outfold_data, level=0, cfun=None, weights_fun=None, weights_params=None, combine=None,
+                   rfun=None):
+
+    from .timecorr import timecorr
+
+    if rfun is None:
+        rfun = [None] * np.shape(level)[0]
+
+    if level == 0:
+
+        in_fold_smooth = np.asarray(timecorr([x for x in infold_data], cfun=None,
+                                             rfun=rfun[level], combine=combine[level], weights_function=weights_fun,
+                                             weights_params=weights_params))
+        out_fold_smooth = np.asarray(timecorr([x for x in outfold_data], cfun=None,
+                                              rfun=rfun[level], combine=combine[level], weights_function=weights_fun,
+                                              weights_params=weights_params))
+        in_fold_raw = mean_combine([x for x in infold_data])
+        out_fold_raw = mean_combine([x for x in outfold_data])
+
+    else:
+        in_fold_smooth = np.asarray(timecorr(infold_data, cfun=cfun[level], rfun=rfun[level], combine=combine[level],
+                                                 weights_function=weights_fun, weights_params=weights_params))
+        out_fold_smooth = np.asarray(timecorr(outfold_data, cfun=cfun[level], rfun=rfun[level], combine=combine[level],
+                                                  weights_function=weights_fun, weights_params=weights_params))
+        in_fold_raw = np.asarray(timecorr(infold_data, cfun=cfun[level], rfun=rfun[level], combine=null_combine,
+                                              weights_function=eye_weights, weights_params=eye_params))
+        out_fold_raw = np.asarray(timecorr(outfold_data, cfun=cfun[level], rfun=rfun[level], combine=null_combine,
+                                               weights_function=eye_weights, weights_params=eye_params))
+
+    return in_fold_smooth, out_fold_smooth, in_fold_raw, out_fold_raw
+
+
+def reduce_wrapper(data, dims=10, level=0, rfun=None):
+
+    if not level == 0:
+
+        all_smooth = list(data[0][np.newaxis, :, :]) + list(data[1][np.newaxis, :, :])
+        all_raw = list(data[2][np.newaxis, :, :]) + list(data[3][np.newaxis, :, :])
+
+        all_smooth_reduced = reduce(all_smooth, rfun=rfun[level])
+        all_raw_reduced = reduce(all_raw, rfun=rfun[level])
+
+
+        return all_smooth_reduced[0], all_smooth_reduced[1], all_raw_reduced[0], all_raw_reduced[1]
+
+    else:
+
+        return data[0], data[1], data[2], data[3]
+
+
+def optimize_weights(corrs):
+
+    b = (0, 1)
+    bns = (b,) * np.shape(corrs)[0]
+    con1 = {'type': 'eq', 'fun': lambda x: 1 - np.sum(x)}
+    x0 = np.repeat(1/np.shape(corrs)[0], np.shape(corrs)[0])
+
+    min_mu = minimize(calculate_error, x0, args=corrs, bounds=bns, constraints=con1, options={'disp': True, 'eps': 1e-1})
+
+    return min_mu.x
+
+def calculate_error(mu, corrs, metric='error', sign=1):
+
+    results = decoder(weight_corrs(corrs, mu))
+    return sign * results[metric].values
+
+
+def weight_corrs(corrs, mu):
+
+    assert np.shape(mu)[0] == len(corrs)
+    weighted_corrs = 0
+
+    for i in np.arange(np.shape(corrs)[0]):
+        weighted_corrs += mu[i] * r2z(corrs[i])
+
+    return z2r(weighted_corrs)
+
+def decoder(corrs):
+
+    next_results_pd = pd.DataFrame({'rank': [0], 'accuracy': [0], 'error': [0]})
+    for t in np.arange(corrs.shape[0]):
+        decoded_inds = np.argmax(corrs[t, :])
+        next_results_pd['error'] += np.mean(np.abs(decoded_inds - np.array(t))) / corrs.shape[0]
+        next_results_pd['accuracy'] += np.mean(decoded_inds == np.array(t))
+        next_results_pd['rank'] += np.mean(list(map((lambda x: int(x)), (corrs[t, :] <= corrs[t, t]))))
+
+    next_results_pd['error'] =  next_results_pd['error'].values / corrs.shape[0]
+    next_results_pd['accuracy'] = next_results_pd['accuracy'].values / corrs.shape[0]
+    next_results_pd['rank']= next_results_pd['rank'].values / corrs.shape[0]
+
+    return next_results_pd
+
 
 # def predict(x, n=1):
 #     '''
@@ -409,11 +802,63 @@ def rmdiag(m):
     return m - np.diag(np.diag(m))
 
 
+def generate_random_covariance_matrix(N):
+    template = np.random.randn(N, N)
+    cov = np.multiply(template, template.T)
+    return mat2vec(cov)
+
+def generate_data(sq_cov, T):
+    import warnings
+    warnings.simplefilter('ignore')
+    covmat = vec2mat(sq_cov)
+    return np.random.multivariate_normal(np.zeros(covmat.shape[0]), covmat, (T))
+
+def generate_template_data(covs, T):
+    data = []
+    for i in np.arange(covs.shape[0]):
+        data.extend(generate_data(covs[i, :], T))
+    return np.vstack(data)
+
+def generate_subject_data(T, E, template):
+    noise = np.random.randn(T*E, template.shape[1])
+    return np.add(template, noise)
+
+
+
+
 def r2z(r):
+    """
+    Function that calculates the Fisher z-transformation
+
+    Parameters
+    ----------
+    r : int or ndarray
+        Correlation value
+
+    Returns
+    ----------
+    result : int or ndarray
+        Fishers z transformed correlation value
+
+    """
     return 0.5*(np.log(1+r) - np.log(1-r))
 
 
 def z2r(z):
+    """
+    Function that calculates the inverse Fisher z-transformation
+
+    Parameters
+    ----------
+    z : int or ndarray
+        Fishers z transformed correlation value
+
+    Returns
+    ----------
+    result : int or ndarray
+        Correlation value
+
+    """
     r = np.divide((np.exp(2*z) - 1), (np.exp(2*z) + 1))
     r[np.isnan(r)] = 0
     r[np.isinf(r)] = np.sign(r)[np.isinf(r)]
@@ -426,6 +871,20 @@ def iseven(x):
     return np.remainder(x, 2) == 0
 
 def mat2vec(m):
+    """
+    Function that converts correlation matrix to a vector
+
+    Parameters
+    ----------
+    m : ndarray
+        Correlation matix
+
+    Returns
+    ----------
+    result : ndarray
+        Vector
+
+    """
     K = m.shape[0]
     V = int((((K ** 2) - K) / 2) + K)
 
@@ -450,6 +909,20 @@ def mat2vec(m):
 
 
 def vec2mat(v):
+    """
+    Function that converts vector back to correlation matrix
+
+    Parameters
+    ----------
+    result : ndarray
+        Vector
+
+    Returns
+    ----------
+    m : ndarray
+        Correlation matix
+
+    """
     if (v.ndim == 1) or (v.shape[0] == 1):
         x = int(0.5*(np.sqrt(8*len(v) + 1) - 1))
         return sd.squareform(v[x:]) + np.diag(v[0:x])
@@ -478,3 +951,63 @@ def get_xval_assignments(ndata, nfolds):
         group_assignments[inds] = i
     np.random.shuffle(group_assignments)
     return group_assignments
+
+# set some defaults for plots
+SMALL_SIZE = 18
+MEDIUM_SIZE = 21
+BIGGER_SIZE = 24
+
+plt.rc('font', size=SMALL_SIZE)          # controls default text sizes
+plt.rc('axes', titlesize=SMALL_SIZE)     # fontsize of the axes title
+plt.rc('axes', labelsize=MEDIUM_SIZE)    # fontsize of the x and y labels
+plt.rc('xtick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
+plt.rc('ytick', labelsize=SMALL_SIZE)    # fontsize of the tick labels
+plt.rc('legend', fontsize=SMALL_SIZE)    # legend fontsize
+plt.rc('figure', titlesize=BIGGER_SIZE)  # fontsize of the figure title
+
+def plot_weights(weights, t=None, color='k', ax=None, xlab='Time (samples)', ylab='Weights', title=None, outfile=None):
+    """
+    Plot weights
+
+
+    Parameters
+    ----------
+    weights : int or float or None
+        Weights to plot
+
+    t : int or float
+        Time
+
+    Returns
+    ----------
+    results : png
+         Plot of weights
+
+    """
+    T = weights.shape[0]
+    if t is None:
+        t = np.round(T / 2)
+    ts = np.arange(1, T + 1)
+
+    if ax is None:
+        ax = plt.gca()
+
+    ax.plot(ts, weights[int(t), :], color=color)
+    plt.xlim([1, T])
+
+    if not (xlab is None):
+        plt.xlabel(xlab)
+
+    if not (ylab is None):
+        plt.ylabel(ylab)
+
+    if not (title is None):
+        plt.title(title)
+
+    plt.tight_layout()
+
+    if outfile:
+        plt.savefig(outfile)
+
+    else:
+        plt.show()

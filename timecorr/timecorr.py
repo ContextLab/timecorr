@@ -1,6 +1,6 @@
 # coding: utf-8
 
-from .helpers import isfc, laplace_weights, format_data, null_combine, reduce
+from .helpers import isfc, laplace_weights, format_data, null_combine, reduce, smooth
 
 def timecorr(data, weights_function=laplace_weights,
              weights_params=None, combine=null_combine,
@@ -8,7 +8,7 @@ def timecorr(data, weights_function=laplace_weights,
     """
     Computes dynamics correlations in single-subject or multi-subject data.
 
-    Inputs
+    Parameters
     ----------
     data: numpy array, pandas dataframe, or a list of numpy arrays/dataframes
         Each numpy array (or dataframe) should have size timepoints by features.
@@ -62,8 +62,9 @@ def timecorr(data, weights_function=laplace_weights,
         list), the default cfun returns the moment-by-moment correlations for
         that array.  (Reference: http://www.nature.com/articles/ncomms12141)
 
-    rfun: function to use for dimensionality reduction.  All hypertools and
-        scikit-learn functions are supported: PCA, IncrementalPCA, SparsePCA,
+    rfun: function to use for dimensionality reduction.
+
+        All hypertools and scikit-learn functions are supported: PCA, IncrementalPCA, SparsePCA,
         MiniBatchSparsePCA, KernelPCA, FastICA, FactorAnalysis, TruncatedSVD,
         DictionaryLearning, MiniBatchDictionaryLearning, TSNE, Isomap,
         SpectralEmbedding, LocallyLinearEmbedding, MDS, and UMAP.
@@ -82,7 +83,7 @@ def timecorr(data, weights_function=laplace_weights,
 
         Default: None (no dimensionality reduction)
 
-    Outputs
+    Returns
     ----------
     corrmats: moment-by-moment correlations
     """
@@ -98,7 +99,16 @@ def timecorr(data, weights_function=laplace_weights,
     data = format_data(data)
 
     weights = weights_function(T, weights_params)
-    corrs = reduce(combine(cfun(data, weights)), rfun=rfun)
+
+    if cfun:
+        corrs = reduce(combine(cfun(data, weights)), rfun=rfun)
+
+        if type(corrs) is not list:
+            corrs = corrs.tolist()
+
+    else:
+        corrs = combine(smooth(data, kernel_fun=weights_function, kernel_params=weights_params)).tolist()
+
 
     if return_list and (not (type(corrs) == list)):
         return [corrs]

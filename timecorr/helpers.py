@@ -76,7 +76,7 @@ def mexican_hat_weights(T, params=mexican_hat_params):
     return np.multiply(a, np.multiply(b, c))
 
 def format_data(data):
-    return hyp.tools.format_data(data)
+    return hyp.tools.format_data(data, ppca=False)
 
 def _is_empty(dict):
     if not bool(dict):

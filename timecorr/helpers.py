@@ -80,7 +80,7 @@ def format_data(data):
         x[np.isnan(x)] = 0
         return x
     
-    x = hyp.tools.format_data(data, ppca=False)
+    x = hyp.tools.format_data(data, ppca=False, )
     return list(map(zero_nans, x))
     
 
@@ -160,7 +160,12 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     corrs = []
     for s, a in enumerate(data):
         b = weighted_mean(np.stack(data, axis=2), axis=2, weights=subject_weights[s, :])
-        corrs.append(mat2vec(wcorr(a, b, timepoint_weights)))
+        wc = wcorr(a, b, timepoint_weights)
+        wc[np.isnan(wc)] = 0.
+        try:
+            corrs.append(mat2vec(wc))
+        except:
+            print('mystery!')
 
     return corrs
 

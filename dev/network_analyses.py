@@ -230,7 +230,7 @@ def get_network_dynamics(x, rows, offset=-2, before=25, after=25, **kwargs):
     for r in rows:
         next_data = list(map(lambda y: get_events(y['data'], get_bounds(y['regmat'][r, :])[0] + offset, before=before, after=after), x))
         next_means = list(map(lambda y: np.nanmean(y, axis=2), next_data))
-        nets.append(np.array(tc.timecorr(copier(next_means), **kwargs)))
+        nets.append(tc.timecorr(copier(next_means), **kwargs))
         
         debug_a.append(next_data)
         debug_b.append(next_means)

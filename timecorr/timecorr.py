@@ -103,8 +103,8 @@ def timecorr(data, weights_function=laplace_weights,
     if cfun:
         corrs = reduce(combine(cfun(data, weights)), rfun=rfun)
 
-        if type(corrs) is not list:
-            corrs = corrs.tolist()
+        #if type(corrs) is not list:
+        #    corrs = corrs.tolist()
 
     else:
         corrs = combine(smooth(data, kernel_fun=weights_function, kernel_params=weights_params)).tolist()

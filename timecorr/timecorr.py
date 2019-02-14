@@ -1,10 +1,11 @@
 # coding: utf-8
 
-from .helpers import isfc, laplace_weights, format_data, null_combine, reduce, smooth
+import numpy as np
+from .helpers import isfc, gaussian_weights, format_data, null_combine, reduce, smooth
 
-def timecorr(data, weights_function=laplace_weights,
-             weights_params=None, combine=null_combine,
-             cfun=isfc, rfun=None):
+def timecorr(data, weights_function=gaussian_weights,
+             weights_params=None, include_timepoints='all', exclude_timepoints=None,
+             combine=null_combine, cfun=isfc, rfun=None):
     """
     Computes dynamics correlations in single-subject or multi-subject data.
 
@@ -20,7 +21,7 @@ def timecorr(data, weights_function=laplace_weights,
         The function should return a T by T array containing the timepoint-specific
         weights for each consecutive time point from 0 to T (not including T).
 
-        Default: laplace_weights; options: laplace_weights, gaussian_weights,
+        Default: gaussian_weights; options: laplace_weights, gaussian_weights,
         t_weights, eye_weights, mexican_hat_weights
 
     weights_params: used to pass parameters to the weights_params function. This
@@ -30,6 +31,22 @@ def timecorr(data, weights_function=laplace_weights,
         Default: None (use default parameters for the given weights function).
         Options: gaussian_params, laplace_params, t_params, eye_params,
         mexican_hat_params.
+
+    include_timepoints: determines which timepoints are used to estimate the correlations
+        at each timepoint.  This is applied after the weights function to further constrain
+        which timepoints may be considered in computing the correlations at each timepoint.
+
+        Options: 'all' (default; include all timepoints), 'pre' (only include timepoints *before*
+        the given timepoint), 'post' (only include timepoints *after* the given timepoint).
+
+    exclude_timepoints: additional option, used to filter out any timepoints less than x units
+        of the timepoint whose correlations are being estimated.  For example, passing
+        exclude_timepoints=3 will exclude any timepoints 3 or more samples from the given timepoint.
+        When exclude timepoints is negative, it works inversely-- e.g. exclude_timepoints=-5 will
+        exclude any timepoints within 5 or fewer samples of the given timepoint.  Real-valued scalars
+        are supported but are rounded to the nearest Integer.
+
+        Default: None (no filtering).
 
     combine: a function applied to either a single matrix of vectorized correlation
         matrices, or a list of such matrices.  The function should return either
@@ -88,6 +105,16 @@ def timecorr(data, weights_function=laplace_weights,
     corrmats: moment-by-moment correlations
     """
 
+    def temporal_filter(T, k):
+        k = np.round(k)
+        filt = np.eye(T)
+        for i in np.arange(1, np.min([np.abs(k) + 1, T])):
+            filt = filt + np.eye(T, k=np.abs(i)) + np.eye(T, k=-np.abs(i))
+        if k < 0:
+            return 1 - filt
+        else:
+            return filt
+
     if type(data) == list:
         T = data[0].shape[0]
         return_list = True
@@ -100,14 +127,25 @@ def timecorr(data, weights_function=laplace_weights,
 
     weights = weights_function(T, weights_params)
 
+    include_timepoints = include_timepoints.lower()
+    if include_timepoints == 'all':
+        pass
+    elif include_timepoints == 'pre':
+        weights = np.tril(weights)
+    elif include_timepoints == 'post':
+        weights = np.triu(weights)
+    else:
+        raise Exception(f'Invalid option for include_timepoints: \'{include_timepoints}\'.  Must be one of: \'all\', \'pre\', or \'post\'.')
+
+    if not (exclude_timepoints is None):
+        weights = np.multiply(temporal_filter(T, exclude_timepoints), weights)
+
     if cfun:
         corrs = reduce(combine(cfun(data, weights)), rfun=rfun)
 
         if not (cfun is None):
             return_list = False
 
-        #if type(corrs) is not list:
-        #    corrs = corrs.tolist()
     else:
         corrs = combine(smooth(data, kernel_fun=weights_function, kernel_params=weights_params)).tolist()
 

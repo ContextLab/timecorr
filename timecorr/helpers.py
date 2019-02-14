@@ -12,8 +12,6 @@ import pandas as pd
 import warnings
 from matplotlib import pyplot as plt
 
-from copy import copy, deepcopy
-
 graph_measures = {'eigenvector_centrality': bc.centrality.eigenvector_centrality_und,
                   'pagerank_centrality': lambda x: bc.centrality.pagerank_centrality(x, d=0.85),
                   'strength': bc.degree.strengths_und}
@@ -80,7 +78,7 @@ def boxcar_weights(T, params=boxcar_params):
     if params is None:
         params = boxcar_params
 
-    return np.multiply(toeplitz(np.arange(T)) < params{'width'}/2., 1.)
+    return np.multiply(toeplitz(np.arange(T)) < params['width']/2., 1.)
 
 
 

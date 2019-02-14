@@ -24,6 +24,7 @@ eye_params = {}
 t_params = {'df': 100}
 mexican_hat_params = {'sigma': 10}
 uniform_params = {}
+boxcar_params = {'width': 10}
 
 
 def gaussian_weights(T, params=gaussian_params):
@@ -74,6 +75,14 @@ def mexican_hat_weights(T, params=mexican_hat_params):
     c = np.exp(-np.divide(sqdiffs, 2 * np.power(params['sigma'], 2)))
 
     return np.multiply(a, np.multiply(b, c))
+
+def boxcar_weights(T, params=boxcar_params):
+    if params is None:
+        params = boxcar_params
+
+    return np.multiply(toeplitz(np.arange(T)) < params{'width'}/2., 1.)
+
+
 
 def format_data(data):
     def zero_nans(x):

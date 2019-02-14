@@ -1,8 +1,8 @@
 # coding: utf-8
 
-from .helpers import isfc, laplace_weights, format_data, null_combine, reduce, smooth
+from .helpers import isfc, gaussian_weights, format_data, null_combine, reduce, smooth
 
-def timecorr(data, weights_function=laplace_weights,
+def timecorr(data, weights_function=gaussian_weights,
              weights_params=None, combine=null_combine,
              cfun=isfc, rfun=None):
     """
@@ -20,7 +20,7 @@ def timecorr(data, weights_function=laplace_weights,
         The function should return a T by T array containing the timepoint-specific
         weights for each consecutive time point from 0 to T (not including T).
 
-        Default: laplace_weights; options: laplace_weights, gaussian_weights,
+        Default: gaussian_weights; options: laplace_weights, gaussian_weights,
         t_weights, eye_weights, mexican_hat_weights
 
     weights_params: used to pass parameters to the weights_params function. This

@@ -22,7 +22,7 @@ from timecorr.helpers import generate_template_data, generate_subject_data, gene
 S = 5  #number of subjects
 T = 100  #number of timepoints per event
 E = 10  #number of events
-K = 110  #number of features
+K = 10  #number of features
 
 #make a timeseries of covariance matrices
 covs = np.zeros((E, int((K**2 - K)/2 + K)))
@@ -34,4 +34,6 @@ template_data = generate_template_data(covs, T)
 data = []
 for s in np.arange(S):
     data.append(generate_subject_data(T, E, template_data))
+
+tc.timecorr(data, weights_function=tc.gaussian_weights, weights_params={'var': 5}, combine=tc.helpers.corrmean_combine)
 

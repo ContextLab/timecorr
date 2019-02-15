@@ -31,9 +31,13 @@ level = 2
 
 
 # run timecorr with specified functions for calculating correlations, as well as combining and reducing
-results = tc.optimize_weighted_timepoint_decoder(np.array(data), level=level, combine=corrmean_combine,
+results_1 = tc.optimize_weighted_timepoint_decoder(np.array(data), level=level, combine=corrmean_combine,
+                               cfun=isfc, rfun='eigenvector_centrality', weights_fun=laplace['weights'],
+                               weights_params=laplace['params'])
+
+results_2 = tc.optimize_weighted_timepoint_decoder(np.array(data), level=level, combine=corrmean_combine,
                                cfun=isfc, rfun='eigenvector_centrality', weights_fun=laplace['weights'],
                                weights_params=laplace['params'])
 
 # returns optimal weighting for mu for all levels up to 2 as well as decoding results for each fold
-print(results)
+print(results_1)

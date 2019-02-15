@@ -12,8 +12,6 @@ import pandas as pd
 import warnings
 from matplotlib import pyplot as plt
 
-from copy import copy, deepcopy
-
 graph_measures = {'eigenvector_centrality': bc.centrality.eigenvector_centrality_und,
                   'pagerank_centrality': lambda x: bc.centrality.pagerank_centrality(x, d=0.85),
                   'strength': bc.degree.strengths_und}
@@ -24,6 +22,7 @@ eye_params = {}
 t_params = {'df': 100}
 mexican_hat_params = {'sigma': 10}
 uniform_params = {}
+boxcar_params = {'width': 10}
 
 
 def gaussian_weights(T, params=gaussian_params):
@@ -75,8 +74,22 @@ def mexican_hat_weights(T, params=mexican_hat_params):
 
     return np.multiply(a, np.multiply(b, c))
 
+def boxcar_weights(T, params=boxcar_params):
+    if params is None:
+        params = boxcar_params
+
+    return np.multiply(toeplitz(np.arange(T)) < params['width']/2., 1.)
+
+
+
 def format_data(data):
-    return hyp.tools.format_data(data)
+    def zero_nans(x):
+        x[np.isnan(x)] = 0
+        return x
+    
+    x = hyp.tools.format_data(data, ppca=False, )
+    return list(map(zero_nans, x))
+    
 
 def _is_empty(dict):
     if not bool(dict):
@@ -154,7 +167,12 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     corrs = []
     for s, a in enumerate(data):
         b = weighted_mean(np.stack(data, axis=2), axis=2, weights=subject_weights[s, :])
-        corrs.append(mat2vec(wcorr(a, b, timepoint_weights)))
+        wc = wcorr(a, b, timepoint_weights)
+        wc[np.isnan(wc)] = 0.
+        try:
+            corrs.append(mat2vec(wc))
+        except:
+            print('mystery!')
 
     return corrs
 

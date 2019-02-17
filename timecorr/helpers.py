@@ -760,17 +760,18 @@ def weighted_timepoint_decoder(data, nfolds=2, level=0, optimize_levels=None, cf
             opt_over.append(lev)
 
             sub_out_corrs = sub_corrs[opt_over,:,:]
+            out_corrs = corrs[opt_over, :, :]
 
             mu = optimize_weights(sub_out_corrs)
 
-            w_corrs = weight_corrs(sub_out_corrs, mu)
+            w_corrs = weight_corrs(out_corrs, mu)
 
             next_results_pd = decoder(w_corrs)
-            next_results_pd['level'] = v
+            next_results_pd['level'] = lev
             next_results_pd['folds'] = i
 
             mu_pd = pd.DataFrame()
-            #for c in np.arange(lev + 1):
+
             for c in opt_over:
                 mu_pd['level_' + str(c)] = [0]
 

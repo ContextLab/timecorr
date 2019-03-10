@@ -1,17 +1,11 @@
 
-:orphan:
+Using timecorr function
+=======================
 
-.. _tutorial:
+Blah blah
 
-How to use the timecorr package
-================
-
-Introduction to `Brain` objects
-----------------
-.. toctree::
-   :maxdepth: 2
-
-   tutorial/timecorr.ipynb
+Load in the required libraries
+==============================
 
 .. code:: ipython3
 

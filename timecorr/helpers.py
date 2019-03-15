@@ -613,7 +613,7 @@ def timepoint_decoder(data, mu=None, nfolds=2, level=0, cfun=isfc, weights_fun=l
 
 
 def weighted_timepoint_decoder(data, nfolds=2, level=0, optimize_levels=None, cfun=isfc, weights_fun=laplace_weights,
-                                        weights_params=laplace_params, combine=mean_combine, rfun=None):
+                                        weights_params=laplace_params, combine=mean_combine, rfun=None, opt_init=None):
     """
     :param data: a list of number-of-observations by number-of-features matrices
     :param nfolds: number of cross-validation folds (train using out-of-fold data;
@@ -718,9 +718,14 @@ def weighted_timepoint_decoder(data, nfolds=2, level=0, optimize_levels=None, cf
 
                     sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = reduce_wrapper(folding_levels(sub_in_data, sub_out_data,
                                                                                             level=v, cfun=None, rfun=p_rfun,
-                                                                                            combine=combine,
-                                                                                            weights_fun=weights_fun,
+                                                                                            combine=combine,                                                                                           weights_fun=weights_fun,
                                                                                             weights_params=weights_params), level=v, rfun=rfun)
+
+                next_corrs = (1 - sd.cdist(in_raw, out_raw, 'correlation'))
+                next_subcorrs = (1 - sd.cdist(sub_in_raw, sub_out_raw, 'correlation'))
+
+                corrs.append(next_corrs)
+                sub_corrs.append(next_subcorrs)
 
             else:
 
@@ -738,11 +743,11 @@ def weighted_timepoint_decoder(data, nfolds=2, level=0, optimize_levels=None, cf
                                                                                             weights_params=weights_params), level=v, rfun=rfun)
 
 
-            next_corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
-            next_subcorrs = (1 - sd.cdist(sub_in_smooth, sub_out_smooth, 'correlation'))
+                next_corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
+                next_subcorrs = (1 - sd.cdist(sub_in_smooth, sub_out_smooth, 'correlation'))
 
-            corrs.append(next_corrs)
-            sub_corrs.append(next_subcorrs)
+                corrs.append(next_corrs)
+                sub_corrs.append(next_subcorrs)
 
         sub_corrs = np.array(sub_corrs)
         corrs = np.array(corrs)
@@ -762,7 +767,7 @@ def weighted_timepoint_decoder(data, nfolds=2, level=0, optimize_levels=None, cf
             sub_out_corrs = sub_corrs[opt_over,:,:]
             out_corrs = corrs[opt_over, :, :]
 
-            mu = optimize_weights(sub_out_corrs)
+            mu = optimize_weights(sub_out_corrs, opt_init)
 
             w_corrs = weight_corrs(out_corrs, mu)
 
@@ -892,16 +897,29 @@ def reduce_wrapper(data, dims=10, level=0, rfun=None):
         return data[0], data[1], data[2], data[3]
 
 
-def optimize_weights(corrs):
+def optimize_weights(corrs, opt_init=None):
 
     b = (0, 1)
     bns = (b,) * np.shape(corrs)[0]
     con1 = {'type': 'eq', 'fun': lambda x: 1 - np.sum(x)}
-    x0 = np.repeat(1/np.shape(corrs)[0], np.shape(corrs)[0])
+    if opt_init=='random':
+        x0 = sum_to_x(np.shape(corrs)[0], 1)
+    elif opt_init=='last':
+        x0 = np.repeat(1 / np.shape(corrs)[0], np.shape(corrs)[0])
+        x0[-1] = 1
+    else:
+        x0 = np.repeat(1/np.shape(corrs)[0], np.shape(corrs)[0])
 
     min_mu = minimize(calculate_error, x0, args=corrs, bounds=bns, constraints=con1, options={'disp': True, 'eps': 1e-1})
 
     return min_mu.x
+
+def sum_to_x(n, x):
+    values = [0.0, x] + list(np.random.uniform(low=0.0,high=x,size=n-1))
+    values.sort()
+    return np.asarray([values[i+1] - values[i] for i in range(n)])
+
+
 
 def calculate_error(mu, corrs, metric='error', sign=1):
 

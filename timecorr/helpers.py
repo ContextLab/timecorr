@@ -718,9 +718,14 @@ def weighted_timepoint_decoder(data, nfolds=2, level=0, optimize_levels=None, cf
 
                     sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = reduce_wrapper(folding_levels(sub_in_data, sub_out_data,
                                                                                             level=v, cfun=None, rfun=p_rfun,
-                                                                                            combine=combine,
-                                                                                            weights_fun=weights_fun,
+                                                                                            combine=combine,                                                                                           weights_fun=weights_fun,
                                                                                             weights_params=weights_params), level=v, rfun=rfun)
+
+                next_corrs = (1 - sd.cdist(in_raw, out_raw, 'correlation'))
+                next_subcorrs = (1 - sd.cdist(sub_in_raw, sub_out_raw, 'correlation'))
+
+                corrs.append(next_corrs)
+                sub_corrs.append(next_subcorrs)
 
             else:
 
@@ -738,11 +743,11 @@ def weighted_timepoint_decoder(data, nfolds=2, level=0, optimize_levels=None, cf
                                                                                             weights_params=weights_params), level=v, rfun=rfun)
 
 
-            next_corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
-            next_subcorrs = (1 - sd.cdist(sub_in_smooth, sub_out_smooth, 'correlation'))
+                next_corrs = (1 - sd.cdist(in_smooth, out_smooth, 'correlation'))
+                next_subcorrs = (1 - sd.cdist(sub_in_smooth, sub_out_smooth, 'correlation'))
 
-            corrs.append(next_corrs)
-            sub_corrs.append(next_subcorrs)
+                corrs.append(next_corrs)
+                sub_corrs.append(next_subcorrs)
 
         sub_corrs = np.array(sub_corrs)
         corrs = np.array(corrs)

@@ -647,7 +647,6 @@ def weighted_timepoint_decoder(data, nfolds=2, level=0, optimize_levels=None, cf
 
     group_assignments = get_xval_assignments(len(data), nfolds)
 
-    subgroup_assignments = get_xval_assignments(len(data[group_assignments == 0]), nfolds)
 
     orig_level = level
     orig_level = np.ravel(orig_level)
@@ -700,6 +699,9 @@ def weighted_timepoint_decoder(data, nfolds=2, level=0, optimize_levels=None, cf
         sub_out_raw = []
         sub_corrs = []
         corrs = []
+
+        subgroup_assignments = get_xval_assignments(len(data[group_assignments == i]), nfolds)
+
         for v in level:
 
             if v==0:
@@ -711,8 +713,8 @@ def weighted_timepoint_decoder(data, nfolds=2, level=0, optimize_levels=None, cf
                                         combine=combine, weights_fun=weights_fun,
                                         weights_params=weights_params), level=v, rfun=rfun)
 
-                for s in range(0, nfolds):
 
+                for s in range(0, nfolds):
                     sub_in_data = [x for x in data[group_assignments == i][subgroup_assignments==s]]
                     sub_out_data = [x for x in data[group_assignments == i][subgroup_assignments!=s]]
 
@@ -772,6 +774,7 @@ def weighted_timepoint_decoder(data, nfolds=2, level=0, optimize_levels=None, cf
             w_corrs = weight_corrs(out_corrs, mu)
 
             next_results_pd = decoder(w_corrs)
+            print(next_results_pd)
             next_results_pd['level'] = lev
             next_results_pd['folds'] = i
 
@@ -789,13 +792,12 @@ def weighted_timepoint_decoder(data, nfolds=2, level=0, optimize_levels=None, cf
 
     return results_pd
 
-def pca_decoder(data, nfolds=2, dims=10, level=0, cfun=isfc, weights_fun=laplace_weights,
+def pca_decoder(data, nfolds=2, dims=10, cfun=isfc, weights_fun=laplace_weights,
                                         weights_params=laplace_params, combine=mean_combine, rfun=None):
     """
     :param data: a list of number-of-observations by number-of-features matrices
     :param nfolds: number of cross-validation folds (train using out-of-fold data;
                    test using in-fold data)
-    :param level: integer or list of integers for levels to be evaluated (default:0)
     :param cfun: function for transforming the group data (default: isfc)
     :param weights_fun: used to compute per-timepoint weights for cfun; default: laplace_weights
     :param  weights_params: parameters passed to weights_fun; default: laplace_params

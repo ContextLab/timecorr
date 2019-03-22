@@ -4,6 +4,7 @@
     <list default="true" id="3a363a53-546b-4e85-9c71-4bf21b5220ba" name="Default" comment="">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/timecorr/helpers.py" beforeDir="false" afterPath="$PROJECT_DIR$/timecorr/helpers.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/timecorr/timecorr.py" beforeDir="false" afterPath="$PROJECT_DIR$/timecorr/timecorr.py" afterDir="false" />
     </list>
     <option name="EXCLUDED_CONVERTED_TO_IGNORED" value="true" />
     <option name="TRACKING_ENABLED" value="true" />
@@ -24,7 +25,7 @@
   </component>
   <component name="FileEditorManager">
     <leaf SIDE_TABS_SIZE_LIMIT_KEY="375">
-      <file leaf-file-name="README.md" pinned="false" current-in-tab="true">
+      <file leaf-file-name="README.md" pinned="false" current-in-tab="false">
         <entry file="file://$PROJECT_DIR$/README.md">
           <provider selected="true" editor-type-id="split-provider[text-editor;markdown-preview-editor]">
             <state split_layout="SPLIT">
@@ -73,6 +74,27 @@
           </provider>
         </entry>
       </file>
+      <file leaf-file-name="helpers.py" pinned="false" current-in-tab="true">
+        <entry file="file://$PROJECT_DIR$/timecorr/helpers.py">
+          <provider selected="true" editor-type-id="text-editor">
+            <state relative-caret-position="444">
+              <caret line="192" column="27" selection-start-line="192" selection-start-column="27" selection-end-line="192" selection-end-column="27" />
+              <folding>
+                <element signature="e#16#47#0" expanded="true" />
+              </folding>
+            </state>
+          </provider>
+        </entry>
+      </file>
+      <file leaf-file-name="timecorr.py" pinned="false" current-in-tab="false">
+        <entry file="file://$PROJECT_DIR$/timecorr/timecorr.py">
+          <provider selected="true" editor-type-id="text-editor">
+            <state relative-caret-position="2812">
+              <caret line="149" column="9" selection-start-line="149" selection-start-column="9" selection-end-line="149" selection-end-column="9" />
+            </state>
+          </provider>
+        </entry>
+      </file>
       <file leaf-file-name="timecorr.ipynb" pinned="false" current-in-tab="false">
         <entry file="file://$PROJECT_DIR$/docs/tutorial/timecorr.ipynb">
           <provider selected="true" editor-type-id="ipnb-editor">
@@ -100,7 +122,6 @@
       <find>ica</find>
       <find>gen_</find>
       <find>wcorr</find>
-      <find>smooth</find>
       <find>kernel</find>
       <find>optimize_we</find>
       <find>idea</find>
@@ -113,6 +134,8 @@
       <find>vec2mat</find>
       <find>format</find>
       <find>optimize</find>
+      <find>smooth</find>
+      <find>isfc</find>
     </findStrings>
   </component>
   <component name="Git.Settings">
@@ -135,7 +158,6 @@
         <option value="$PROJECT_DIR$/docs/Makefile" />
         <option value="$PROJECT_DIR$/docs/index.rst" />
         <option value="$PROJECT_DIR$/docs/api.rst" />
-        <option value="$PROJECT_DIR$/timecorr/timecorr.py" />
         <option value="$PROJECT_DIR$/docs/tutorial.rst" />
         <option value="$PROJECT_DIR$/examples/decode_by_level.py" />
         <option value="$PROJECT_DIR$/tests/test_helpers.py" />
@@ -146,8 +168,9 @@
         <option value="$PROJECT_DIR$/examples/decode_by_weighted_level.py" />
         <option value="$PROJECT_DIR$/examples/decode_by_weighted_randint.py" />
         <option value="$PROJECT_DIR$/examples/decode_by_weighted_randinit.py" />
-        <option value="$PROJECT_DIR$/timecorr/helpers.py" />
         <option value="$PROJECT_DIR$/docs/tutorial/timecorr.rst" />
+        <option value="$PROJECT_DIR$/timecorr/timecorr.py" />
+        <option value="$PROJECT_DIR$/timecorr/helpers.py" />
       </list>
     </option>
   </component>
@@ -160,8 +183,8 @@
   <component name="NodePackageJsonFileManager">
     <packageJsonPaths />
   </component>
-  <component name="ProjectFrameBounds">
-    <option name="x" value="35" />
+  <component name="ProjectFrameBounds" extendedState="1">
+    <option name="x" value="6" />
     <option name="y" value="23" />
     <option name="width" value="1646" />
     <option name="height" value="1005" />
@@ -171,7 +194,6 @@
       <foldersAlwaysOnTop value="true" />
     </navigator>
     <panes>
-      <pane id="Scope" />
       <pane id="ProjectPane">
         <subPane>
           <expand>
@@ -223,11 +245,13 @@
           <select />
         </subPane>
       </pane>
+      <pane id="Scope" />
     </panes>
   </component>
   <component name="PropertiesComponent">
     <property name="SearchEverywhereHistoryKey" value="&#9;FILE&#9;file:///Users/lucyowen/repos/timecorr/examples/decode_by_weighted_level.py" />
     <property name="WebServerToolWindowFactoryState" value="false" />
+    <property name="last_opened_file_path" value="$PROJECT_DIR$" />
     <property name="nodejs_interpreter_path.stuck_in_default_project" value="undefined stuck path" />
     <property name="nodejs_npm_path_reset_for_default_project" value="true" />
   </component>
@@ -392,23 +416,23 @@
     </history-entry>
   </component>
   <component name="ToolWindowManager">
-    <frame x="35" y="23" width="1646" height="1005" extended-state="0" />
+    <frame x="6" y="23" width="1646" height="1005" extended-state="1" />
     <editor active="true" />
     <layout>
       <window_info anchor="bottom" id="TODO" order="6" />
-      <window_info anchor="bottom" id="Event Log" order="7" sideWeight="0.22898369" side_tool="true" visible="true" weight="0.37062937" />
+      <window_info active="true" anchor="bottom" id="Event Log" order="7" sideWeight="0.22898369" side_tool="true" visible="true" weight="0.35851184" />
       <window_info anchor="bottom" id="Database Changes" order="7" show_stripe_button="false" />
+      <window_info anchor="bottom" id="Run" order="2" />
       <window_info anchor="bottom" id="Version Control" order="7" />
       <window_info anchor="bottom" id="Python Console" order="7" />
-      <window_info anchor="bottom" id="Run" order="2" />
       <window_info anchor="bottom" id="Terminal" order="7" />
-      <window_info active="true" content_ui="combo" id="Project" order="0" visible="true" weight="0.21455458" />
+      <window_info content_ui="combo" id="Project" order="0" visible="true" weight="0.2199271" />
       <window_info anchor="bottom" id="Docker" order="7" />
       <window_info anchor="right" id="Database" order="3" />
       <window_info anchor="right" id="SciView" order="3" />
       <window_info id="Structure" order="1" side_tool="true" weight="0.25" />
-      <window_info id="Favorites" order="2" side_tool="true" />
       <window_info anchor="bottom" id="Debug" order="3" sideWeight="0.7710163" weight="0.37062937" />
+      <window_info id="Favorites" order="2" side_tool="true" />
       <window_info anchor="right" content_ui="combo" id="Hierarchy" order="2" weight="0.25" />
       <window_info anchor="bottom" id="Inspection" order="5" weight="0.4" />
       <window_info anchor="right" id="Commander" order="0" weight="0.4" />
@@ -661,20 +685,6 @@
         </state>
       </provider>
     </entry>
-    <entry file="file://$PROJECT_DIR$/timecorr/timecorr.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="2470">
-          <caret line="130" column="23" selection-start-line="130" selection-start-column="23" selection-end-line="130" selection-end-column="23" />
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/timecorr/helpers.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="171">
-          <caret line="9" column="22" lean-forward="true" selection-start-line="9" selection-start-column="22" selection-end-line="9" selection-end-column="22" />
-        </state>
-      </provider>
-    </entry>
     <entry file="file://$PROJECT_DIR$/docs/tutorial.rst">
       <provider selected="true" editor-type-id="text-editor">
         <state relative-caret-position="247">
@@ -756,14 +766,14 @@
       </provider>
     </entry>
     <entry file="file://$PROJECT_DIR$/docs/index.md">
+      <provider editor-type-id="text-editor">
+        <state relative-caret-position="-735" />
+      </provider>
       <provider selected="true" editor-type-id="split-provider[text-editor;markdown-preview-editor]">
         <state split_layout="SPLIT">
           <first_editor />
           <second_editor />
         </state>
-      </provider>
-      <provider editor-type-id="text-editor">
-        <state relative-caret-position="-735" />
       </provider>
     </entry>
     <entry file="file://$PROJECT_DIR$/docs/index.rst">
@@ -777,15 +787,32 @@
       <provider selected="true" editor-type-id="text-editor" />
     </entry>
     <entry file="file://$PROJECT_DIR$/README.md">
+      <provider editor-type-id="text-editor">
+        <state relative-caret-position="836">
+          <caret line="44" column="22" selection-start-line="44" selection-start-column="22" selection-end-line="44" selection-end-column="22" />
+        </state>
+      </provider>
       <provider selected="true" editor-type-id="split-provider[text-editor;markdown-preview-editor]">
         <state split_layout="SPLIT">
           <first_editor />
           <second_editor />
         </state>
       </provider>
-      <provider editor-type-id="text-editor">
-        <state relative-caret-position="836">
-          <caret line="44" column="22" selection-start-line="44" selection-start-column="22" selection-end-line="44" selection-end-column="22" />
+    </entry>
+    <entry file="file://$PROJECT_DIR$/timecorr/timecorr.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="2812">
+          <caret line="149" column="9" selection-start-line="149" selection-start-column="9" selection-end-line="149" selection-end-column="9" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/timecorr/helpers.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="444">
+          <caret line="192" column="27" selection-start-line="192" selection-start-column="27" selection-end-line="192" selection-end-column="27" />
+          <folding>
+            <element signature="e#16#47#0" expanded="true" />
+          </folding>
         </state>
       </provider>
     </entry>

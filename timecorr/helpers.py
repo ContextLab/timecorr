@@ -168,7 +168,8 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     for s, a in enumerate(data):
         b = weighted_mean(np.stack(data, axis=2), axis=2, weights=subject_weights[s, :])
         wc = wcorr(a, b, timepoint_weights)
-        wc[np.isnan(wc)] = 0.
+        wc[np.isnan(wc)] = 0
+        wc[np.isinf(wc)] = 1
         try:
             corrs.append(mat2vec(wc))
         except:
@@ -1104,6 +1105,7 @@ def mat2vec(m):
 
         #force m to by symmetric
         m = np.triu(rmdiag(m))
+        m[np.isnan(m)] = 0
         m += m.T
 
         y[K:] = sd.squareform(rmdiag(m))

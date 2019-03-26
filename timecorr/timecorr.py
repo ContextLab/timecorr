@@ -149,7 +149,6 @@ def timecorr(data, weights_function=gaussian_weights,
     else:
         corrs = combine(smooth(data, kernel_fun=weights_function, kernel_params=weights_params)).tolist()
 
-
     if return_list and (not (type(corrs) == list)):
         return [corrs]
     elif (not return_list) and (type(corrs) == list) and (len(corrs) == 1):

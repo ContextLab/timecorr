@@ -1,10 +1,10 @@
 .. note::
     :class: sphx-glr-download-link-note
 
-    Click :ref:`here <sphx_glr_download_auto_examples_decode_by_weighted_level.py>` to download the full example code
+    Click :ref:`here <sphx_glr_download_auto_examples_decode_by_weighted_randinit.py>` to download the full example code
 .. rst-class:: sphx-glr-example-title
 
-.. _sphx_glr_auto_examples_decode_by_weighted_level.py:
+.. _sphx_glr_auto_examples_decode_by_weighted_randinit.py:
 
 
 =======================================
@@ -48,14 +48,14 @@ In this example, we load in some example data, and find optimal level weights fo
 
     results_2 = tc.weighted_timepoint_decoder(np.array(data), level=level, combine=corrmean_combine,
                                    cfun=isfc, rfun='eigenvector_centrality', weights_fun=laplace['weights'],
-                                   weights_params=laplace['params'])
+                                   weights_params=laplace['params'], random_init=True)
 
     # returns optimal weighting for mu for all levels up to 2 as well as decoding results for each fold
     print(results_1)
 **Total running time of the script:** ( 0 minutes  0.000 seconds)
 
 
-.. _sphx_glr_download_auto_examples_decode_by_weighted_level.py:
+.. _sphx_glr_download_auto_examples_decode_by_weighted_randinit.py:
 
 
 .. only :: html
@@ -67,13 +67,13 @@ In this example, we load in some example data, and find optimal level weights fo
 
   .. container:: sphx-glr-download
 
-     :download:`Download Python source code: decode_by_weighted_level.py <decode_by_weighted_level.py>`
+     :download:`Download Python source code: decode_by_weighted_randinit.py <decode_by_weighted_randinit.py>`
 
 
 
   .. container:: sphx-glr-download
 
-     :download:`Download Jupyter notebook: decode_by_weighted_level.ipynb <decode_by_weighted_level.ipynb>`
+     :download:`Download Jupyter notebook: decode_by_weighted_randinit.ipynb <decode_by_weighted_randinit.ipynb>`
 
 
 .. only:: html

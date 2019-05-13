@@ -6,3 +6,4 @@ from .helpers import isfc, wisfc, autofc, wcorr, gaussian_weights, gaussian_para
                      mexican_hat_params, eye_weights, eye_params, uniform_weights, uniform_params, boxcar_weights, boxcar_params,\
                      mean_combine, corrmean_combine, tstat_combine, null_combine, reduce, isodd, iseven, smooth, timepoint_decoder,\
                      weighted_timepoint_decoder
+from .simulate import simulate_data

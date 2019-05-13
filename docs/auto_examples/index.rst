@@ -49,6 +49,26 @@ Gallery of Examples
 
 .. raw:: html
 
+    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we calculate dynamic correlations">
+
+.. only:: html
+
+    .. figure:: /auto_examples/images/thumb/sphx_glr_calculate_dynamic_correlations_thumb.png
+
+        :ref:`sphx_glr_auto_examples_calculate_dynamic_correlations.py`
+
+.. raw:: html
+
+    </div>
+
+
+.. toctree::
+   :hidden:
+
+   /auto_examples/calculate_dynamic_correlations
+
+.. raw:: html
+
     <div class="sphx-glr-thumbcontainer" tooltip="In this example, we load in some example data, and find optimal level weights for decoding.">
 
 .. only:: html
@@ -69,13 +89,13 @@ Gallery of Examples
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we calculate dynamic correlations">
+    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we load in some example data, and find optimal level weights for decoding.">
 
 .. only:: html
 
-    .. figure:: /auto_examples/images/thumb/sphx_glr_calculate_dynamic_correlations_thumb.png
+    .. figure:: /auto_examples/images/thumb/sphx_glr_decode_by_weighted_randinit_thumb.png
 
-        :ref:`sphx_glr_auto_examples_calculate_dynamic_correlations.py`
+        :ref:`sphx_glr_auto_examples_decode_by_weighted_randinit.py`
 
 .. raw:: html
 
@@ -85,7 +105,7 @@ Gallery of Examples
 .. toctree::
    :hidden:
 
-   /auto_examples/calculate_dynamic_correlations
+   /auto_examples/decode_by_weighted_randinit
 
 .. raw:: html
 

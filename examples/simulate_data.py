@@ -10,30 +10,24 @@ In this example, we simulate data
 # Code source: Lucy Owen
 # License: MIT
 
-# load timecorr and other packages
+# load timecorr
 import timecorr as tc
-import hypertools as hyp
-import numpy as np
+import seaborn as sns
 
-# load helper functions
-from timecorr.helpers import generate_template_data, generate_subject_data, generate_random_covariance_matrix
+# simulate some data
+data, corrs = tc.simulate_data(datagen='block', return_corrs=True, set_random_seed=True, S=1, T=100, K=10, B=5)
 
-# create synthetic data with specified paramters
-S = 5  #number of subjects
-T = 100  #number of timepoints per event
-E = 10  #number of events
-K = 10  #number of features
+# calculate correlations  - returned squareformed
+tc_vec_data = tc.timecorr(tc.simulate_data(), weights_function=tc.gaussian_weights, weights_params={'var': 5}, combine=tc.helpers.corrmean_combine)
 
-#make a timeseries of covariance matrices
-covs = np.zeros((E, int((K**2 - K)/2 + K)))
-for event in np.arange(E):
-    covs[event, :] = generate_random_covariance_matrix(K)
+# convert from vector to matrix format
+tc_mat_data = tc.vec2mat(tc_vec_data)
 
-# generate synthetic data from covariance matrices
-template_data = generate_template_data(covs, T)
-data = []
-for s in np.arange(S):
-    data.append(generate_subject_data(T, E, template_data))
+# plot the 3 correlation matrices different timepoints
 
-tc.timecorr(data, weights_function=tc.gaussian_weights, weights_params={'var': 5}, combine=tc.helpers.corrmean_combine)
+tc_mat_data[:, :, 48]
+
+sns.heatmap(tc_mat_data[:, :, 48])
+sns.heatmap(tc_mat_data[:, :, 50])
+sns.heatmap(tc_mat_data[:, :, 52])
 

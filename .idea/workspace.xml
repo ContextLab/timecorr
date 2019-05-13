@@ -2,9 +2,20 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="3a363a53-546b-4e85-9c71-4bf21b5220ba" name="Default" comment="">
+      <change afterPath="$PROJECT_DIR$/timecorr/simulate.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/auto_examples/auto_examples_jupyter.zip" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/auto_examples_jupyter.zip" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/auto_examples/auto_examples_python.zip" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/auto_examples_python.zip" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/auto_examples/decode_by_weighted_level.ipynb" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/decode_by_weighted_level.ipynb" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/auto_examples/decode_by_weighted_level.py" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/decode_by_weighted_level.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/auto_examples/decode_by_weighted_level.rst" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/decode_by_weighted_level.rst" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/auto_examples/index.rst" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/index.rst" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/auto_examples/simulate_data.ipynb" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/simulate_data.ipynb" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/auto_examples/simulate_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/simulate_data.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/docs/auto_examples/simulate_data.rst" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/simulate_data.rst" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/examples/simulate_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/examples/simulate_data.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/timecorr/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/timecorr/__init__.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/timecorr/helpers.py" beforeDir="false" afterPath="$PROJECT_DIR$/timecorr/helpers.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/timecorr/timecorr.py" beforeDir="false" afterPath="$PROJECT_DIR$/timecorr/timecorr.py" afterDir="false" />
     </list>
     <option name="EXCLUDED_CONVERTED_TO_IGNORED" value="true" />
     <option name="TRACKING_ENABLED" value="true" />
@@ -18,9 +29,9 @@
     <SUITE FILE_PATH="coverage/timecorr$dev_tests.coverage" NAME="dev_tests Coverage Results" MODIFIED="1544145994633" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="true" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/dev" />
     <SUITE FILE_PATH="coverage/timecorr$py_test_in_test_helpers_py.coverage" NAME="py.test in test_helpers.py Coverage Results" MODIFIED="1544043135467" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="true" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/tests" />
     <SUITE FILE_PATH="coverage/timecorr$decode_by_level.coverage" NAME="decode_by_level Coverage Results" MODIFIED="1545089340557" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="true" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/examples" />
-    <SUITE FILE_PATH="coverage/timecorr$simulate_data.coverage" NAME="simulate_data Coverage Results" MODIFIED="1549750345337" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="true" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/examples" />
+    <SUITE FILE_PATH="coverage/timecorr$simulate_data.coverage" NAME="simulate_data Coverage Results" MODIFIED="1557770149050" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="true" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/examples" />
     <SUITE FILE_PATH="coverage/timecorr$plot_explore_kernels.coverage" NAME="plot_explore_kernels Coverage Results" MODIFIED="1544647769425" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="true" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/examples" />
-    <SUITE FILE_PATH="coverage/timecorr$calculate_dynamic_correlations.coverage" NAME="calculate_dynamic_correlations Coverage Results" MODIFIED="1546900712312" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="true" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/examples" />
+    <SUITE FILE_PATH="coverage/timecorr$calculate_dynamic_correlations.coverage" NAME="calculate_dynamic_correlations Coverage Results" MODIFIED="1557506995353" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="true" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/examples" />
     <SUITE FILE_PATH="coverage/timecorr$decode_by_weighted_level.coverage" NAME="decode_by_weighted_level Coverage Results" MODIFIED="1549749926856" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="true" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/examples" />
   </component>
   <component name="FileEditorManager">
@@ -38,38 +49,34 @@
       <file leaf-file-name="__init__.py" pinned="false" current-in-tab="false">
         <entry file="file://$PROJECT_DIR$/timecorr/__init__.py">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="57">
-              <caret line="8" selection-start-line="8" selection-end-line="8" />
+            <state relative-caret-position="152">
+              <caret line="8" column="31" lean-forward="true" selection-start-line="8" selection-start-column="31" selection-end-line="8" selection-end-column="31" />
+            </state>
+          </provider>
+        </entry>
+      </file>
+      <file leaf-file-name="simulate.py" pinned="false" current-in-tab="false">
+        <entry file="file://$PROJECT_DIR$/timecorr/simulate.py">
+          <provider selected="true" editor-type-id="text-editor">
+            <state relative-caret-position="167">
+              <caret line="128" selection-start-line="128" selection-end-line="128" />
               <folding>
-                <element signature="e#23#53#0" expanded="true" />
+                <element signature="e#0#15#0" expanded="true" />
               </folding>
             </state>
           </provider>
         </entry>
       </file>
+      <file leaf-file-name="__init__.py" pinned="false" current-in-tab="false">
+        <entry file="file://$PROJECT_DIR$/tests/__init__.py">
+          <provider selected="true" editor-type-id="text-editor" />
+        </entry>
+      </file>
       <file leaf-file-name="setup.py" pinned="false" current-in-tab="false">
         <entry file="file://$PROJECT_DIR$/setup.py">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="1140">
-              <caret line="60" selection-start-line="60" selection-end-line="60" />
-            </state>
-          </provider>
-        </entry>
-      </file>
-      <file leaf-file-name="Makefile" pinned="false" current-in-tab="false">
-        <entry file="file://$PROJECT_DIR$/docs/Makefile">
-          <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="1919">
-              <caret line="101" column="62" selection-end-line="155" selection-end-column="54" />
-            </state>
-          </provider>
-        </entry>
-      </file>
-      <file leaf-file-name="nb_to_doc.py" pinned="false" current-in-tab="false">
-        <entry file="file://$PROJECT_DIR$/docs/tutorial/tools/nb_to_doc.py">
-          <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="399">
-              <caret line="22" column="26" selection-start-line="22" selection-start-column="26" selection-end-line="22" selection-end-column="26" />
+            <state relative-caret-position="190">
+              <caret line="10" column="44" lean-forward="true" selection-start-line="10" selection-start-column="44" selection-end-line="10" selection-end-column="44" />
             </state>
           </provider>
         </entry>
@@ -77,10 +84,22 @@
       <file leaf-file-name="helpers.py" pinned="false" current-in-tab="true">
         <entry file="file://$PROJECT_DIR$/timecorr/helpers.py">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="444">
-              <caret line="192" column="27" selection-start-line="192" selection-start-column="27" selection-end-line="192" selection-end-column="27" />
+            <state relative-caret-position="201">
+              <caret line="222" column="20" lean-forward="true" selection-start-line="222" selection-start-column="20" selection-end-line="222" selection-end-column="20" />
               <folding>
                 <element signature="e#16#47#0" expanded="true" />
+              </folding>
+            </state>
+          </provider>
+        </entry>
+      </file>
+      <file leaf-file-name="calculate_dynamic_correlations.py" pinned="false" current-in-tab="false">
+        <entry file="file://$PROJECT_DIR$/examples/calculate_dynamic_correlations.py">
+          <provider selected="true" editor-type-id="text-editor">
+            <state relative-caret-position="817">
+              <caret line="43" selection-start-line="43" selection-end-line="43" selection-end-column="87" />
+              <folding>
+                <element signature="e#252#273#0" expanded="true" />
               </folding>
             </state>
           </provider>
@@ -89,17 +108,32 @@
       <file leaf-file-name="timecorr.py" pinned="false" current-in-tab="false">
         <entry file="file://$PROJECT_DIR$/timecorr/timecorr.py">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="2812">
-              <caret line="149" column="9" selection-start-line="149" selection-start-column="9" selection-end-line="149" selection-end-column="9" />
+            <state relative-caret-position="300">
+              <caret line="146" selection-start-line="146" selection-end-line="146" />
+              <folding>
+                <element signature="e#17#35#0" expanded="true" />
+              </folding>
             </state>
           </provider>
         </entry>
       </file>
-      <file leaf-file-name="timecorr.ipynb" pinned="false" current-in-tab="false">
-        <entry file="file://$PROJECT_DIR$/docs/tutorial/timecorr.ipynb">
-          <provider selected="true" editor-type-id="ipnb-editor">
-            <state>
-              <selected id="2" />
+      <file leaf-file-name="simulate_data.py" pinned="false" current-in-tab="false">
+        <entry file="file://$PROJECT_DIR$/examples/simulate_data.py">
+          <provider selected="true" editor-type-id="text-editor">
+            <state relative-caret-position="140">
+              <caret line="20" selection-start-line="20" selection-end-line="20" />
+              <folding>
+                <element signature="e#207#228#0" expanded="true" />
+              </folding>
+            </state>
+          </provider>
+        </entry>
+      </file>
+      <file leaf-file-name="twodim_base.py" pinned="false" current-in-tab="false">
+        <entry file="file:///usr/local/lib/python3.6/site-packages/numpy/lib/twodim_base.py">
+          <provider selected="true" editor-type-id="text-editor">
+            <state relative-caret-position="167">
+              <caret line="183" selection-start-line="183" selection-end-line="183" />
             </state>
           </provider>
         </entry>
@@ -136,6 +170,13 @@
       <find>optimize</find>
       <find>smooth</find>
       <find>isfc</find>
+      <find>combine</find>
+      <find>autofc</find>
+      <find>mat2</find>
+      <find>generate</find>
+      <find>vec2ma</find>
+      <find>symmetric</find>
+      <find>r2z</find>
     </findStrings>
   </component>
   <component name="Git.Settings">
@@ -162,14 +203,15 @@
         <option value="$PROJECT_DIR$/examples/decode_by_level.py" />
         <option value="$PROJECT_DIR$/tests/test_helpers.py" />
         <option value="$PROJECT_DIR$/examples/calculate_dynamic_correlations.py" />
-        <option value="$PROJECT_DIR$/examples/simulate_data.py" />
-        <option value="$PROJECT_DIR$/timecorr/__init__.py" />
         <option value="$PROJECT_DIR$/.gitignore" />
         <option value="$PROJECT_DIR$/examples/decode_by_weighted_level.py" />
         <option value="$PROJECT_DIR$/examples/decode_by_weighted_randint.py" />
         <option value="$PROJECT_DIR$/examples/decode_by_weighted_randinit.py" />
         <option value="$PROJECT_DIR$/docs/tutorial/timecorr.rst" />
         <option value="$PROJECT_DIR$/timecorr/timecorr.py" />
+        <option value="$PROJECT_DIR$/timecorr/__init__.py" />
+        <option value="$PROJECT_DIR$/timecorr/simulate.py" />
+        <option value="$PROJECT_DIR$/examples/simulate_data.py" />
         <option value="$PROJECT_DIR$/timecorr/helpers.py" />
       </list>
     </option>
@@ -183,9 +225,9 @@
   <component name="NodePackageJsonFileManager">
     <packageJsonPaths />
   </component>
-  <component name="ProjectFrameBounds" extendedState="1">
-    <option name="x" value="6" />
-    <option name="y" value="23" />
+  <component name="ProjectFrameBounds">
+    <option name="x" value="2260" />
+    <option name="y" value="-50" />
     <option name="width" value="1646" />
     <option name="height" value="1005" />
   </component>
@@ -194,17 +236,13 @@
       <foldersAlwaysOnTop value="true" />
     </navigator>
     <panes>
+      <pane id="Scope" />
       <pane id="ProjectPane">
         <subPane>
           <expand>
             <path>
               <item name="timecorr" type="b2602c69:ProjectViewProjectNode" />
               <item name="timecorr" type="462c0819:PsiDirectoryNode" />
-            </path>
-            <path>
-              <item name="timecorr" type="b2602c69:ProjectViewProjectNode" />
-              <item name="timecorr" type="462c0819:PsiDirectoryNode" />
-              <item name="dev" type="462c0819:PsiDirectoryNode" />
             </path>
             <path>
               <item name="timecorr" type="b2602c69:ProjectViewProjectNode" />
@@ -236,20 +274,14 @@
               <item name="timecorr" type="b2602c69:ProjectViewProjectNode" />
               <item name="External Libraries" type="cb654da1:ExternalLibrariesNode" />
             </path>
-            <path>
-              <item name="timecorr" type="b2602c69:ProjectViewProjectNode" />
-              <item name="External Libraries" type="cb654da1:ExternalLibrariesNode" />
-              <item name="&lt; Python 3.6 &gt;" type="70bed36:NamedLibraryElementNode" />
-            </path>
           </expand>
           <select />
         </subPane>
       </pane>
-      <pane id="Scope" />
     </panes>
   </component>
   <component name="PropertiesComponent">
-    <property name="SearchEverywhereHistoryKey" value="&#9;FILE&#9;file:///Users/lucyowen/repos/timecorr/examples/decode_by_weighted_level.py" />
+    <property name="SearchEverywhereHistoryKey" value="&#9;FILE&#9;file:///Users/lucyowen/repos/timecorr/timecorr/simulate.py" />
     <property name="WebServerToolWindowFactoryState" value="false" />
     <property name="last_opened_file_path" value="$PROJECT_DIR$" />
     <property name="nodejs_interpreter_path.stuck_in_default_project" value="undefined stuck path" />
@@ -275,7 +307,7 @@
       </list>
     </option>
   </component>
-  <component name="RunManager" selected="Python.decode_by_weighted_level">
+  <component name="RunManager" selected="Python.simulate_data">
     <configuration name="calculate_dynamic_correlations" type="PythonConfigurationType" factoryName="Python" temporary="true">
       <module name="timecorr" />
       <option name="INTERPRETER_OPTIONS" value="" />
@@ -380,10 +412,10 @@
     </list>
     <recent_temporary>
       <list>
-        <item itemvalue="Python.decode_by_weighted_randinit" />
         <item itemvalue="Python.simulate_data" />
-        <item itemvalue="Python.decode_by_weighted_level" />
         <item itemvalue="Python.calculate_dynamic_correlations" />
+        <item itemvalue="Python.decode_by_weighted_randinit" />
+        <item itemvalue="Python.decode_by_weighted_level" />
         <item itemvalue="Python.decode_by_level" />
       </list>
     </recent_temporary>
@@ -416,11 +448,11 @@
     </history-entry>
   </component>
   <component name="ToolWindowManager">
-    <frame x="6" y="23" width="1646" height="1005" extended-state="1" />
+    <frame x="2260" y="-50" width="1646" height="1005" extended-state="0" />
     <editor active="true" />
     <layout>
       <window_info anchor="bottom" id="TODO" order="6" />
-      <window_info active="true" anchor="bottom" id="Event Log" order="7" sideWeight="0.22898369" side_tool="true" visible="true" weight="0.35851184" />
+      <window_info anchor="bottom" id="Event Log" order="7" sideWeight="0.23086269" side_tool="true" visible="true" weight="0.3697858" />
       <window_info anchor="bottom" id="Database Changes" order="7" show_stripe_button="false" />
       <window_info anchor="bottom" id="Run" order="2" />
       <window_info anchor="bottom" id="Version Control" order="7" />
@@ -431,7 +463,7 @@
       <window_info anchor="right" id="Database" order="3" />
       <window_info anchor="right" id="SciView" order="3" />
       <window_info id="Structure" order="1" side_tool="true" weight="0.25" />
-      <window_info anchor="bottom" id="Debug" order="3" sideWeight="0.7710163" weight="0.37062937" />
+      <window_info active="true" anchor="bottom" id="Debug" order="3" sideWeight="0.7691373" visible="true" weight="0.3697858" />
       <window_info id="Favorites" order="2" side_tool="true" />
       <window_info anchor="right" content_ui="combo" id="Hierarchy" order="2" weight="0.25" />
       <window_info anchor="bottom" id="Inspection" order="5" weight="0.4" />
@@ -482,14 +514,34 @@
           <option name="timeStamp" value="62" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/examples/simulate_data.py</url>
-          <line>37</line>
-          <option name="timeStamp" value="64" />
-        </line-breakpoint>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/examples/decode_by_weighted_randinit.py</url>
           <line>37</line>
           <option name="timeStamp" value="65" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/examples/calculate_dynamic_correlations.py</url>
+          <line>37</line>
+          <option name="timeStamp" value="67" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/examples/simulate_data.py</url>
+          <line>23</line>
+          <option name="timeStamp" value="69" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/examples/simulate_data.py</url>
+          <line>27</line>
+          <option name="timeStamp" value="72" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/examples/simulate_data.py</url>
+          <line>20</line>
+          <option name="timeStamp" value="73" />
+        </line-breakpoint>
+        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
+          <url>file://$PROJECT_DIR$/timecorr/helpers.py</url>
+          <line>225</line>
+          <option name="timeStamp" value="77" />
         </line-breakpoint>
       </breakpoints>
       <default-breakpoints>
@@ -499,13 +551,10 @@
           </properties>
         </breakpoint>
       </default-breakpoints>
-      <option name="time" value="66" />
+      <option name="time" value="78" />
     </breakpoint-manager>
   </component>
   <component name="editorHistoryManager">
-    <entry file="file://$PROJECT_DIR$/examples/isfc_synthetic_testing.ipynb" />
-    <entry file="file://$PROJECT_DIR$/examples/levelup_test.ipynb" />
-    <entry file="file://$PROJECT_DIR$/examples/multilevel-mixture-analysis.ipynb" />
     <entry file="file://$PROJECT_DIR$/examples/multiprocess_testing.ipynb" />
     <entry file="file://$PROJECT_DIR$/examples/timecorr_weights_testing.ipynb" />
     <entry file="file://$PROJECT_DIR$/examples/timepoint_decoder_test.ipynb" />
@@ -610,13 +659,6 @@
         </state>
       </provider>
     </entry>
-    <entry file="file:///usr/local/Cellar/python/3.6.5_1/Frameworks/Python.framework/Versions/3.6/lib/python3.6/codecs.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="5852">
-          <caret line="308" selection-start-line="308" selection-end-line="308" />
-        </state>
-      </provider>
-    </entry>
     <entry file="file://$PROJECT_DIR$/dev/dev_tests.py">
       <provider selected="true" editor-type-id="text-editor">
         <state relative-caret-position="367">
@@ -635,16 +677,6 @@
       <provider selected="true" editor-type-id="text-editor">
         <state relative-caret-position="342">
           <caret line="18" selection-start-line="18" selection-end-line="19" />
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/examples/calculate_dynamic_correlations.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="722">
-          <caret line="43" column="22" selection-start-line="43" selection-start-column="22" selection-end-line="43" selection-end-column="22" />
-          <folding>
-            <element signature="e#252#273#0" expanded="true" />
-          </folding>
         </state>
       </provider>
     </entry>
@@ -671,16 +703,6 @@
           <caret line="39" selection-start-line="39" selection-end-line="39" />
           <folding>
             <element signature="e#322#343#0" expanded="true" />
-          </folding>
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/examples/simulate_data.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="276">
-          <caret line="19" lean-forward="true" selection-start-line="19" selection-end-line="19" />
-          <folding>
-            <element signature="e#226#247#0" expanded="true" />
           </folding>
         </state>
       </provider>
@@ -741,23 +763,6 @@
         </state>
       </provider>
     </entry>
-    <entry file="file://$PROJECT_DIR$/timecorr/__init__.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="57">
-          <caret line="8" selection-start-line="8" selection-end-line="8" />
-          <folding>
-            <element signature="e#23#53#0" expanded="true" />
-          </folding>
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/setup.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="1140">
-          <caret line="60" selection-start-line="60" selection-end-line="60" />
-        </state>
-      </provider>
-    </entry>
     <entry file="file://$PROJECT_DIR$/.gitignore">
       <provider selected="true" editor-type-id="text-editor">
         <state relative-caret-position="319">
@@ -799,17 +804,81 @@
         </state>
       </provider>
     </entry>
+    <entry file="file://$PROJECT_DIR$/examples/calculate_dynamic_correlations.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="817">
+          <caret line="43" selection-start-line="43" selection-end-line="43" selection-end-column="87" />
+          <folding>
+            <element signature="e#252#273#0" expanded="true" />
+          </folding>
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/tests/__init__.py">
+      <provider selected="true" editor-type-id="text-editor" />
+    </entry>
+    <entry file="file://$PROJECT_DIR$/timecorr/__init__.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="152">
+          <caret line="8" column="31" lean-forward="true" selection-start-line="8" selection-start-column="31" selection-end-line="8" selection-end-column="31" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file:///usr/local/Cellar/python/3.6.5_1/Frameworks/Python.framework/Versions/3.6/lib/python3.6/codecs.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="205">
+          <caret line="310" selection-start-line="310" selection-end-line="310" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/setup.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="190">
+          <caret line="10" column="44" lean-forward="true" selection-start-line="10" selection-start-column="44" selection-end-line="10" selection-end-column="44" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/timecorr/simulate.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="167">
+          <caret line="128" selection-start-line="128" selection-end-line="128" />
+          <folding>
+            <element signature="e#0#15#0" expanded="true" />
+          </folding>
+        </state>
+      </provider>
+    </entry>
+    <entry file="file:///usr/local/lib/python3.6/site-packages/numpy/lib/twodim_base.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="167">
+          <caret line="183" selection-start-line="183" selection-end-line="183" />
+        </state>
+      </provider>
+    </entry>
     <entry file="file://$PROJECT_DIR$/timecorr/timecorr.py">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="2812">
-          <caret line="149" column="9" selection-start-line="149" selection-start-column="9" selection-end-line="149" selection-end-column="9" />
+        <state relative-caret-position="300">
+          <caret line="146" selection-start-line="146" selection-end-line="146" />
+          <folding>
+            <element signature="e#17#35#0" expanded="true" />
+          </folding>
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/examples/simulate_data.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="140">
+          <caret line="20" selection-start-line="20" selection-end-line="20" />
+          <folding>
+            <element signature="e#207#228#0" expanded="true" />
+          </folding>
         </state>
       </provider>
     </entry>
     <entry file="file://$PROJECT_DIR$/timecorr/helpers.py">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="444">
-          <caret line="192" column="27" selection-start-line="192" selection-start-column="27" selection-end-line="192" selection-end-column="27" />
+        <state relative-caret-position="201">
+          <caret line="222" column="20" lean-forward="true" selection-start-line="222" selection-start-column="20" selection-end-line="222" selection-end-column="20" />
           <folding>
             <element signature="e#16#47#0" expanded="true" />
           </folding>

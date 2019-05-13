@@ -33,7 +33,7 @@ In this example, we simulate data
     S = 5  #number of subjects
     T = 100  #number of timepoints per event
     E = 10  #number of events
-    K = 100  #number of features
+    K = 10  #number of features
 
     #make a timeseries of covariance matrices
     covs = np.zeros((E, int((K**2 - K)/2 + K)))
@@ -45,6 +45,8 @@ In this example, we simulate data
     data = []
     for s in np.arange(S):
         data.append(generate_subject_data(T, E, template_data))
+
+    tc.timecorr(data, weights_function=tc.gaussian_weights, weights_params={'var': 5}, combine=tc.helpers.corrmean_combine)
 
 
 **Total running time of the script:** ( 0 minutes  0.000 seconds)

@@ -129,15 +129,20 @@ def simulate_data(datagen='ramping', return_corrs=False, set_random_seed=False, 
     datagen_funcs = {'block': block_dataset, 'ramping': ramping_dataset, 'constant': constant_dataset, 'random':ramping_dataset}
 
     if set_random_seed:
-        if isinstance(set_random_seed, int):
-            np.random.seed(set_random_seed)
-        else:
+        if isinstance(set_random_seed, bool):
             np.random.seed(123)
+        else:
+            np.random.seed(set_random_seed)
 
     if S > 1:
+
         s_data = []
         s_corrs = []
         for _ in np.arange(S):
+
+            if set_random_seed:
+                np.random.seed(np.random.get_state()[1][0] + 1)
+
             s_temp_data, s_temp_corrs = datagen_funcs[datagen](K, T, B)
             s_data.append(s_temp_data)
             s_corrs.append(s_temp_corrs)

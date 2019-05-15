@@ -9,6 +9,26 @@ Gallery of Examples
 
 .. raw:: html
 
+    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we calculate dynamic correlations">
+
+.. only:: html
+
+    .. figure:: /auto_examples/images/thumb/sphx_glr_calculate_dynamic_correlations_thumb.png
+
+        :ref:`sphx_glr_auto_examples_calculate_dynamic_correlations.py`
+
+.. raw:: html
+
+    </div>
+
+
+.. toctree::
+   :hidden:
+
+   /auto_examples/calculate_dynamic_correlations
+
+.. raw:: html
+
     <div class="sphx-glr-thumbcontainer" tooltip="In this example, we simulate data">
 
 .. only:: html
@@ -46,26 +66,6 @@ Gallery of Examples
    :hidden:
 
    /auto_examples/plot_explore_kernels
-
-.. raw:: html
-
-    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we calculate dynamic correlations">
-
-.. only:: html
-
-    .. figure:: /auto_examples/images/thumb/sphx_glr_calculate_dynamic_correlations_thumb.png
-
-        :ref:`sphx_glr_auto_examples_calculate_dynamic_correlations.py`
-
-.. raw:: html
-
-    </div>
-
-
-.. toctree::
-   :hidden:
-
-   /auto_examples/calculate_dynamic_correlations
 
 .. raw:: html
 

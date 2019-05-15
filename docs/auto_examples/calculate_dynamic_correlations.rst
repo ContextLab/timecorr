@@ -26,7 +26,7 @@ In this example, we calculate dynamic correlations
     import numpy as np
 
 
-    S = 2
+    S = 1
     T = 1000
     K = 10
     B = 5
@@ -37,10 +37,13 @@ In this example, we calculate dynamic correlations
 
     # calculate the dynamic correlation of the two datasets
 
-    subs_data = tc.simulate_data(datagen='block', return_corrs=False, set_random_seed=True, S=S, T=T, K=K, B=B)
+    subs_data_2 = tc.simulate_data(datagen='ramping', return_corrs=False, set_random_seed=1, S=S, T=T, K=K, B=B)
+
+    subs_data_1 = tc.simulate_data(datagen='ramping', return_corrs=False, set_random_seed=2, S=S, T=T, K=K, B=B)
 
 
-    wcorred_data = tc.wcorr(np.array(subs_data[0]),  np.array(subs_data[1]), weights=laplace['weights'](T))
+
+    wcorred_data = tc.wcorr(np.array(subs_data_1),  np.array(subs_data_2), weights=laplace['weights'](T))
 **Total running time of the script:** ( 0 minutes  0.000 seconds)
 
 

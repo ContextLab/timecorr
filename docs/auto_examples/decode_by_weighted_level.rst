@@ -26,9 +26,6 @@ In this example, we load in some example data, and find optimal level weights fo
     import hypertools as hyp
     import numpy as np
 
-    # load helper functions
-    from timecorr.helpers import isfc, corrmean_combine
-
     # load example data
     data = hyp.load('weights').get_data()
 
@@ -42,16 +39,13 @@ In this example, we load in some example data, and find optimal level weights fo
 
 
     # run timecorr with specified functions for calculating correlations, as well as combining and reducing
-    results_1 = tc.weighted_timepoint_decoder(np.array(data), level=level, combine=corrmean_combine,
-                                   cfun=isfc, rfun='eigenvector_centrality', weights_fun=laplace['weights'],
+    results = tc.weighted_timepoint_decoder(np.array(data), level=level, combine=tc.corrmean_combine,
+                                   cfun=tc.isfc, rfun='eigenvector_centrality', weights_fun=laplace['weights'],
                                    weights_params=laplace['params'])
 
-    results_2 = tc.weighted_timepoint_decoder(np.array(data), level=level, combine=corrmean_combine,
-                                   cfun=isfc, rfun='eigenvector_centrality', weights_fun=laplace['weights'],
-                                   weights_params=laplace['params'])
 
     # returns optimal weighting for mu for all levels up to 2 as well as decoding results for each fold
-    print(results_1)
+    print(results)
 **Total running time of the script:** ( 0 minutes  0.000 seconds)
 
 

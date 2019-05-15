@@ -49,26 +49,6 @@ Gallery of Examples
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we plot the kernel options provided.">
-
-.. only:: html
-
-    .. figure:: /auto_examples/images/thumb/sphx_glr_plot_explore_kernels_thumb.png
-
-        :ref:`sphx_glr_auto_examples_plot_explore_kernels.py`
-
-.. raw:: html
-
-    </div>
-
-
-.. toctree::
-   :hidden:
-
-   /auto_examples/plot_explore_kernels
-
-.. raw:: html
-
     <div class="sphx-glr-thumbcontainer" tooltip="In this example, we load in some example data, and find optimal level weights for decoding.">
 
 .. only:: html
@@ -89,13 +69,13 @@ Gallery of Examples
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we load in some example data, and find optimal level weights for decoding.">
+    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we plot the kernel options provided.">
 
 .. only:: html
 
-    .. figure:: /auto_examples/images/thumb/sphx_glr_decode_by_weighted_randinit_thumb.png
+    .. figure:: /auto_examples/images/thumb/sphx_glr_plot_explore_kernels_thumb.png
 
-        :ref:`sphx_glr_auto_examples_decode_by_weighted_randinit.py`
+        :ref:`sphx_glr_auto_examples_plot_explore_kernels.py`
 
 .. raw:: html
 
@@ -105,7 +85,7 @@ Gallery of Examples
 .. toctree::
    :hidden:
 
-   /auto_examples/decode_by_weighted_randinit
+   /auto_examples/plot_explore_kernels
 
 .. raw:: html
 

@@ -25,8 +25,6 @@ tc_mat_data = tc.vec2mat(tc_vec_data)
 
 # plot the 3 correlation matrices different timepoints
 
-tc_mat_data[:, :, 48]
-
 sns.heatmap(tc_mat_data[:, :, 48])
 sns.heatmap(tc_mat_data[:, :, 50])
 sns.heatmap(tc_mat_data[:, :, 52])

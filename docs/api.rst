@@ -9,7 +9,7 @@ API reference
 
 .. _plot_api:
 
-timecorr
+Timecorr
 ------------------
 
 .. autosummary::
@@ -18,3 +18,21 @@ timecorr
   timecorr
 
 
+
+Simulations
+------------------
+
+.. autosummary::
+  :toctree:
+
+  simulate_data
+
+Helpers
+------------------
+
+.. autosummary::
+  :toctree:
+
+  wcorr
+  mat2vec
+  vec2mat

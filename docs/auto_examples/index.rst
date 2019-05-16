@@ -33,9 +33,9 @@ Gallery of Examples
 
 .. only:: html
 
-    .. figure:: /auto_examples/images/thumb/sphx_glr_simulate_data_thumb.png
+    .. figure:: /auto_examples/images/thumb/sphx_glr_plot_simulate_data_thumb.png
 
-        :ref:`sphx_glr_auto_examples_simulate_data.py`
+        :ref:`sphx_glr_auto_examples_plot_simulate_data.py`
 
 .. raw:: html
 
@@ -45,7 +45,7 @@ Gallery of Examples
 .. toctree::
    :hidden:
 
-   /auto_examples/simulate_data
+   /auto_examples/plot_simulate_data
 
 .. raw:: html
 

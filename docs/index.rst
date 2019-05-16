@@ -11,4 +11,6 @@
 
  .. toctree::
 
-blah blah
+# TimeCorr #
+
+The TimeCorr toolbox provides tools for computing and exploring the correlational structure of timeseries data.

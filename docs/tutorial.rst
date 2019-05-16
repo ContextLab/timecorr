@@ -11,4 +11,4 @@ Timecorr
 .. toctree::
    :maxdepth: 2
 
-   tutorial/timecorr.ipynb
+   tutorial/timecorr_nb.ipynb

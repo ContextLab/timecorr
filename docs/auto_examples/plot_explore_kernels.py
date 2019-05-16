@@ -32,16 +32,20 @@ mexican_hat = {'name': 'Mexican hat', 'weights': tc.mexican_hat_weights, 'params
 
 # plot delta
 plot_weights(delta['weights'](T), title='Delta')
+plt.show()
 plt.clf()
 
 # plot gaussian
 plot_weights(gaussian['weights'](T), title='Gaussian')
+plt.show()
 plt.clf()
 
 # plot laplace
 plot_weights(laplace['weights'](T), title='Laplace')
+plt.show()
 plt.clf()
 
 # plot mexican hat
 plot_weights(mexican_hat['weights'](T), title='Mexican hat')
+plt.show()
 plt.clf()

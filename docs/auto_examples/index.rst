@@ -9,33 +9,33 @@ Gallery of Examples
 
 .. raw:: html
 
+    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we calculate dynamic correlations">
+
+.. only:: html
+
+    .. figure:: /auto_examples/images/thumb/sphx_glr_calculate_dynamic_correlations_thumb.png
+
+        :ref:`sphx_glr_auto_examples_calculate_dynamic_correlations.py`
+
+.. raw:: html
+
+    </div>
+
+
+.. toctree::
+   :hidden:
+
+   /auto_examples/calculate_dynamic_correlations
+
+.. raw:: html
+
     <div class="sphx-glr-thumbcontainer" tooltip="In this example, we simulate data">
 
 .. only:: html
 
-    .. figure:: /auto_examples/images/thumb/sphx_glr_simulate_data_thumb.png
+    .. figure:: /auto_examples/images/thumb/sphx_glr_plot_simulate_data_thumb.png
 
-        :ref:`sphx_glr_auto_examples_simulate_data.py`
-
-.. raw:: html
-
-    </div>
-
-
-.. toctree::
-   :hidden:
-
-   /auto_examples/simulate_data
-
-.. raw:: html
-
-    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we plot the kernel options provided.">
-
-.. only:: html
-
-    .. figure:: /auto_examples/images/thumb/sphx_glr_plot_explore_kernels_thumb.png
-
-        :ref:`sphx_glr_auto_examples_plot_explore_kernels.py`
+        :ref:`sphx_glr_auto_examples_plot_simulate_data.py`
 
 .. raw:: html
 
@@ -45,7 +45,7 @@ Gallery of Examples
 .. toctree::
    :hidden:
 
-   /auto_examples/plot_explore_kernels
+   /auto_examples/plot_simulate_data
 
 .. raw:: html
 
@@ -69,13 +69,13 @@ Gallery of Examples
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we calculate dynamic correlations">
+    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we plot the kernel options provided.">
 
 .. only:: html
 
-    .. figure:: /auto_examples/images/thumb/sphx_glr_calculate_dynamic_correlations_thumb.png
+    .. figure:: /auto_examples/images/thumb/sphx_glr_plot_explore_kernels_thumb.png
 
-        :ref:`sphx_glr_auto_examples_calculate_dynamic_correlations.py`
+        :ref:`sphx_glr_auto_examples_plot_explore_kernels.py`
 
 .. raw:: html
 
@@ -85,7 +85,7 @@ Gallery of Examples
 .. toctree::
    :hidden:
 
-   /auto_examples/calculate_dynamic_correlations
+   /auto_examples/plot_explore_kernels
 
 .. raw:: html
 

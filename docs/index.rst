@@ -6,9 +6,11 @@
 **timecorr**: A Python toolbox for calculating dynamic correlations and exploring higher order correlations
 ===========================================================================================================
 
-   .. image:: _static/try_it.png
+   .. image:: _static/100_factors.gif
        :width: 400pt
 
  .. toctree::
 
-blah blah
+# TimeCorr #
+
+The TimeCorr toolbox provides tools for computing and exploring the correlational structure of timeseries data.

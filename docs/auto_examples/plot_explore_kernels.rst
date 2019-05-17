@@ -51,20 +51,24 @@ In this example, we plot the kernel options provided.
 
     # plot delta
     plot_weights(delta['weights'](T), title='Delta')
+    plt.show()
     plt.clf()
 
     # plot gaussian
     plot_weights(gaussian['weights'](T), title='Gaussian')
+    plt.show()
     plt.clf()
 
     # plot laplace
     plot_weights(laplace['weights'](T), title='Laplace')
+    plt.show()
     plt.clf()
 
     # plot mexican hat
     plot_weights(mexican_hat['weights'](T), title='Mexican hat')
+    plt.show()
     plt.clf()
-**Total running time of the script:** ( 0 minutes  0.222 seconds)
+**Total running time of the script:** ( 0 minutes  0.199 seconds)
 
 
 .. _sphx_glr_download_auto_examples_plot_explore_kernels.py:

@@ -10,7 +10,7 @@ def convert_nb(nbname):
 
 	# Execute the notebook
 	sh(["jupyter", "nbconvert", "--to", "notebook",
-		"--execute", "--inplace", "--ExecutePreprocessor.kernel_name=python3", nbname + ".ipynb"])
+		"--execute", "--inplace", "--ExecutePreprocessor.timeout=120", nbname + ".ipynb"])
 
 	# Convert to .rst for Sphinx
 	sh(["jupyter", "nbconvert", "--to", "rst", nbname + ".ipynb"])

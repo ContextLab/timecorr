@@ -1,6 +1,6 @@
 :orphan:
 
-.. _tutorial:
+.. _tutorials:
 
 How to use the timecorr package
 ================================

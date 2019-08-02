@@ -15,7 +15,8 @@ In this example, we load in some example data, and decode by level of higher ord
 
 
 
-.. code-block:: default
+
+.. code-block:: python
 
     # Code source: Lucy Owen
     # License: MIT
@@ -56,10 +57,7 @@ In this example, we load in some example data, and decode by level of higher ord
 
     # returns decoding results for all levels up to level 2
     print(results)
-
-.. rst-class:: sphx-glr-timing
-
-   **Total running time of the script:** ( 0 minutes  0.000 seconds)
+**Total running time of the script:** ( 0 minutes  0.000 seconds)
 
 
 .. _sphx_glr_download_auto_examples_decode_by_level.py:

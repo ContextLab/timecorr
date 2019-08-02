@@ -15,7 +15,8 @@ In this example, we load in some example data, and find optimal level weights fo
 
 
 
-.. code-block:: default
+
+.. code-block:: python
 
     # Code source: Lucy Owen
     # License: MIT
@@ -45,10 +46,7 @@ In this example, we load in some example data, and find optimal level weights fo
 
     # returns optimal weighting for mu for all levels up to 2 as well as decoding results for each fold
     print(results)
-
-.. rst-class:: sphx-glr-timing
-
-   **Total running time of the script:** ( 0 minutes  0.000 seconds)
+**Total running time of the script:** ( 0 minutes  0.000 seconds)
 
 
 .. _sphx_glr_download_auto_examples_decode_by_weighted_level.py:

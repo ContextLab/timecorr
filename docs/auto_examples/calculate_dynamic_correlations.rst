@@ -15,7 +15,8 @@ In this example, we calculate dynamic correlations
 
 
 
-.. code-block:: default
+
+.. code-block:: python
 
     # Code source: Lucy Owen
     # License: MIT
@@ -43,10 +44,7 @@ In this example, we calculate dynamic correlations
 
 
     wcorred_data = tc.wcorr(np.array(subs_data_1),  np.array(subs_data_2), weights=laplace['weights'](T))
-
-.. rst-class:: sphx-glr-timing
-
-   **Total running time of the script:** ( 0 minutes  0.000 seconds)
+**Total running time of the script:** ( 0 minutes  0.000 seconds)
 
 
 .. _sphx_glr_download_auto_examples_calculate_dynamic_correlations.py:

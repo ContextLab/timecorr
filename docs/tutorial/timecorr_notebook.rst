@@ -1,21 +1,18 @@
 
-Using timecorr function
-=======================
-
-Blah blah
-
-Load in the required libraries
-==============================
+Use timecorr functions
+----------------------
 
 .. code:: ipython3
 
-    import timecorr as tc
     import numpy as np
-
-Explain weighted dynamic correlation calculation
-================================================
+    import timecorr as tc
+    import seaborn as sns
 
 .. code:: ipython3
 
-    #wcorred_data = tc.wcorr(np.array(subs_data_1),  np.array(subs_data_2), weights=laplace['weights'](T))
+    sim_data = tc.simulate_data(T=1000, K=300, set_random_seed=100)
+
+.. code:: ipython3
+
+    tc_data = tc.timecorr(sim_data, weights_function=tc.gaussian_weights, weights_params={'var': 5})
 

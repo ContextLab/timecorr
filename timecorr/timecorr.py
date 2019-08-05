@@ -58,7 +58,7 @@ def timecorr(data, weights_function=gaussian_weights,
         helpers.corrmean_combine: take the element-wise average correlations across matrices
         helpers.tstat_combine: return element-wise t-statistics across matrices
 
-    cfunc: function to apply to the data array(s)
+    cfun: function to apply to the data array(s)
         This function should be of the form
         func(data, weights)
 

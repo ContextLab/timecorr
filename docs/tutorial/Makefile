@@ -1,4 +1,4 @@
 notebooks:
 
-				tools/nb_to_doc.py timecorr_nb
+				tools/nb_to_doc.py timecorr_notebook
 

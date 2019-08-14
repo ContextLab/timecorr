@@ -2,22 +2,7 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="3a363a53-546b-4e85-9c71-4bf21b5220ba" name="Default" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/auto_examples/auto_examples_jupyter.zip" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/auto_examples_jupyter.zip" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/auto_examples/auto_examples_python.zip" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/auto_examples_python.zip" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/auto_examples/index.rst" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/index.rst" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/auto_examples/plot_explore_kernels.ipynb" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/plot_explore_kernels.ipynb" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/auto_examples/plot_explore_kernels.py" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/plot_explore_kernels.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/auto_examples/plot_explore_kernels.py.md5" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/plot_explore_kernels.py.md5" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/auto_examples/plot_explore_kernels.rst" beforeDir="false" afterPath="$PROJECT_DIR$/docs/auto_examples/plot_explore_kernels.rst" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/index.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/index.rst" beforeDir="false" afterPath="$PROJECT_DIR$/docs/index.rst" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/tutorial.rst" beforeDir="false" afterPath="$PROJECT_DIR$/docs/tutorial.rst" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/tutorial/Makefile" beforeDir="false" afterPath="$PROJECT_DIR$/docs/tutorial/Makefile" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/tutorial/timecorr.ipynb" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/docs/tutorial/timecorr.rst" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/examples/plot_explore_kernels.py" beforeDir="false" afterPath="$PROJECT_DIR$/examples/plot_explore_kernels.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/examples/plot_simulate_data.py" beforeDir="false" afterPath="$PROJECT_DIR$/examples/plot_simulate_data.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/timecorr/timecorr.py" beforeDir="false" afterPath="$PROJECT_DIR$/timecorr/timecorr.py" afterDir="false" />
     </list>
     <option name="EXCLUDED_CONVERTED_TO_IGNORED" value="true" />
     <option name="TRACKING_ENABLED" value="true" />
@@ -38,49 +23,44 @@
   </component>
   <component name="FileEditorManager">
     <leaf SIDE_TABS_SIZE_LIMIT_KEY="375">
-      <file leaf-file-name="conf.py" pinned="false" current-in-tab="false">
-        <entry file="file://$PROJECT_DIR$/docs/conf.py">
+      <file leaf-file-name="simulate.py" pinned="false" current-in-tab="false">
+        <entry file="file://$PROJECT_DIR$/timecorr/simulate.py">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="240">
-              <caret line="19" column="12" selection-start-line="19" selection-start-column="12" selection-end-line="19" selection-end-column="12" />
+            <state relative-caret-position="72">
+              <caret line="91" column="14" lean-forward="true" selection-start-line="91" selection-start-column="14" selection-end-line="91" selection-end-column="14" />
+              <folding>
+                <element signature="e#0#15#0" expanded="true" />
+              </folding>
             </state>
           </provider>
         </entry>
       </file>
-      <file leaf-file-name="tutorial.rst" pinned="false" current-in-tab="false">
-        <entry file="file://$PROJECT_DIR$/docs/tutorial.rst">
+      <file leaf-file-name="decode_by_level.py" pinned="false" current-in-tab="false">
+        <entry file="file://$PROJECT_DIR$/examples/decode_by_level.py">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="247">
-              <caret line="13" column="5" selection-start-line="13" selection-start-column="5" selection-end-line="13" selection-end-column="5" />
+            <state relative-caret-position="601">
+              <caret line="41" column="51" selection-start-line="41" selection-start-column="51" selection-end-line="41" selection-end-column="51" />
+              <folding>
+                <element signature="e#282#303#0" expanded="true" />
+              </folding>
             </state>
           </provider>
         </entry>
       </file>
-      <file leaf-file-name="README.md" pinned="false" current-in-tab="false">
-        <entry file="file://$PROJECT_DIR$/docker/README.md">
-          <provider selected="true" editor-type-id="split-provider[text-editor;markdown-preview-editor]">
-            <state split_layout="SPLIT">
-              <first_editor />
-              <second_editor />
+      <file leaf-file-name="helpers.py" pinned="false" current-in-tab="false">
+        <entry file="file://$PROJECT_DIR$/timecorr/helpers.py">
+          <provider selected="true" editor-type-id="text-editor">
+            <state relative-caret-position="-544">
+              <caret line="940" column="11" selection-start-line="940" selection-start-column="4" selection-end-line="940" selection-end-column="11" />
             </state>
           </provider>
         </entry>
       </file>
-      <file leaf-file-name="README.md" pinned="false" current-in-tab="false">
-        <entry file="file://$PROJECT_DIR$/README.md">
-          <provider selected="true" editor-type-id="split-provider[text-editor;markdown-preview-editor]">
-            <state split_layout="SPLIT">
-              <first_editor />
-              <second_editor />
-            </state>
-          </provider>
-        </entry>
-      </file>
-      <file leaf-file-name="calculate_dynamic_correlations.py" pinned="false" current-in-tab="true">
+      <file leaf-file-name="calculate_dynamic_correlations.py" pinned="false" current-in-tab="false">
         <entry file="file://$PROJECT_DIR$/examples/calculate_dynamic_correlations.py">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="646">
-              <caret line="34" selection-start-line="34" selection-end-line="34" selection-end-column="101" />
+            <state relative-caret-position="437">
+              <caret line="23" column="11" lean-forward="true" selection-start-line="23" selection-start-column="11" selection-end-line="23" selection-end-column="11" />
               <folding>
                 <element signature="e#252#273#0" expanded="true" />
               </folding>
@@ -88,11 +68,59 @@
           </provider>
         </entry>
       </file>
-      <file leaf-file-name="Makefile" pinned="false" current-in-tab="false">
-        <entry file="file://$PROJECT_DIR$/docs/tutorial/Makefile">
+      <file leaf-file-name="decode_by_weighted_level.py" pinned="false" current-in-tab="false">
+        <entry file="file://$PROJECT_DIR$/examples/decode_by_weighted_level.py">
           <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="76">
-              <caret line="4" selection-start-line="4" selection-end-line="4" />
+            <state relative-caret-position="399">
+              <caret line="21" selection-start-line="21" selection-end-line="22" selection-end-column="88" />
+              <folding>
+                <element signature="e#322#343#0" expanded="true" />
+              </folding>
+            </state>
+          </provider>
+        </entry>
+      </file>
+      <file leaf-file-name="plot_explore_kernels.py" pinned="false" current-in-tab="true">
+        <entry file="file://$PROJECT_DIR$/examples/plot_explore_kernels.py">
+          <provider selected="true" editor-type-id="text-editor">
+            <state relative-caret-position="361">
+              <caret line="30" selection-start-line="30" selection-end-line="30" selection-end-column="100" />
+              <folding>
+                <element signature="e#212#233#0" expanded="true" />
+              </folding>
+            </state>
+          </provider>
+        </entry>
+      </file>
+      <file leaf-file-name="tutorials.rst" pinned="false" current-in-tab="false">
+        <entry file="file://$PROJECT_DIR$/docs/tutorials.rst">
+          <provider selected="true" editor-type-id="text-editor">
+            <state relative-caret-position="304">
+              <caret line="16" selection-start-line="16" selection-end-line="16" />
+            </state>
+          </provider>
+        </entry>
+      </file>
+      <file leaf-file-name="plot_simulate_data.py" pinned="false" current-in-tab="false">
+        <entry file="file://$PROJECT_DIR$/examples/plot_simulate_data.py">
+          <provider selected="true" editor-type-id="text-editor">
+            <state relative-caret-position="114">
+              <caret line="6" column="33" selection-start-line="6" selection-start-column="33" selection-end-line="6" selection-end-column="33" />
+              <folding>
+                <element signature="e#207#228#0" expanded="true" />
+              </folding>
+            </state>
+          </provider>
+        </entry>
+      </file>
+      <file leaf-file-name="timecorr.py" pinned="false" current-in-tab="false">
+        <entry file="file://$PROJECT_DIR$/timecorr/timecorr.py">
+          <provider selected="true" editor-type-id="text-editor">
+            <state relative-caret-position="432">
+              <caret line="79" column="19" selection-start-line="76" selection-start-column="17" selection-end-line="79" selection-end-column="19" />
+              <folding>
+                <element signature="e#17#35#0" expanded="true" />
+              </folding>
             </state>
           </provider>
         </entry>
@@ -102,39 +130,6 @@
           <provider selected="true" editor-type-id="text-editor">
             <state relative-caret-position="228">
               <caret line="12" selection-start-line="12" selection-end-line="12" />
-            </state>
-          </provider>
-        </entry>
-      </file>
-      <file leaf-file-name="index.rst" pinned="false" current-in-tab="false">
-        <entry file="file://$PROJECT_DIR$/docs/index.rst">
-          <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="285">
-              <caret line="15" column="82" selection-start-line="15" selection-start-column="82" selection-end-line="15" selection-end-column="82" />
-            </state>
-          </provider>
-        </entry>
-      </file>
-      <file leaf-file-name="plot_simulate_data.py" pinned="false" current-in-tab="false">
-        <entry file="file://$PROJECT_DIR$/examples/plot_simulate_data.py">
-          <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="665">
-              <caret line="35" column="10" selection-start-line="35" selection-start-column="10" selection-end-line="35" selection-end-column="10" />
-              <folding>
-                <element signature="e#207#228#0" expanded="true" />
-              </folding>
-            </state>
-          </provider>
-        </entry>
-      </file>
-      <file leaf-file-name="plot_explore_kernels.py" pinned="false" current-in-tab="false">
-        <entry file="file://$PROJECT_DIR$/examples/plot_explore_kernels.py">
-          <provider selected="true" editor-type-id="text-editor">
-            <state relative-caret-position="696">
-              <caret line="49" column="10" selection-start-line="49" selection-start-column="10" selection-end-line="49" selection-end-column="10" />
-              <folding>
-                <element signature="e#212#233#0" expanded="true" />
-              </folding>
             </state>
           </provider>
         </entry>
@@ -150,23 +145,16 @@
   </component>
   <component name="FindInProjectRecents">
     <findStrings>
-      <find>cfun</find>
-      <find>eye</find>
-      <find />
-      <find>laplace_weights</find>
-      <find>ica</find>
       <find>gen_</find>
       <find>wcorr</find>
       <find>kernel</find>
       <find>optimize_we</find>
       <find>idea</find>
       <find>rfun</find>
-      <find>reduce</find>
       <find>nan</find>
       <find>hyp</find>
       <find>pca_dec</find>
       <find>simulate</find>
-      <find>vec2mat</find>
       <find>format</find>
       <find>optimize</find>
       <find>smooth</find>
@@ -180,6 +168,13 @@
       <find>r2z</find>
       <find>corrmean</find>
       <find>random_init</find>
+      <find>eigen</find>
+      <find>graph_measures</find>
+      <find>weighted_time</find>
+      <find>reduce</find>
+      <find>tutorials</find>
+      <find>tutorial</find>
+      <find>vec2mat</find>
     </findStrings>
   </component>
   <component name="Git.Settings">
@@ -194,29 +189,32 @@
         <option value="$PROJECT_DIR$/examples/explore_kernels.py" />
         <option value="$PROJECT_DIR$/examples/README.txt" />
         <option value="$PROJECT_DIR$/docs/doc_requirements.txt" />
-        <option value="$PROJECT_DIR$/docs/tutorial/tools/nb_to_doc.py" />
         <option value="$PROJECT_DIR$/docs/tutorial/timecorr.ipynb" />
-        <option value="$PROJECT_DIR$/docs/conf.py" />
         <option value="$PROJECT_DIR$/docs/Makefile" />
         <option value="$PROJECT_DIR$/tests/test_helpers.py" />
         <option value="$PROJECT_DIR$/.gitignore" />
         <option value="$PROJECT_DIR$/examples/decode_by_weighted_randint.py" />
         <option value="$PROJECT_DIR$/docs/tutorial/timecorr.rst" />
-        <option value="$PROJECT_DIR$/timecorr/timecorr.py" />
         <option value="$PROJECT_DIR$/timecorr/__init__.py" />
-        <option value="$PROJECT_DIR$/timecorr/helpers.py" />
         <option value="$PROJECT_DIR$/timecorr/simulate.py" />
         <option value="$PROJECT_DIR$/examples/decode_by_level.py" />
         <option value="$PROJECT_DIR$/examples/decode_by_weighted_randinit.py" />
         <option value="$PROJECT_DIR$/examples/decode_by_weighted_level.py" />
         <option value="$PROJECT_DIR$/examples/simulate_data.py" />
         <option value="$PROJECT_DIR$/docs/api.rst" />
-        <option value="$PROJECT_DIR$/docs/tutorial/Makefile" />
-        <option value="$PROJECT_DIR$/docs/tutorial.rst" />
         <option value="$PROJECT_DIR$/docs/index.rst" />
         <option value="$PROJECT_DIR$/examples/plot_simulate_data.py" />
         <option value="$PROJECT_DIR$/examples/plot_explore_kernels.py" />
         <option value="$PROJECT_DIR$/examples/calculate_dynamic_correlations.py" />
+        <option value="$PROJECT_DIR$/docs/tutorial/Makefile" />
+        <option value="$PROJECT_DIR$/docker/Dockerfile" />
+        <option value="$PROJECT_DIR$/timecorr/helpers.py" />
+        <option value="$PROJECT_DIR$/docs/tutorial/tools/nb_to_doc.py" />
+        <option value="$PROJECT_DIR$/docs/_build/html/api.html" />
+        <option value="$PROJECT_DIR$/docs/tutorial.rst" />
+        <option value="$PROJECT_DIR$/docs/conf.py" />
+        <option value="$PROJECT_DIR$/docs/tutorials.rst" />
+        <option value="$PROJECT_DIR$/timecorr/timecorr.py" />
       </list>
     </option>
   </component>
@@ -230,7 +228,7 @@
     <packageJsonPaths />
   </component>
   <component name="ProjectFrameBounds" extendedState="1">
-    <option name="x" value="45" />
+    <option name="x" value="5" />
     <option name="y" value="23" />
     <option name="width" value="1646" />
     <option name="height" value="1005" />
@@ -279,6 +277,20 @@
             <path>
               <item name="timecorr" type="b2602c69:ProjectViewProjectNode" />
               <item name="timecorr" type="462c0819:PsiDirectoryNode" />
+              <item name="docs" type="462c0819:PsiDirectoryNode" />
+              <item name="tutorial" type="462c0819:PsiDirectoryNode" />
+              <item name=".ipynb_checkpoints" type="462c0819:PsiDirectoryNode" />
+            </path>
+            <path>
+              <item name="timecorr" type="b2602c69:ProjectViewProjectNode" />
+              <item name="timecorr" type="462c0819:PsiDirectoryNode" />
+              <item name="docs" type="462c0819:PsiDirectoryNode" />
+              <item name="tutorial" type="462c0819:PsiDirectoryNode" />
+              <item name="tools" type="462c0819:PsiDirectoryNode" />
+            </path>
+            <path>
+              <item name="timecorr" type="b2602c69:ProjectViewProjectNode" />
+              <item name="timecorr" type="462c0819:PsiDirectoryNode" />
               <item name="examples" type="462c0819:PsiDirectoryNode" />
             </path>
             <path>
@@ -307,6 +319,7 @@
     <property name="last_opened_file_path" value="$PROJECT_DIR$" />
     <property name="nodejs_interpreter_path.stuck_in_default_project" value="undefined stuck path" />
     <property name="nodejs_npm_path_reset_for_default_project" value="true" />
+    <property name="settings.editor.selected.configurable" value="com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable" />
   </component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
@@ -469,7 +482,7 @@
     </history-entry>
   </component>
   <component name="ToolWindowManager">
-    <frame x="45" y="23" width="1646" height="1005" extended-state="0" />
+    <frame x="5" y="23" width="1646" height="1005" extended-state="1" />
     <editor active="true" />
     <layout>
       <window_info anchor="bottom" id="TODO" order="6" />
@@ -497,25 +510,25 @@
     <layout-to-restore>
       <window_info anchor="right" content_ui="combo" id="Hierarchy" order="2" weight="0.25" />
       <window_info anchor="bottom" id="Docker" order="7" />
-      <window_info anchor="bottom" id="Version Control" order="8" />
-      <window_info anchor="right" id="Ant Build" order="1" weight="0.25" />
-      <window_info anchor="bottom" id="Cvs" order="4" weight="0.25" />
-      <window_info id="Favorites" order="2" side_tool="true" />
+      <window_info anchor="bottom" id="Inspection" order="5" weight="0.4" />
       <window_info active="true" content_ui="combo" id="Project" order="0" visible="true" weight="0.2199271" />
       <window_info id="Structure" order="1" side_tool="true" weight="0.25" />
       <window_info anchor="right" id="Commander" order="0" weight="0.4" />
+      <window_info anchor="right" id="Ant Build" order="1" weight="0.25" />
       <window_info anchor="bottom" id="TODO" order="6" />
-      <window_info anchor="bottom" id="Database Changes" order="9" show_stripe_button="false" />
+      <window_info anchor="bottom" id="Version Control" order="8" />
       <window_info anchor="bottom" id="Run" order="2" />
+      <window_info anchor="bottom" id="Python Console" order="12" />
       <window_info anchor="bottom" id="Find" order="1" sideWeight="0.49939248" weight="0.32919955" />
       <window_info anchor="right" id="Database" order="3" />
       <window_info anchor="bottom" id="Terminal" order="10" />
       <window_info anchor="bottom" id="Event Log" order="11" sideWeight="0.50060755" side_tool="true" visible="true" weight="0.3697858" />
-      <window_info anchor="bottom" id="Inspection" order="5" weight="0.4" />
+      <window_info anchor="bottom" id="Database Changes" order="9" show_stripe_button="false" />
+      <window_info anchor="bottom" id="Cvs" order="4" weight="0.25" />
       <window_info anchor="right" id="SciView" order="4" />
-      <window_info anchor="bottom" id="Debug" order="3" sideWeight="0.7685298" weight="0.3697858" />
       <window_info anchor="bottom" id="Message" order="0" />
-      <window_info anchor="bottom" id="Python Console" order="12" />
+      <window_info anchor="bottom" id="Debug" order="3" sideWeight="0.7685298" weight="0.3697858" />
+      <window_info id="Favorites" order="2" side_tool="true" />
     </layout-to-restore>
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -594,50 +607,6 @@
     </breakpoint-manager>
   </component>
   <component name="editorHistoryManager">
-    <entry file="file://$PROJECT_DIR$/examples/timecorr_weights_testing.ipynb" />
-    <entry file="file://$PROJECT_DIR$/examples/timepoint_decoder_test.ipynb" />
-    <entry file="file://$PROJECT_DIR$/examples/timecorr_synthetic_testing.ipynb" />
-    <entry file="file://$PROJECT_DIR$/examples/timecorr.ipynb" />
-    <entry file="file://$PROJECT_DIR$/examples/check_wcorr.ipynb" />
-    <entry file="file://$PROJECT_DIR$/examples/explore_kernels.py" />
-    <entry file="file://$PROJECT_DIR$/examples/README.txt">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="76">
-          <caret line="4" selection-start-line="4" selection-end-line="4" />
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/requirements.txt">
-      <provider selected="true" editor-type-id="text-editor">
-        <state>
-          <caret selection-end-line="10" selection-end-column="44" />
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/docs/timecorr.timecorr.rst">
-      <provider selected="true" editor-type-id="text-editor" />
-    </entry>
-    <entry file="file:///usr/local/lib/python3.6/site-packages/pandas/core/frame.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="152">
-          <caret line="2664" selection-start-line="2664" selection-end-line="2664" />
-        </state>
-      </provider>
-    </entry>
-    <entry file="file:///usr/local/lib/python3.6/site-packages/scipy/optimize/_minimize.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="144">
-          <caret line="610" selection-start-line="610" selection-end-line="610" />
-        </state>
-      </provider>
-    </entry>
-    <entry file="file:///usr/local/lib/python3.6/site-packages/pandas/core/internals.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="460">
-          <caret line="4289" selection-start-line="4289" selection-end-line="4289" />
-        </state>
-      </provider>
-    </entry>
     <entry file="file:///usr/local/lib/python3.6/site-packages/pandas/core/generic.py">
       <provider selected="true" editor-type-id="text-editor">
         <state relative-caret-position="185">
@@ -701,22 +670,12 @@
         </state>
       </provider>
     </entry>
-    <entry file="file://$PROJECT_DIR$/docs/tutorial/tools/nb_to_doc.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="399">
-          <caret line="22" column="26" selection-start-line="22" selection-start-column="26" selection-end-line="22" selection-end-column="26" />
-        </state>
-      </provider>
-    </entry>
     <entry file="file://$PROJECT_DIR$/.gitignore">
       <provider selected="true" editor-type-id="text-editor">
         <state relative-caret-position="319">
           <caret line="102" selection-end-line="106" />
         </state>
       </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/docs/make.bat">
-      <provider selected="true" editor-type-id="text-editor" />
     </entry>
     <entry file="file:///usr/local/Cellar/python/3.6.5_1/Frameworks/Python.framework/Versions/3.6/lib/python3.6/codecs.py">
       <provider selected="true" editor-type-id="text-editor">
@@ -739,66 +698,7 @@
         </state>
       </provider>
     </entry>
-    <entry file="file://$PROJECT_DIR$/timecorr/timecorr.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="489">
-          <caret line="146" selection-start-line="146" selection-end-line="146" />
-          <folding>
-            <element signature="e#17#35#0" expanded="true" />
-          </folding>
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/examples/decode_by_weighted_level.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="665">
-          <caret line="35" column="24" selection-start-line="35" selection-start-column="24" selection-end-line="35" selection-end-column="24" />
-          <folding>
-            <element signature="e#322#343#0" expanded="true" />
-          </folding>
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/examples/decode_by_weighted_randinit.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="330">
-          <caret line="36" column="76" selection-start-line="36" selection-start-column="65" selection-end-line="36" selection-end-column="76" />
-          <folding>
-            <element signature="e#322#343#0" expanded="true" />
-          </folding>
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/examples/decode_by_level.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="779">
-          <caret line="41" column="51" selection-start-line="41" selection-start-column="51" selection-end-line="41" selection-end-column="51" />
-          <folding>
-            <element signature="e#282#303#0" expanded="true" />
-          </folding>
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/timecorr/simulate.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="302">
-          <caret line="87" column="4" selection-start-line="87" selection-start-column="4" selection-end-line="87" selection-end-column="17" />
-          <folding>
-            <element signature="e#0#15#0" expanded="true" />
-          </folding>
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/timecorr/helpers.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="421">
-          <caret line="125" selection-start-line="125" selection-end-line="125" />
-          <folding>
-            <element signature="e#16#47#0" expanded="true" />
-          </folding>
-        </state>
-      </provider>
-    </entry>
+    <entry file="file://$PROJECT_DIR$/examples/decode_by_weighted_randinit.py" />
     <entry file="file://$PROJECT_DIR$/tests/__init__.py">
       <provider selected="true" editor-type-id="text-editor" />
     </entry>
@@ -809,56 +709,8 @@
         </state>
       </provider>
     </entry>
-    <entry file="file://$PROJECT_DIR$/docs/api.rst">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="627">
-          <caret line="33" column="11" selection-start-line="33" selection-start-column="11" selection-end-line="33" selection-end-column="11" />
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/docs/tutorial/timecorr.rst">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="228">
-          <caret line="12" lean-forward="true" selection-start-line="12" selection-end-line="12" />
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/docs/tutorial/timecorr.ipynb">
-      <provider selected="true" editor-type-id="ipnb-editor">
-        <state>
-          <selected id="2" />
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/docs/tutorial/Makefile">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="76">
-          <caret line="4" selection-start-line="4" selection-end-line="4" />
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/docs/doc_requirements.txt">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="228">
-          <caret line="12" selection-start-line="12" selection-end-line="12" />
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/docs/conf.py">
-      <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="240">
-          <caret line="19" column="12" selection-start-line="19" selection-start-column="12" selection-end-line="19" selection-end-column="12" />
-        </state>
-      </provider>
-    </entry>
-    <entry file="file://$PROJECT_DIR$/docker/README.md">
-      <provider selected="true" editor-type-id="split-provider[text-editor;markdown-preview-editor]">
-        <state split_layout="SPLIT">
-          <first_editor />
-          <second_editor />
-        </state>
-      </provider>
-    </entry>
+    <entry file="file://$PROJECT_DIR$/docs/tutorial/timecorr.rst" />
+    <entry file="file://$PROJECT_DIR$/docs/tutorial/timecorr.ipynb" />
     <entry file="file://$PROJECT_DIR$/README.md">
       <provider selected="true" editor-type-id="split-provider[text-editor;markdown-preview-editor]">
         <state split_layout="SPLIT">
@@ -872,66 +724,211 @@
         </state>
       </provider>
     </entry>
-    <entry file="file://$PROJECT_DIR$/docs/index.md">
+    <entry file="file://$PROJECT_DIR$/docs/index.md" />
+    <entry file="file://$PROJECT_DIR$/docs/tutorial/timecorr_notebook.ipynb" />
+    <entry file="file://$PROJECT_DIR$/docs/api.rst">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="418">
+          <caret line="22" column="18" selection-start-line="22" selection-start-column="18" selection-end-line="22" selection-end-column="18" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/docs/timecorr.wcorr.rst">
+      <provider selected="true" editor-type-id="text-editor" />
+    </entry>
+    <entry file="file://$PROJECT_DIR$/docker/README.md">
       <provider selected="true" editor-type-id="split-provider[text-editor;markdown-preview-editor]">
         <state split_layout="SPLIT">
-          <first_editor relative-caret-position="247">
-            <caret line="13" column="25" selection-start-line="13" selection-start-column="25" selection-end-line="13" selection-end-column="25" />
+          <first_editor relative-caret-position="760">
+            <caret line="40" column="26" selection-start-line="40" selection-start-column="26" selection-end-line="40" selection-end-column="26" />
           </first_editor>
           <second_editor />
         </state>
       </provider>
-      <provider editor-type-id="text-editor">
-        <state relative-caret-position="-735" />
+    </entry>
+    <entry file="file://$PROJECT_DIR$/docs/tutorial/Makefile">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="38">
+          <caret line="2" column="52" selection-start-line="2" selection-start-column="52" selection-end-line="2" selection-end-column="52" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/docs/_build/html/timecorr.wcorr.html">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="2432">
+          <caret line="128" lean-forward="true" selection-start-line="128" selection-end-line="128" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/docs/_build/html/search.html">
+      <provider selected="true" editor-type-id="text-editor" />
+    </entry>
+    <entry file="file://$PROJECT_DIR$/docs/_build/html/api.html">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="265">
+          <caret line="47" column="37" selection-start-line="47" selection-start-column="37" selection-end-line="47" selection-end-column="37" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/docs/timecorr.simulate_data.rst">
+      <provider selected="true" editor-type-id="text-editor" />
+    </entry>
+    <entry file="file://$PROJECT_DIR$/docs/tutorial/.ipynb_checkpoints/timecorr_nb-checkpoint.ipynb">
+      <provider selected="true" editor-type-id="ipnb-editor">
+        <state>
+          <selected id="0" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/docs/timecorr.vec2mat.rst">
+      <provider selected="true" editor-type-id="text-editor" />
+    </entry>
+    <entry file="file://$PROJECT_DIR$/docs/timecorr.timecorr.rst">
+      <provider selected="true" editor-type-id="text-editor" />
+    </entry>
+    <entry file="file://$PROJECT_DIR$/docs/make.bat">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="-1679">
+          <caret line="18" column="9" lean-forward="true" selection-start-line="18" selection-start-column="9" selection-end-line="18" selection-end-column="9" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/docs/tutorial/tools/nb_to_doc.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="437">
+          <caret line="24" column="4" selection-start-line="24" selection-start-column="4" selection-end-line="24" selection-end-column="4" />
+        </state>
       </provider>
     </entry>
     <entry file="file://$PROJECT_DIR$/docs/Makefile">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="1843">
-          <caret line="97" column="9" lean-forward="true" selection-start-line="97" selection-start-column="9" selection-end-line="97" selection-end-column="9" />
+        <state relative-caret-position="-1402">
+          <caret line="44" column="20" selection-start-line="44" selection-start-column="12" selection-end-line="44" selection-end-column="20" />
         </state>
       </provider>
     </entry>
-    <entry file="file://$PROJECT_DIR$/docs/tutorial.rst">
+    <entry file="file://$PROJECT_DIR$/docs/tutorial/timecorr_notebook.rst">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="247">
-          <caret line="13" column="5" selection-start-line="13" selection-start-column="5" selection-end-line="13" selection-end-column="5" />
+        <state relative-caret-position="57">
+          <caret line="3" selection-start-line="3" selection-end-line="3" />
         </state>
       </provider>
     </entry>
     <entry file="file://$PROJECT_DIR$/docs/index.rst">
       <provider selected="true" editor-type-id="text-editor">
         <state relative-caret-position="285">
-          <caret line="15" column="82" selection-start-line="15" selection-start-column="82" selection-end-line="15" selection-end-column="82" />
+          <caret line="15" column="30" selection-start-line="15" selection-start-column="30" selection-end-line="15" selection-end-column="30" />
         </state>
       </provider>
     </entry>
-    <entry file="file://$PROJECT_DIR$/examples/plot_simulate_data.py">
+    <entry file="file://$PROJECT_DIR$/docs/_build/html/tutorial.html">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="665">
-          <caret line="35" column="10" selection-start-line="35" selection-start-column="10" selection-end-line="35" selection-end-column="10" />
-          <folding>
-            <element signature="e#207#228#0" expanded="true" />
-          </folding>
+        <state relative-caret-position="340">
+          <caret line="118" column="6" selection-start-line="118" selection-start-column="6" selection-end-line="118" selection-end-column="6" />
         </state>
       </provider>
     </entry>
-    <entry file="file://$PROJECT_DIR$/examples/plot_explore_kernels.py">
+    <entry file="file://$PROJECT_DIR$/docs/conf.py">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="696">
-          <caret line="49" column="10" selection-start-line="49" selection-start-column="10" selection-end-line="49" selection-end-column="10" />
+        <state relative-caret-position="633">
+          <caret line="137" column="14" selection-start-line="137" selection-start-column="14" selection-end-line="137" selection-end-column="14" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/docker/Dockerfile">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="610">
+          <caret line="63" selection-start-line="63" selection-end-line="63" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/docs/doc_requirements.txt">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="228">
+          <caret line="12" selection-start-line="12" selection-end-line="12" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/docs/tutorials.rst">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="304">
+          <caret line="16" selection-start-line="16" selection-end-line="16" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/timecorr/simulate.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="72">
+          <caret line="91" column="14" lean-forward="true" selection-start-line="91" selection-start-column="14" selection-end-line="91" selection-end-column="14" />
           <folding>
-            <element signature="e#212#233#0" expanded="true" />
+            <element signature="e#0#15#0" expanded="true" />
           </folding>
         </state>
       </provider>
     </entry>
     <entry file="file://$PROJECT_DIR$/examples/calculate_dynamic_correlations.py">
       <provider selected="true" editor-type-id="text-editor">
-        <state relative-caret-position="646">
-          <caret line="34" selection-start-line="34" selection-end-line="34" selection-end-column="101" />
+        <state relative-caret-position="437">
+          <caret line="23" column="11" lean-forward="true" selection-start-line="23" selection-start-column="11" selection-end-line="23" selection-end-column="11" />
           <folding>
             <element signature="e#252#273#0" expanded="true" />
+          </folding>
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/examples/decode_by_level.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="601">
+          <caret line="41" column="51" selection-start-line="41" selection-start-column="51" selection-end-line="41" selection-end-column="51" />
+          <folding>
+            <element signature="e#282#303#0" expanded="true" />
+          </folding>
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/timecorr/helpers.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="-544">
+          <caret line="940" column="11" selection-start-line="940" selection-start-column="4" selection-end-line="940" selection-end-column="11" />
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/timecorr/timecorr.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="432">
+          <caret line="79" column="19" selection-start-line="76" selection-start-column="17" selection-end-line="79" selection-end-column="19" />
+          <folding>
+            <element signature="e#17#35#0" expanded="true" />
+          </folding>
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/examples/plot_simulate_data.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="114">
+          <caret line="6" column="33" selection-start-line="6" selection-start-column="33" selection-end-line="6" selection-end-column="33" />
+          <folding>
+            <element signature="e#207#228#0" expanded="true" />
+          </folding>
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/examples/decode_by_weighted_level.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="399">
+          <caret line="21" selection-start-line="21" selection-end-line="22" selection-end-column="88" />
+          <folding>
+            <element signature="e#322#343#0" expanded="true" />
+          </folding>
+        </state>
+      </provider>
+    </entry>
+    <entry file="file://$PROJECT_DIR$/examples/plot_explore_kernels.py">
+      <provider selected="true" editor-type-id="text-editor">
+        <state relative-caret-position="361">
+          <caret line="30" selection-start-line="30" selection-end-line="30" selection-end-column="100" />
+          <folding>
+            <element signature="e#212#233#0" expanded="true" />
           </folding>
         </state>
       </provider>

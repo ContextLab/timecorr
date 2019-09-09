@@ -101,10 +101,6 @@ ENV/
 # Rope project settings
 .ropeproject
 
-# pytest
-.pytest_cache
-
-# idea files
 .idea/**/
 
 *Untitled*

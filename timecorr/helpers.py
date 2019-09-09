@@ -312,7 +312,14 @@ def reduce(corrs, rfun=None):
     if rfun in graph_measures.keys():
         return apply_by_row(corrs, graph_measures[rfun])
     else:
-        return hyp.reduce(corrs, reduce=rfun, ndims=V)
+        red_corrs = hyp.reduce(corrs, reduce=rfun, ndims=V)
+
+        D = np.shape(red_corrs)[-1]
+
+        if D < V :
+            red_corrs = np.hstack((red_corrs, np.zeros((D, V - D))))
+
+        return red_corrs
 
 
 def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=laplace_params):

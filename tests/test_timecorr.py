@@ -3,7 +3,9 @@ import numpy as np
 import pandas as pd
 import hypertools as hyp
 
+import timecorr as tc
 from timecorr.timecorr import timecorr
+from timecorr.simulate import simulate_data
 from timecorr.helpers import isfc, gaussian_weights, gaussian_params
 
 #TODO: need *real* tests-- e.g. generate a small dataset and verify that we actually get the correct answers
@@ -15,6 +17,68 @@ numpy_array= np.array([[5, 9], [10, 7]])
 numpy_array_list= np.array([[8,2],[4,6]]).tolist()
 # if above is how to make a numpy list than TC isn't capible np.lists currently
 random_numbers= (2 ,3 ,5, 10, 12, 4, 6)
+
+sim_1 = simulate_data(S=1, T=20, K=30, set_random_seed=100)
+sim_3 = simulate_data(S=3, T=20, K=30, set_random_seed=100)
+
+width = 10
+laplace = {'name': 'Laplace', 'weights': tc.laplace_weights, 'params': {'scale': width}}
+
+
+def test_reduce_shape():
+    dyna_corrs_reduced_1 = timecorr(sim_1, rfun='PCA',
+                                    weights_function=laplace['weights'], weights_params=laplace['params'])
+
+    dyna_corrs_reduced_3 = timecorr(sim_3, rfun='PCA',
+                                    weights_function=laplace['weights'], weights_params=laplace['params'])
+    assert np.shape(dyna_corrs_reduced_1) == np.shape(sim_1)
+    assert np.shape(dyna_corrs_reduced_3) == np.shape(sim_3)
+
+def test_nans():
+    sim_3[0][0] = np.nan
+    dyna_corrs_reduced_3 = timecorr(sim_3, rfun='PCA',
+                                    weights_function=laplace['weights'], weights_params=laplace['params'])
+
+    assert np.shape(dyna_corrs_reduced_3) == np.shape(sim_3)
+
+
+def test_include_timepoints_all():
+    dyna_corrs_reduced_3 = timecorr(sim_3, rfun='PCA',
+                                    weights_function=laplace['weights'], weights_params=laplace['params'],
+                                    include_timepoints='all')
+
+    assert np.shape(dyna_corrs_reduced_3) == np.shape(sim_3)
+
+
+def test_include_timepoints_pre():
+    dyna_corrs_reduced_3 = timecorr(sim_3, rfun='PCA',
+                                    weights_function=laplace['weights'], weights_params=laplace['params'],
+                                    include_timepoints='pre')
+
+    assert np.shape(dyna_corrs_reduced_3) == np.shape(sim_3)
+
+
+def test_include_timepoints_post():
+    dyna_corrs_reduced_3 = timecorr(sim_3, rfun='PCA',
+                                    weights_function=laplace['weights'], weights_params=laplace['params'],
+                                    include_timepoints='post')
+
+    assert np.shape(dyna_corrs_reduced_3) == np.shape(sim_3)
+
+def test_exclude_timepoints_pos():
+    dyna_corrs_reduced_3 = timecorr(sim_3, rfun='PCA',
+                                    weights_function=laplace['weights'], weights_params=laplace['params'],
+                                    exclude_timepoints=3)
+
+    assert np.shape(dyna_corrs_reduced_3) == np.shape(sim_3)
+
+
+def test_exclude_timepoints_neg():
+    dyna_corrs_reduced_3 = timecorr(sim_3, rfun='PCA',
+                                    weights_function=laplace['weights'], weights_params=laplace['params'],
+                                    exclude_timepoints=-3)
+
+    assert np.shape(dyna_corrs_reduced_3) == np.shape(sim_3)
 
 
 def test_timecorr():

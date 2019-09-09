@@ -18,8 +18,8 @@ numpy_array_list= np.array([[8,2],[4,6]]).tolist()
 # if above is how to make a numpy list than TC isn't capible np.lists currently
 random_numbers= (2 ,3 ,5, 10, 12, 4, 6)
 
-sim_1 = simulate_data(S=1, T=20, K=30, set_random_seed=100)
-sim_3 = simulate_data(S=3, T=20, K=30, set_random_seed=100)
+sim_1 = simulate_data(S=1, T=30, K=50, set_random_seed=100)
+sim_3 = simulate_data(S=3, T=30, K=50, set_random_seed=100)
 
 width = 10
 laplace = {'name': 'Laplace', 'weights': tc.laplace_weights, 'params': {'scale': width}}

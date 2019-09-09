@@ -42,11 +42,11 @@ def laplace_weights(T, params=laplace_params):
     return np.multiply(np.divide(1, 2 * params['scale']), np.exp(-np.divide(absdiffs, params['scale']))) #scale by a factor of 2.5 to prevent near-zero rounding issues
 
 
-def eye_weights(T):
+def eye_weights(T, params=eye_params):
 
     return np.eye(T)
 
-def uniform_weights(T):
+def uniform_weights(T, params=uniform_params):
     return np.ones([T, T])
 
 def t_weights(T, params=t_params):

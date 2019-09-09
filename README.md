@@ -77,7 +77,7 @@ If you are reporting a bug, please do your best to include the following:
 
 <h3>Contributing code</h3>
 
-The preferred way to contribute to supereeg is to fork the main repository on GitHub, then submit a pull request.
+The preferred way to contribute to timecorr is to fork the main repository on GitHub, then submit a pull request.
 
 + If your pull request addresses an issue, please use the title to describe the issue and mention the issue number in the pull request description to ensure a link is created to the original issue.
 

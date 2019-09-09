@@ -43,8 +43,6 @@ def laplace_weights(T, params=laplace_params):
 
 
 def eye_weights(T, params=eye_params):
-    #if params is None:
-    #    params = eye_params
 
     return np.eye(T)
 
@@ -153,7 +151,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     if type(data) != list:
         return wisfc([data], timepoint_weights, subject_weights=subject_weights)[0]
 
-    if subject_weights is None: #similarity-based weights
+    if subject_weights is None:
         K = data[0].shape[1]
         connectomes = np.zeros([len(data), int((K ** 2 - K) / 2)])
         for s in np.arange(len(data)):
@@ -205,7 +203,7 @@ def apply_by_row(corrs, f):
     if type(corrs) is list:
         return list(map(lambda x: apply_by_row(x, f), corrs))
 
-    corrs = vec2mat(corrs) #V by V by T
+    corrs = vec2mat(corrs)
     return np.stack(list(map(lambda x: f(np.squeeze(x)), np.split(corrs, corrs.shape[2], axis=2))), axis=0)
 
 def corrmean_combine(corrs):
@@ -313,8 +311,15 @@ def reduce(corrs, rfun=None):
 
     if rfun in graph_measures.keys():
         return apply_by_row(corrs, graph_measures[rfun])
-    else:  # use hypertools
-        return hyp.reduce(corrs, reduce=rfun, ndims=V)
+    else:
+        red_corrs = hyp.reduce(corrs, reduce=rfun, ndims=V)
+
+        D = np.shape(red_corrs)[-1]
+
+        if D < V :
+            red_corrs = np.hstack((red_corrs, np.zeros((D, V - D))))
+
+        return red_corrs
 
 
 def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=laplace_params):
@@ -667,7 +672,6 @@ def pca_decoder(data, nfolds=2, dims=10, cfun=isfc, weights_fun=laplace_weights,
     group_assignments = get_xval_assignments(len(pca_data), nfolds)
     results_pd = pd.DataFrame()
 
-    corrs = []
     for i in range(0, nfolds):
         for d in range(1, dims + 1):
 
@@ -797,37 +801,6 @@ def decoder(corrs):
     next_results_pd['rank']= next_results_pd['rank'].values / corrs.shape[0]
 
     return next_results_pd
-
-
-# def predict(x, n=1):
-#     '''
-#     Use a Kalman filter (with automatically inferred parameters) to estimate
-#     future states of a signal, n timepoints into the future.
-#
-#     x: timepoints by features signal (numpy array)
-#     n: number of timepoints into the future (must be an integer)
-#
-#     Returns a new numpy array with x.shape[0] + n rows and x.shape[1] columns,
-#     where the last n rows contain the predicted future states.  The other
-#     entries contain "smoothed" estimates of the observed signals.
-#     '''
-#
-#     if n == 0:
-#         return kf.em(x).smooth(x)[0]
-#
-#     x_masked = np.ma.MaskedArray(np.vstack((x, np.tile(np.nan, (1, x.shape[1])))))
-#     x_masked[-1, :] = np.ma.masked
-#
-#     kf = pykalman.KalmanFilter(initial_state_mean=np.mean(x, axis=0), n_dim_obs=x.shape[1], n_dim_state=x.shape[1])
-#     x_predicted = kf.em(x_masked, em_vars='all').smooth(x_masked)
-#
-#     if n == 1:
-#         return x_predicted[0] #x_predicted[1] contains timepoint-by-timepoint covariance estimates
-#     elif n > 1:
-#         next_x_predicted = predict(x_predicted[0], n-1)
-#         diff = next_x_predicted.shape[0] - x_predicted[0].shape[0]
-#         next_x_predicted[:-diff, :] = x_predicted[0]
-#         return next_x_predicted
 
 
 def weighted_mean(x, axis=None, weights=None, tol=1e-5):
@@ -975,14 +948,12 @@ def get_xval_assignments(ndata, nfolds):
     group_assignments = np.zeros(ndata)
     groupsize = int(np.ceil(ndata / nfolds))
 
-    # group assignments
     for i in range(1, nfolds):
         inds = np.arange(i * groupsize, np.min([(i + 1) * groupsize, ndata]))
         group_assignments[inds] = i
     np.random.shuffle(group_assignments)
     return group_assignments
 
-# set some defaults for plots
 SMALL_SIZE = 18
 MEDIUM_SIZE = 21
 BIGGER_SIZE = 24

@@ -40,8 +40,7 @@ RUN pip install --upgrade \
 nose \
 sphinx \
 numpy \
-visbrain \
-scipy==1.1.0 \
+scipy \
 pandas \
 matplotlib \
 numba \

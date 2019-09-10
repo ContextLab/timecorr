@@ -1,7 +1,7 @@
 <h2>Overview</h2>
 
 The timecorr toolbox provides tools for computing and exploring the correlational structure of timeseries data.  There is one main function:
-+ `timecorr` is used to compute dynamic correlations from a timeseries of observations and to find higher order structure in the data, organized as a number-of-timepoints by number-of-features matrix.
++ `timecorr` is used to compute dynamic correlations from a timeseries of observations and to find higher order structure in the data, organized as a number-of-timepoints by number-of-features matrix.  For examples, tutorials, and an API specification, please check out our [readthedocs page](https://timecorr.readthedocs.io/en/latest/).
 
 
 <h2>Basic usage</h2>

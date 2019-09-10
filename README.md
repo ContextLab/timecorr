@@ -60,7 +60,12 @@ Dependencies:
 + Pandas >= 0.22.0
 + Hypertools >= 0.4.2
 
+<h2>Citing this toolbox</h2>
 
+If you use (or build on) this toolbox in your work, we'd appreciate a citation!  Please cite the following paper:
+```
+Owen LLW, Chang TH, Manning JR (2019) High-level cognition during story listening is reflected in high-order dynamic correlations in neural activity patterns.  bioRxiv: doi.org/10.1101/763821
+```
 
 <h2>Contributing</h2>
 

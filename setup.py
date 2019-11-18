@@ -56,19 +56,20 @@ try:
 except FileNotFoundError:
     readme = ""
 
-with open('LICENSE') as f:
-    license = f.read()
+LICENSE = 'MIT'
+# with open('LICENSE') as f:
+#     license = f.read()
 
 setup(
     name='timecorr',
     version='0.1.2',
     description='Compute dynamic correlations, dynamic higher-order correlations, and dynamic graph theoretic measures in timeseries data',
-    long_description=readme,
+    long_description=' ',
     author='Contextual Dynamics Laboratory',
     author_email='contextualdynamics@gmail.com',
     url='https://github.com/ContextLab/timecorr',
     install_requires=get_requirements(),
     dependency_links=get_links(),
-    license=license,
+    license=LICENSE,
     packages=find_packages(exclude=('tests', 'docs'))
 )

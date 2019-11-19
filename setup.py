@@ -70,21 +70,21 @@ setup(
     author_email='contextualdynamics@gmail.com',
     url='https://github.com/ContextLab/timecorr',
     license=LICENSE,
-    # install_requires=get_requirements(),
-    # dependency_links=get_links(),
-    install_requires=[
-        'nose',
-        'sphinx',
-        'duecredit',
-        'numpy>=1.14.2',
-        'pandas>=0.22.0',
-        'hypertools',
-        'scipy>=0.13.3',
-        'matplotlib>=2.1.0',
-        'seaborn>=0.8.1',
-        'scikit-learn>=0.19.1'
-    ],
-    dependency_links = ['https://github.com/FIU-Neuro/brainconn.git'],
+    install_requires=get_requirements(),
+    dependency_links=get_links(),
+    # install_requires=[
+    #     'nose',
+    #     'sphinx',
+    #     'duecredit',
+    #     'numpy>=1.14.2',
+    #     'pandas>=0.22.0',
+    #     'hypertools',
+    #     'scipy>=0.13.3',
+    #     'matplotlib>=2.1.0',
+    #     'seaborn>=0.8.1',
+    #     'scikit-learn>=0.19.1'
+    # ],
+    # dependency_links = ['https://github.com/FIU-Neuro/brainconn.git'],
     packages=find_packages(exclude=('tests', 'docs')),
 )
 

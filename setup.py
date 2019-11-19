@@ -85,10 +85,10 @@ setup(
         'matplotlib>=2.1.0',
         'seaborn>=0.8.1',
         'scikit-learn>=0.19.1'
-        #'brainconn==0.0.1',
-        'brainconn@git+https://github.com/FIU-Neuro/brainconn@v0.5.0#egg=brainconn'
+        'brainconn==0.5.0',
+        #'brainconn@git+https://github.com/FIU-Neuro/brainconn@v0.5.0#egg=brainconn'
     ],
-    #dependency_links = ['https://github.com/FIU-Neuro/brainconn@v0.1.1#egg=brainconn'],
+    dependency_links = ['https://github.com/FIU-Neuro/brainconn@v0.5.0#egg=brainconn'],
     packages=find_packages(exclude=('tests', 'docs')),
 )
 

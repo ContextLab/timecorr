@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-
+import os
 from setuptools import setup, find_packages
 
 def get_requirements(remove_links=True):
@@ -7,7 +7,8 @@ def get_requirements(remove_links=True):
     lists the requirements to install.
     """
     requirements = []
-    with open('requirements.txt') as f:
+    reqs_path = os.path.join('.', 'requirements.txt')
+    with open(reqs_path, 'r') as f:
         requirements = f.read().splitlines()
 
     if remove_links:
@@ -69,19 +70,21 @@ setup(
     author_email='contextualdynamics@gmail.com',
     url='https://github.com/ContextLab/timecorr',
     license=LICENSE,
-    install_requires=[
-        'nose',
-        'sphinx',
-        'duecredit',
-        'numpy>=1.14.2',
-        'pandas>=0.22.0',
-        'hypertools',
-        'scipy>=0.13.3',
-        'matplotlib>=2.1.0',
-        'seaborn>=0.8.1',
-        'scikit-learn>=0.19.1'
-        'git+https://github.com/FIU-Neuro/brainconn.git#egg=brainconn'
-    ],
+    install_requires=get_requirements(),
+    dependency_links=get_links(),
+    # install_requires=[
+    #     'nose',
+    #     'sphinx',
+    #     'duecredit',
+    #     'numpy>=1.14.2',
+    #     'pandas>=0.22.0',
+    #     'hypertools',
+    #     'scipy>=0.13.3',
+    #     'matplotlib>=2.1.0',
+    #     'seaborn>=0.8.1',
+    #     'scikit-learn>=0.19.1'
+    #     'git+https://github.com/FIU-Neuro/brainconn.git#egg=brainconn'
+    # ],
     #dependency_links = ['https://github.com/FIU-Neuro/brainconn.git'],
     packages=find_packages(exclude=('tests', 'docs')),
 )

@@ -71,6 +71,7 @@ setup(
     url='https://github.com/ContextLab/timecorr',
     license=LICENSE,
     install_requires=[
+        'nose',
         'sphinx',
         'duecredit',
         'numpy>=1.14.2',

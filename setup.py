@@ -70,6 +70,8 @@ setup(
     author_email='contextualdynamics@gmail.com',
     url='https://github.com/ContextLab/timecorr',
     license=LICENSE,
+    setup_requires=[ "setuptools_git >= 0.3", ],
+    include_package_data=True,
     # install_requires=get_requirements(),
     # dependency_links=get_links(),
     install_requires=[
@@ -83,7 +85,7 @@ setup(
         'matplotlib>=2.1.0',
         'seaborn>=0.8.1',
         'scikit-learn>=0.19.1'
-        'brainconn',
+        'brainconn==0.0.1',
         #'brainconn@git+https://github.com/FIU-Neuro/brainconn#egg=brainconn-0.0.1'
     ],
     dependency_links = ['https://github.com/FIU-Neuro/brainconn#egg=brainconn-0.0.1'],

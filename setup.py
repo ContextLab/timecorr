@@ -83,8 +83,9 @@ setup(
         'matplotlib>=2.1.0',
         'seaborn>=0.8.1',
         'scikit-learn>=0.19.1'
+        'brainconn==0.0.1'
     ],
-    dependency_links = ['https://github.com/FIU-Neuro/brainconn.git'],
+    dependency_links = ['https://github.com/FIU-Neuro/brainconn.git#egg=brainconn-0.0.1'],
     packages=find_packages(exclude=('tests', 'docs')),
 )
 

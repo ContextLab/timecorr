@@ -65,7 +65,7 @@ setup(
     version='0.1.3',
     description='Compute dynamic correlations, dynamic higher-order correlations, and dynamic graph theoretic measures in timeseries data',
     long_description=' ',
-    dependency_links = ['https://github.com/FIU-Neuro/brainconn.git'],
+    #dependency_links = ['git+git://github.com/FIU-Neuro/brainconn.git'],
     author='Contextual Dynamics Laboratory',
     author_email='contextualdynamics@gmail.com',
     url='https://github.com/ContextLab/timecorr',
@@ -80,6 +80,7 @@ setup(
         'matplotlib>=2.1.0',
         'seaborn>=0.8.1',
         'scikit-learn>=0.19.1'
+        'brainconn @ git+git://github.com/FIU-Neuro/brainconn.git'
     ],
     packages=find_packages(exclude=('tests', 'docs')),
 )

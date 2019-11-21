@@ -12,7 +12,7 @@ LICENSE = 'MIT'
 
 setup(
     name='timecorr',
-    version='0.1.4',
+    version='0.1.4.1',
     description='Compute dynamic correlations, dynamic higher-order correlations, and dynamic graph theoretic measures in timeseries data',
     long_description=' ',
     author='Contextual Dynamics Laboratory',
@@ -30,8 +30,8 @@ setup(
         'matplotlib>=2.1.0',
         'seaborn>=0.8.1',
         'scikit-learn>=0.19.1',
-        'brainconn @ git+https://github.com/FIU-Neuro/brainconn#egg=brainconn-0.1.0'
     ],
     packages=find_packages(exclude=('tests', 'docs')),
 )
 
+#'brainconn @ git+https://github.com/FIU-Neuro/brainconn#egg=brainconn-0.1.0'

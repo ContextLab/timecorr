@@ -7,14 +7,22 @@ from scipy.linalg import toeplitz
 from scipy.optimize import minimize
 from scipy.stats import ttest_1samp as ttest
 import hypertools as hyp
-import brainconn as bc
 import pandas as pd
 import warnings
 from matplotlib import pyplot as plt
 
-graph_measures = {'eigenvector_centrality': bc.centrality.eigenvector_centrality_und,
-                  'pagerank_centrality': lambda x: bc.centrality.pagerank_centrality(x, d=0.85),
-                  'strength': bc.degree.strengths_und}
+try:
+    import brainconn as bc
+    _has_brainconn = True
+    graph_measures = {'eigenvector_centrality': bc.centrality.eigenvector_centrality_und,
+                      'pagerank_centrality': lambda x: bc.centrality.pagerank_centrality(x, d=0.85),
+                      'strength': bc.degree.strengths_und}
+except ImportError:
+    _has_brainconn = False
+
+    graph_measures = {'eigenvector_centrality': None,
+                      'pagerank_centrality': None,
+                      'strength': None}
 
 gaussian_params = {'var': 100}
 laplace_params = {'scale': 100}
@@ -309,8 +317,12 @@ def reduce(corrs, rfun=None):
     else:
         V = get_V(corrs.shape[1])
 
-    if rfun in graph_measures.keys():
+    if _has_brainconn and rfun in graph_measures.keys():
         return apply_by_row(corrs, graph_measures[rfun])
+
+    elif not _has_brainconn and rfun in graph_measures.keys():
+        raise ImportError('brainconn is not installed. Please install "git+https://github.com/FIU-Neuro/brainconn#egg=brainconn"')
+
     else:
         red_corrs = hyp.reduce(corrs, reduce=rfun, ndims=V)
 

@@ -11,19 +11,6 @@ import pandas as pd
 import warnings
 from matplotlib import pyplot as plt
 
-try:
-    import brainconn as bc
-    _has_brainconn = True
-    graph_measures = {'eigenvector_centrality': bc.centrality.eigenvector_centrality_und,
-                      'pagerank_centrality': lambda x: bc.centrality.pagerank_centrality(x, d=0.85),
-                      'strength': bc.degree.strengths_und}
-except ImportError:
-    _has_brainconn = False
-
-    graph_measures = {'eigenvector_centrality': None,
-                      'pagerank_centrality': None,
-                      'strength': None}
-
 gaussian_params = {'var': 100}
 laplace_params = {'scale': 100}
 eye_params = {}
@@ -306,6 +293,19 @@ def reduce(corrs, rfun=None):
 
     :return: dimensionality-reduced (or original) correlation matrices
     '''
+
+    try:
+        import brainconn as bc
+        _has_brainconn = True
+        graph_measures = {'eigenvector_centrality': bc.centrality.eigenvector_centrality_und,
+                          'pagerank_centrality': lambda x: bc.centrality.pagerank_centrality(x, d=0.85),
+                          'strength': bc.degree.strengths_und}
+    except ImportError:
+        _has_brainconn = False
+
+        graph_measures = {'eigenvector_centrality': None,
+                          'pagerank_centrality': None,
+                          'strength': None}
 
     if rfun is None:
         return corrs

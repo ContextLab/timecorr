@@ -126,7 +126,7 @@ def simulate_data(datagen='ramping', return_corrs=False, set_random_seed=False, 
 
     """
 
-    datagen_funcs = {'block': block_dataset, 'ramping': ramping_dataset, 'constant': constant_dataset, 'random':ramping_dataset}
+    datagen_funcs = {'block': block_dataset, 'ramping': ramping_dataset, 'constant': constant_dataset, 'random':random_dataset}
 
     if set_random_seed:
         if isinstance(set_random_seed, bool):

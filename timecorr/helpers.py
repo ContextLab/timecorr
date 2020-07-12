@@ -561,13 +561,11 @@ def weighted_timepoint_decoder(data, nfolds=2, level=0, optimize_levels=None, cf
         sub_corrs = []
         corrs = []
 
-        subgroup_in_assignments = get_xval_assignments(len(data[group_assignments == i]), nfolds)
-        subgroup_out_assignments = get_xval_assignments(len(data[group_assignments != i]), nfolds)
-
-        in_data = [x for x in data[group_assignments != i][subgroup_out_assignments == i]]
-        out_data = [x for x in data[group_assignments != i][subgroup_out_assignments != i]]
+        subgroup_assignments = get_xval_assignments(len(data[group_assignments == i]), nfolds)
 
 
+        in_data = [x for x in data[group_assignments == i]]
+        out_data = [x for x in data[group_assignments != i]]
 
         for v in level:
 
@@ -583,8 +581,8 @@ def weighted_timepoint_decoder(data, nfolds=2, level=0, optimize_levels=None, cf
 
                 for s in range(0, 1):
 
-                    sub_in_data = [x for x in data[group_assignments == i][subgroup_in_assignments==s]]
-                    sub_out_data = [x for x in data[group_assignments == i][subgroup_in_assignments!=s]]
+                    sub_in_data = [x for x in data[group_assignments == i][subgroup_assignments==s]]
+                    sub_out_data = [x for x in data[group_assignments == i][subgroup_assignments!=s]]
 
                     sub_in_smooth, sub_out_smooth, sub_in_raw, sub_out_raw = folding_levels(sub_in_data, sub_out_data,
                                                                                             level=v, cfun=None, rfun=p_rfun,

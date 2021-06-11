@@ -15,6 +15,7 @@ setup(
     version='0.1.6',
     description='Compute dynamic correlations, dynamic higher-order correlations, and dynamic graph theoretic measures in timeseries data',
     long_description=' ',
+    long_description_content_type='text/markdown',
     author='Contextual Dynamics Laboratory',
     author_email='contextualdynamics@gmail.com',
     url='https://github.com/ContextLab/timecorr',

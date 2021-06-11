@@ -12,6 +12,8 @@ install:
 - conda env create --file travis-environment.yml
 - source activate testenv
 - pip install .
-script: py.test
+script: 
+- source activate testenv
+- py.test
 notifications:
   slack: context-lab:Ai78gYTph7bTYPlsWjvRzBku

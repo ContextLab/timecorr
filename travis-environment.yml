@@ -22,7 +22,6 @@ dependencies:
   - importlib-metadata=3.10.0
   - importlib_metadata=3.10.0
   - intel-openmp=2021.2.0
-  - ipython_genutils=0.2.0
   - jinja2=2.11.2=pyhd3eb1b0_0
   - jsonschema=3.2.0=py_2
   - libedit=3.1.20181209
@@ -40,7 +39,6 @@ dependencies:
   - nbconvert=5.6.1
   - nbformat=5.0.7
   - ncurses=6.1
-  - openssl=1.1.1c
   - packaging=20.9
   - pandoc=2.10.1
   - pandocfilters=1.4.3
@@ -54,11 +52,9 @@ dependencies:
   - pycosat=0.6.3
   - pycparser=2.20
   - pygments=2.8.1
-  - pyopenssl=18.0.0
   - pyparsing=2.4.7
   - pyrsistent=0.17.3
   - pysocks=1.6.8
-  - python=3.6.8
   - python-dateutil=2.8.1
   - pyzmq=19.0.2
   - readline=7.0

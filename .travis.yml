@@ -9,7 +9,7 @@ install:
 - hash -r
 - conda config --set always_yes yes --set changeps1 no
 - conda info -a
-- conda env create --file travis-environment.yml
+- conda create -q -n testenv python=$TRAVIS_PYTHON_VERSION pip pytest
 - source activate testenv
 - pip install .
 script: 

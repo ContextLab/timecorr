@@ -119,18 +119,6 @@ def test_timepoint_decoder_level_type():
                                 rfun='eigenvector_centrality', weights_params=laplace['params'])
      assert np.allclose(is_int, is_array, is_list)
 
-def test_timepoint_decoder_level_error():
-    with pytest.raises(ValueError):
-
-        assert timepoint_decoder(try_data, level=[1, 2], combine=corrmean_combine, cfun=isfc,
-                                    rfun='eigenvector_centrality', weights_params=laplace['params'])
-
-        assert timepoint_decoder(try_data, level=[-1, 0], combine=corrmean_combine, cfun=isfc,
-                                 rfun='eigenvector_centrality', weights_params=laplace['params'])
-
-        assert timepoint_decoder(try_data, level='1', combine=corrmean_combine, cfun=isfc,
-                                 rfun='eigenvector_centrality', weights_params=laplace['params'])
-
 
 def test_timepoint_decoder_comine_type():
     is_fun = timepoint_decoder(try_data, level=[1], combine=corrmean_combine, cfun=isfc,

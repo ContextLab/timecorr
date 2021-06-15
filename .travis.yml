@@ -3,18 +3,18 @@ sudo: false
 python:
 - '3.6'
 install:
-- wget http://repo.continuum.io/miniconda/Miniconda-latest-Linux-x86_64.sh -O miniconda.sh
+- wget https://repo.anaconda.com/miniconda/Miniconda3-4.5.4-Linux-x86_64.sh -O miniconda.sh
 - bash miniconda.sh -b -p $HOME/miniconda
 - export PATH="$HOME/miniconda/bin:$PATH"
 - hash -r
 - conda config --set always_yes yes --set changeps1 no
-- conda update -q conda
 - conda info -a
-- conda create -q -n testenv python=$TRAVIS_PYTHON_VERSION pip pytest numpy pandas
-  scipy matplotlib seaborn scikit-learn
+- conda create -q -n testenv python=$TRAVIS_PYTHON_VERSION pip=19.0.3 pytest
 - source activate testenv
-- pip install -r requirements.txt
-- python setup.py install
-script: py.test
+- pip install .
+- pip install "git+https://github.com/FIU-Neuro/brainconn#egg=brainconn"
+script: 
+- source activate testenv
+- py.test
 notifications:
   slack: context-lab:Ai78gYTph7bTYPlsWjvRzBku

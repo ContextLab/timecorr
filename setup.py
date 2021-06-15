@@ -26,7 +26,7 @@ setup(
         'duecredit==0.7.0',
         'numpy==1.16.2',
         'pandas==0.24.2',
-        'hypertools @ git+https://github.com/ContextLab/hypertools.git@36c12fd6d1706fb75e596a62b555ee819ddada6a',
+        'hypertools==0.7.0',
         'scipy==1.2.1',
         'matplotlib==3.0.3',
         'seaborn==0.9.0',

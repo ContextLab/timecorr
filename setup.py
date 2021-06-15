@@ -30,8 +30,7 @@ setup(
         'scipy==1.2.1',
         'matplotlib==3.0.3',
         'seaborn==0.9.0',
-        'scikit-learn==0.19.2',
-        'brainconn @ git+https://github.com/FIU-Neuro/brainconn.git'
+        'scikit-learn==0.19.2'
     ],
     packages=find_packages(exclude=('tests', 'docs')),
 )

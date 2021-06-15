@@ -12,6 +12,7 @@ install:
 - conda create -q -n testenv python=$TRAVIS_PYTHON_VERSION pip=19.0.3 pytest
 - source activate testenv
 - pip install .
+- pip install "git+https://github.com/FIU-Neuro/brainconn#egg=brainconn"
 script: 
 - source activate testenv
 - py.test

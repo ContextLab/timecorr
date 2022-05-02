@@ -52,7 +52,7 @@ To install the latest (bleeding edge) version directly from this repository use:
 
 The toolbox is currently supported on Mac and Linux.  It has not been tested on Windows (and we expect key functionality not to work properly on Windows systems).
 Dependencies:
-+ Python 3.4+
++ Python 3.9+
 + Numpy >= 1.10.4
 + Scipy >= 1.0.0
 + Seaborn >= 0.8.1

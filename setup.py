@@ -24,7 +24,7 @@ setup(
         'nose==1.3.7',
         'sphinx==2.0.0',
         'duecredit==0.7.0',
-        'numpy==1.16.2',
+        'numpy==1.22.0',
         'pandas==0.24.2',
         'hypertools==0.7.0',
         'scipy==1.2.1',

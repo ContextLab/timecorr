@@ -21,16 +21,12 @@ setup(
     url='https://github.com/ContextLab/timecorr',
     license=LICENSE,
     install_requires=[
-        'nose==1.3.7',
-        'sphinx==2.0.0',
-        'duecredit==0.7.0',
-        'numpy==1.16.2',
-        'pandas==0.24.2',
-        'hypertools==0.7.0',
-        'scipy==1.2.1',
-        'matplotlib==3.0.3',
-        'seaborn==0.9.0',
-        'scikit-learn==0.19.2'
+        'nose>=1.3.7',
+        'sphinx>=2.0.0',
+        'duecredit>=0.7.0',
+        'hypertools>=0.7.0',
+        'scipy>=1.2.1',
+        'scikit-learn>=0.19.2'
     ],
     packages=find_packages(exclude=('tests', 'docs')),
 )

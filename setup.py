@@ -12,7 +12,7 @@ LICENSE = 'MIT'
 
 setup(
     name='timecorr',
-    version='0.1.6',
+    version='0.1.7',
     description='Compute dynamic correlations, dynamic higher-order correlations, and dynamic graph theoretic measures in timeseries data',
     long_description=' ',
     long_description_content_type='text/markdown',

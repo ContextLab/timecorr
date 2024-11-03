@@ -1,66 +1,30 @@
-# Specified OS or runtime
-FROM debian:latest
+# Use an official Python runtime as a parent image
+FROM python:3.12
 
-MAINTAINER Contextual Dynamics Lab <contextualdynamics@gmail.com>
+# Set the working directory in the container
+WORKDIR /app
 
-
-RUN apt-get update && \
-    apt-get install libgl1-mesa-glx -y
-RUN apt-get install -y eatmydata
-
-
-# install basic packages
-RUN eatmydata apt-get install -y wget bzip2 ca-certificates \
-    git \
-    swig \
-    mpich \
-    pkg-config \
-    libfontconfig1-dev \
-    gcc \
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    libgl1-mesa-glx \
     wget \
-    curl \
+    git \
     vim \
-    nano
+    nano \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
+# Copy the requirements file into the container at /app
+COPY requirements.txt .
 
-# install Anaconda python distribution
-RUN echo 'export PATH=/opt/conda/bin:$PATH' > /etc/profile.d/conda.sh && \
-    wget --quiet https://repo.continuum.io/archive/Anaconda3-4.4.0-Linux-x86_64.sh -O ~/anaconda.sh && \
-    /bin/bash ~/anaconda.sh -b -p /opt/conda && \
-    rm ~/anaconda.sh
+# Install any needed packages specified in requirements.txt
+RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Setup anaconda path
-ENV PATH /opt/conda/bin:$PATH
+# Copy the current directory contents into the container at /app
+COPY . .
 
+# Expose a port for Jupyter notebooks (optional, if you want to run Jupyter)
+EXPOSE 8888
 
-# Update pip and install various important python packages
-RUN pip install --upgrade pip
-
-RUN pip install --upgrade \
-nose \
-sphinx \
-numpy \
-scipy \
-pandas \
-matplotlib \
-numba \
-pykalman
-
-# Due to behavior of pip>=10.1, we must use the `--ignore-installed` flag to
-# install packages that were originally distutils installs (or rely on packages
-# that were)
-RUN pip install --upgrade --ignore-installed \
-seaborn \
-git+git://github.com/FIU-Neuro/brainconn.git \
-hypertools \
-
-RUN conda install scikit-learn
-
-# add some useful directories as mirrors of directors in the same location on your computer
-ADD data /data
-ADD notebooks /notebooks
-
-
-# Finally, expose a port from within the docker so we can use it to run
-# jupyter notebooks
-EXPOSE 9999
+# Set the command to run Jupyter notebook (if needed)
+CMD ["jupyter", "notebook", "--ip=0.0.0.0", "--port=8888", "--no-browser", "--allow-root"]

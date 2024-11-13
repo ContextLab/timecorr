@@ -88,7 +88,7 @@ def format_data(data):
     def zero_nans(x):
         x[np.isnan(x)] = 0
         return x
-
+    
     x = hyp.tools.format_data(
         data,
         ppca=False,

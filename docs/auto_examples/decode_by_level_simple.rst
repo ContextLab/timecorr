@@ -25,24 +25,25 @@ Decode by level (Simple Version)
 This example demonstrates timepoint decoding using hierarchical correlation levels.
 This simplified version uses synthetic data to ensure reliability.
 
-.. GENERATED FROM PYTHON SOURCE LINES 11-105
+.. GENERATED FROM PYTHON SOURCE LINES 11-117
 
 .. code-block:: Python
 
     # Code source: Lucy Owen & Enhanced by Claude
     # License: MIT
 
-    # Load timecorr and other packages
-    import timecorr as tc
     import numpy as np
 
+    # Load timecorr and other packages
+    import timecorr as tc
+
     print("Timepoint Decoding by Correlation Level (Simple Version)")
-    print("="*60)
+    print("=" * 60)
 
     # Generate synthetic multi-subject data
     print("\n1. Generating synthetic multi-subject data...")
 
-    S = 8   # Number of subjects  
+    S = 8  # Number of subjects
     T = 60  # Number of timepoints (reduced for faster computation)
     K = 30  # Number of features
 
@@ -63,7 +64,7 @@ This simplified version uses synthetic data to ensure reliability.
 
     # Define kernel parameters
     width = 10
-    laplace = {'name': 'Laplace', 'weights': tc.laplace_weights, 'params': {'scale': width}}
+    laplace = {"name": "Laplace", "weights": tc.laplace_weights, "params": {"scale": width}}
 
     print(f"\n2. Using {laplace['name']} kernel with scale={width}")
 
@@ -75,16 +76,21 @@ This simplified version uses synthetic data to ensure reliability.
 
     try:
         # Run timecorr with specified functions for calculating correlations, as well as combining and reducing
-        results = tc.timepoint_decoder(data, level=level, combine=tc.corrmean_combine,
-                                       cfun=tc.isfc, rfun='eigenvector_centrality', 
-                                       weights_fun=laplace['weights'],
-                                       weights_params=laplace['params'])
-    
+        results = tc.timepoint_decoder(
+            data,
+            level=level,
+            combine=tc.corrmean_combine,
+            cfun=tc.isfc,
+            rfun="eigenvector_centrality",
+            weights_fun=laplace["weights"],
+            weights_params=laplace["params"],
+        )
+
         print(f"✓ Level {level} decoding results:")
         print(f"  Accuracy: {results['accuracy']:.3f}")
         print(f"  Error: {results['error']:.3f}")
         print(f"  Rank: {results['rank']:.3f}")
-    
+
     except Exception as e:
         print(f"✗ Error at level {level}: {e}")
         # Try with simpler parameters
@@ -104,26 +110,32 @@ This simplified version uses synthetic data to ensure reliability.
     levels = np.arange(3)  # Test levels 0, 1, 2
 
     try:
-        results = tc.timepoint_decoder(data, level=levels, combine=tc.corrmean_combine,
-                                       cfun=tc.isfc, rfun='eigenvector_centrality', 
-                                       weights_fun=laplace['weights'],
-                                       weights_params=laplace['params'])
-    
+        results = tc.timepoint_decoder(
+            data,
+            level=levels,
+            combine=tc.corrmean_combine,
+            cfun=tc.isfc,
+            rfun="eigenvector_centrality",
+            weights_fun=laplace["weights"],
+            weights_params=laplace["params"],
+        )
+
         print(f"✓ Multi-level decoding results:")
         if isinstance(results, dict):
             for key, value in results.items():
                 print(f"  {key}: {value}")
         else:
             print(f"  Results: {results}")
-        
+
     except Exception as e:
         print(f"✗ Error with multiple levels: {e}")
         print("Timepoint decoder may have compatibility issues with this timecorr version.")
 
-    print("\n" + "="*60)
+    print("\n" + "=" * 60)
     print("EXAMPLE COMPLETED")
     print("Note: If errors occurred, this indicates potential compatibility issues")
     print("with the timepoint_decoder function in the current timecorr version.")
+
 
 .. _sphx_glr_download_auto_examples_decode_by_level_simple.py:
 

@@ -29,6 +29,17 @@ setup(
         "scipy>=1.2.1",
         "scikit-learn>=0.19.2",
     ],
+    extras_require={
+        "docs": [
+            "sphinx>=4.0.0",
+            "sphinx_bootstrap_theme==0.4.13",
+            "sphinx-gallery",
+            "numpydoc",
+            "nbsphinx",
+            "matplotlib>=2.1.0",
+            "seaborn>=0.8.1",
+        ],
+    },
     packages=find_packages(exclude=("tests", "docs")),
 )
 

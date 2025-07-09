@@ -163,24 +163,23 @@ Matrix Operations
    correlation_vector = tc.mat2vec(correlation_matrix)
    reconstructed_matrix = tc.vec2mat(correlation_vector)
 
-Statistical Functions
-^^^^^^^^^^^^^^^^^^^^
+Combination Functions
+^^^^^^^^^^^^^^^^^^^^^
 
 .. autosummary::
    :toctree: generated/
    :nosignatures:
 
-   r2z
-   z2r
+   mean_combine
+   corrmean_combine
 
 **Example:**
 
 .. code-block:: python
 
-   # Fisher z-transform for correlation statistics
-   correlations = np.array([0.3, 0.5, 0.8])
-   z_values = tc.r2z(correlations)
-   back_to_r = tc.z2r(z_values)
+   # Combine multi-subject results
+   subjects = [np.random.randn(100, 5) for _ in range(3)]
+   combined = tc.timecorr(subjects, cfun=tc.isfc, combine=tc.mean_combine)
 
 Decoder Functions
 -----------------
@@ -193,7 +192,6 @@ Functions for decoding and cross-validation analysis.
 
    timepoint_decoder
    weighted_timepoint_decoder
-   pca_decoder
 
 **Example:**
 
@@ -203,24 +201,27 @@ Functions for decoding and cross-validation analysis.
    subjects_data = [np.random.randn(100, 10) for _ in range(5)]
    accuracy = tc.timepoint_decoder(subjects_data, nfolds=3)
 
-Visualization
--------------
+Additional Weight Functions
+---------------------------
 
-Functions for plotting and visualizing results.
+Other available weighting functions for specialized use cases.
 
 .. autosummary::
    :toctree: generated/
    :nosignatures:
 
-   plot_weights
+   t_weights
+   uniform_weights
+   boxcar_weights
 
 **Example:**
 
 .. code-block:: python
 
-   # Visualize kernel weights
-   weights = tc.gaussian_weights(50, var=10)
-   tc.plot_weights(weights)
+   # Additional kernel types
+   t_corr = tc.timecorr(data, weights_function=tc.t_weights, 
+                       weights_params={'df': 100})
+   uniform_corr = tc.timecorr(data, weights_function=tc.uniform_weights)
 
 Function Parameters
 -------------------

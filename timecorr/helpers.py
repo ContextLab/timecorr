@@ -22,6 +22,33 @@ boxcar_params = {'width': 10}
 
 
 def gaussian_weights(T, params=gaussian_params):
+    """
+    Generate Gaussian weighting function for dynamic correlations.
+    
+    This function creates a time-varying weighting matrix where each timepoint 
+    receives weights according to a Gaussian distribution centered at that timepoint.
+    Useful for computing smooth dynamic correlations.
+    
+    Parameters
+    ----------
+    T : int
+        Number of timepoints in the timeseries
+    params : dict, optional
+        Dictionary containing Gaussian parameters. Default: {'var': 100}
+        - 'var' : float, variance of the Gaussian kernel
+        
+    Returns
+    -------
+    numpy.ndarray
+        T x T matrix of Gaussian weights, where weights[i,j] represents
+        the weight given to timepoint j when computing correlations at timepoint i
+        
+    Examples
+    --------
+    >>> import timecorr as tc
+    >>> weights = tc.gaussian_weights(50, {'var': 10})
+    >>> print(weights.shape)  # (50, 50)
+    """
     if params is None:
         params = gaussian_params
 
@@ -31,6 +58,33 @@ def gaussian_weights(T, params=gaussian_params):
     return c1 * np.exp(c2 * sqdiffs)
 
 def laplace_weights(T, params=laplace_params):
+    """
+    Generate Laplace (exponential) weighting function for dynamic correlations.
+    
+    This function creates a time-varying weighting matrix where each timepoint 
+    receives weights according to a Laplace distribution centered at that timepoint.
+    Provides sharper temporal localization compared to Gaussian weights.
+    
+    Parameters
+    ----------
+    T : int
+        Number of timepoints in the timeseries
+    params : dict, optional
+        Dictionary containing Laplace parameters. Default: {'scale': 100}
+        - 'scale' : float, scale parameter of the Laplace distribution
+        
+    Returns
+    -------
+    numpy.ndarray
+        T x T matrix of Laplace weights, where weights[i,j] represents
+        the weight given to timepoint j when computing correlations at timepoint i
+        
+    Examples
+    --------
+    >>> import timecorr as tc
+    >>> weights = tc.laplace_weights(50, {'scale': 5})
+    >>> print(weights.shape)  # (50, 50)
+    """
     if params is None:
         params = laplace_params
 
@@ -39,6 +93,33 @@ def laplace_weights(T, params=laplace_params):
 
 
 def eye_weights(T, params=eye_params):
+    """
+    Generate identity (delta) weighting function for dynamic correlations.
+    
+    This function creates an identity matrix for weighting, where each timepoint
+    only receives weight from itself. Useful for computing instantaneous correlations
+    without temporal smoothing.
+    
+    Parameters
+    ----------
+    T : int
+        Number of timepoints in the timeseries
+    params : dict, optional
+        Empty dictionary (no parameters needed). Default: {}
+        
+    Returns
+    -------
+    numpy.ndarray
+        T x T identity matrix where weights[i,j] = 1 if i==j, else 0
+        
+    Examples
+    --------
+    >>> import timecorr as tc
+    >>> weights = tc.eye_weights(50, {})
+    >>> print(weights.shape)  # (50, 50)
+    >>> print(weights[0, 0])  # 1.0
+    >>> print(weights[0, 1])  # 0.0
+    """
 
     return np.eye(T)
 
@@ -56,6 +137,33 @@ def t_weights(T, params=t_params):
     return np.multiply(c1, np.power(1 + np.divide(sqdiffs, params['df']), c2))
 
 def mexican_hat_weights(T, params=mexican_hat_params):
+    """
+    Generate Mexican Hat (Ricker) weighting function for dynamic correlations.
+    
+    This function creates a time-varying weighting matrix where each timepoint 
+    receives weights according to a Mexican Hat wavelet centered at that timepoint.
+    Useful for capturing temporal dynamics and transitions in correlations.
+    
+    Parameters
+    ----------
+    T : int
+        Number of timepoints in the timeseries
+    params : dict, optional
+        Dictionary containing Mexican Hat parameters. Default: {'sigma': 10}
+        - 'sigma' : float, scale parameter of the Mexican Hat wavelet
+        
+    Returns
+    -------
+    numpy.ndarray
+        T x T matrix of Mexican Hat weights, where weights[i,j] represents
+        the weight given to timepoint j when computing correlations at timepoint i
+        
+    Examples
+    --------
+    >>> import timecorr as tc
+    >>> weights = tc.mexican_hat_weights(50, {'sigma': 5})
+    >>> print(weights.shape)  # (50, 50)
+    """
     if params is None:
         params = mexican_hat_params
 
@@ -173,12 +281,71 @@ def wisfc(data, timepoint_weights, subject_weights=None):
 
 
 def isfc(data, timepoint_weights):
+    """
+    Compute Inter-Subject Functional Connectivity (ISFC).
+    
+    ISFC computes correlations between each subject's data and the average of all other subjects,
+    providing a measure of shared neural patterns across participants while avoiding 
+    self-correlation artifacts.
+    
+    Parameters
+    ----------
+    data : list of numpy.ndarray or numpy.ndarray
+        List of timeseries data matrices, each of shape (timepoints, features).
+        If a single array is provided, it will be converted to a list.
+    timepoint_weights : numpy.ndarray
+        T x T matrix of temporal weights for dynamic correlations
+        
+    Returns
+    -------
+    list of numpy.ndarray
+        List of correlation matrices (one per subject), each showing correlations
+        between that subject and the average of all others
+        
+    Examples
+    --------
+    >>> import timecorr as tc
+    >>> import numpy as np
+    >>> data = [np.random.randn(100, 10) for _ in range(5)]  # 5 subjects
+    >>> weights = tc.gaussian_weights(100, {'var': 10})
+    >>> isfc_results = tc.isfc(data, weights)
+    >>> len(isfc_results)  # 5
+    """
     if type(data) != list:
         return isfc([data], timepoint_weights)[0]
 
     return wisfc(data, timepoint_weights, subject_weights=1 - np.eye(len(data)))
 
 def autofc(data, timepoint_weights):
+    """
+    Compute auto-correlations within each subject's data.
+    
+    This function computes correlations within each subject's own data,
+    equivalent to standard within-subject dynamic correlations.
+    
+    Parameters
+    ----------
+    data : list of numpy.ndarray or numpy.ndarray
+        List of timeseries data matrices, each of shape (timepoints, features).
+        If a single array is provided, it will be converted to a list.
+    timepoint_weights : numpy.ndarray
+        T x T matrix of temporal weights for dynamic correlations
+        
+    Returns
+    -------
+    list of numpy.ndarray
+        List of correlation matrices (one per subject), each showing
+        within-subject correlations
+        
+    Examples
+    --------
+    >>> import timecorr as tc
+    >>> import numpy as np
+    >>> data = [np.random.randn(100, 10) for _ in range(3)]  # 3 subjects
+    >>> weights = tc.gaussian_weights(100, {'var': 10})
+    >>> auto_results = tc.autofc(data, weights)
+    >>> len(auto_results)  # 3
+    """
     if type(data) != list:
         return autofc([data], timepoint_weights)[0]
 

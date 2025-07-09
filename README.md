@@ -6,7 +6,7 @@ The timecorr toolbox provides tools for computing and exploring the correlationa
 # Basic usage
 
 The `timecorr` function takes your data and returns moment-by-moment correlations during the same timepoints. `timecorr` also lets you explore higher order structure in the data in a computationally tractable way by specifiying a dimensionality reduction technique.
-  - `timecorr` computes dynamic correlations and return a result in the same format, but where each data matrix has number-of-timepoints rows and $\frac{n^2 - n}{2}$ features (i.e. a vectorized version of the upper triangle of each timepoint's correlation matrix).
+  - `timecorr` computes dynamic correlations and return a result in the same format, but where each data matrix has number-of-timepoints rows and $n + \frac{n^2 - n}{2}$ features (i.e. a vectorized version of the upper triangle of each timepoint's correlation matrix, plus the diagonal).
   - `timecorr` also lets you explore higher order structure in the data by projecting the correlations back onto the original number-of-timepoints by number-of-featuers space.
 
 
@@ -30,7 +30,7 @@ The `timecorr` function takes your data and returns moment-by-moment correlation
 
   - By specifiying a reduction technique, `rfun`, `timecorr` takes a timeseries of observations and returns a timeseries of correlations _with the same number of features_. This is useful in that it prevents "dimension blowup" whereby running timecorr its own output squares the number of features-- thereby preventing the efficient exploration of higher-order correlations.
   
-  - This function may be called recursively to compute dynamic correlations ("level 1"), dynamic correlations _between_ correlations ("level 2"), dynamic correlations between correlations between correlations ("level 3"), etc. If `rfun` is not specified, the returned data matrix will have number-of-timepoints rows and $\frac{n^2 - n}{2}$ features.
+  - This function may be called recursively to compute dynamic correlations ("level 1"), dynamic correlations _between_ correlations ("level 2"), dynamic correlations between correlations between correlations ("level 3"), etc. If `rfun` is not specified, the returned data matrix will have number-of-timepoints rows and $n + \frac{n^2 - n}{2}$ features.
 
 Toolbox documentation, including a full API specification, tutorials, and gallery of examples may be found [here](http://timecorr.readthedocs.io/) on our readthedocs page.
 

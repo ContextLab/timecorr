@@ -1,11 +1,20 @@
 # coding: utf-8
 
 import numpy as np
-from .helpers import isfc, gaussian_weights, format_data, null_combine, reduce, smooth
 
-def timecorr(data, weights_function=gaussian_weights,
-             weights_params=None, include_timepoints='all', exclude_timepoints=None,
-             combine=null_combine, cfun=isfc, rfun=None):
+from .helpers import format_data, gaussian_weights, isfc, null_combine, reduce, smooth
+
+
+def timecorr(
+    data,
+    weights_function=gaussian_weights,
+    weights_params=None,
+    include_timepoints="all",
+    exclude_timepoints=None,
+    combine=null_combine,
+    cfun=isfc,
+    rfun=None,
+):
     """
     Computes dynamics correlations in single-subject or multi-subject data.
 
@@ -128,14 +137,16 @@ def timecorr(data, weights_function=gaussian_weights,
     weights = weights_function(T, weights_params)
 
     include_timepoints = include_timepoints.lower()
-    if include_timepoints == 'all':
+    if include_timepoints == "all":
         pass
-    elif include_timepoints == 'pre':
+    elif include_timepoints == "pre":
         weights = np.tril(weights)
-    elif include_timepoints == 'post':
+    elif include_timepoints == "post":
         weights = np.triu(weights)
     else:
-        raise Exception(f'Invalid option for include_timepoints: \'{include_timepoints}\'.  Must be one of: \'all\', \'pre\', or \'post\'.')
+        raise Exception(
+            f"Invalid option for include_timepoints: '{include_timepoints}'.  Must be one of: 'all', 'pre', or 'post'."
+        )
 
     if not (exclude_timepoints is None):
         weights = np.multiply(temporal_filter(T, exclude_timepoints), weights)
@@ -147,7 +158,9 @@ def timecorr(data, weights_function=gaussian_weights,
             return_list = False
 
     else:
-        corrs = combine(smooth(data, kernel_fun=weights_function, kernel_params=weights_params)).tolist()
+        corrs = combine(
+            smooth(data, kernel_fun=weights_function, kernel_params=weights_params)
+        ).tolist()
 
     if return_list and (not (type(corrs) == list)):
         return [corrs]
@@ -155,5 +168,3 @@ def timecorr(data, weights_function=gaussian_weights,
         return corrs[0]
     else:
         return corrs
-
-

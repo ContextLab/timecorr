@@ -1,9 +1,37 @@
 #!/usr/bin/env python
 
-from .timecorr import timecorr
-from .helpers import isfc, wisfc, autofc, wcorr, gaussian_weights, gaussian_params, mat2vec, vec2mat, laplace_weights,\
-                     laplace_params, format_data, t_weights, t_params, mexican_hat_weights,\
-                     mexican_hat_params, eye_weights, eye_params, uniform_weights, uniform_params, boxcar_weights, boxcar_params,\
-                     mean_combine, corrmean_combine, tstat_combine, null_combine, reduce, isodd, iseven, smooth, timepoint_decoder,\
-                     weighted_timepoint_decoder
+from .helpers import (
+    autofc,
+    boxcar_params,
+    boxcar_weights,
+    corrmean_combine,
+    eye_params,
+    eye_weights,
+    format_data,
+    gaussian_params,
+    gaussian_weights,
+    iseven,
+    isfc,
+    isodd,
+    laplace_params,
+    laplace_weights,
+    mat2vec,
+    mean_combine,
+    mexican_hat_params,
+    mexican_hat_weights,
+    null_combine,
+    reduce,
+    smooth,
+    t_params,
+    t_weights,
+    timepoint_decoder,
+    tstat_combine,
+    uniform_params,
+    uniform_weights,
+    vec2mat,
+    wcorr,
+    weighted_timepoint_decoder,
+    wisfc,
+)
 from .simulate import simulate_data
+from .timecorr import timecorr

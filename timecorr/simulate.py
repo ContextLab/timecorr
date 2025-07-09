@@ -1,24 +1,24 @@
 import warnings
 
 import numpy as np
-import timecorr as tc
-
 from scipy.spatial.distance import cdist
+
+import timecorr as tc
 
 
 def random_corrmat(K):
     x = np.random.randn(K, K)
     x = x * x.T
     x /= np.max(np.abs(x))
-    np.fill_diagonal(x, 1.)
+    np.fill_diagonal(x, 1.0)
     return x
 
 
 def ramping_dataset(K, T, *args):
-    warnings.simplefilter('ignore')
+    warnings.simplefilter("ignore")
 
     def dist(a, b):
-        return cdist(np.atleast_2d(a), np.atleast_2d(b), 'correlation')
+        return cdist(np.atleast_2d(a), np.atleast_2d(b), "correlation")
 
     a = tc.mat2vec(random_corrmat(K))
     b = tc.mat2vec(random_corrmat(K))
@@ -33,45 +33,49 @@ def ramping_dataset(K, T, *args):
 
     mu = np.linspace(1, 0, T)
 
-    corrs = np.zeros([T, int((K ** 2 - K) / 2 + K)])
+    corrs = np.zeros([T, int((K**2 - K) / 2 + K)])
     Y = np.zeros([T, K])
 
     for t in np.arange(T):
         corrs[t, :] = mu[t] * a + (1 - mu[t]) * b
-        Y[t, :] = np.random.multivariate_normal(mean=np.zeros([K]) + .1, cov=tc.vec2mat(corrs[t, :]))
+        Y[t, :] = np.random.multivariate_normal(
+            mean=np.zeros([K]) + 0.1, cov=tc.vec2mat(corrs[t, :])
+        )
 
     return Y, corrs
 
 
 def random_dataset(K, T, *args):
-    warnings.simplefilter('ignore')
+    warnings.simplefilter("ignore")
 
-    corrs = np.zeros([T, int((K ** 2 - K) / 2 + K)])
+    corrs = np.zeros([T, int((K**2 - K) / 2 + K)])
     Y = np.zeros([T, K])
 
     for t in np.arange(T):
         corrs[t, :] = tc.mat2vec(random_corrmat(K))
-        Y[t, :] = np.random.multivariate_normal(mean=np.zeros([K]), cov=tc.vec2mat(corrs[t, :]))
+        Y[t, :] = np.random.multivariate_normal(
+            mean=np.zeros([K]), cov=tc.vec2mat(corrs[t, :])
+        )
 
     return Y, corrs
 
 
 def constant_dataset(K, T, *args):
-    warnings.simplefilter('ignore')
+    warnings.simplefilter("ignore")
 
     C = random_corrmat(K)
     corrs = np.tile(tc.mat2vec(C), [T, 1])
 
-    Y = np.random.multivariate_normal(mean=np.zeros([K]) + .1, cov=C, size=T)
+    Y = np.random.multivariate_normal(mean=np.zeros([K]) + 0.1, cov=C, size=T)
 
     return Y, corrs
 
 
 def block_dataset(K, T, B=5):
-    warnings.simplefilter('ignore')
+    warnings.simplefilter("ignore")
     block_len = np.ceil(T / B)
 
-    corrs = np.zeros([B, int((K ** 2 - K) / 2 + K)])
+    corrs = np.zeros([B, int((K**2 - K) / 2 + K)])
     Y = np.zeros([T, K])
 
     for b in np.arange(B):
@@ -80,12 +84,16 @@ def block_dataset(K, T, B=5):
     corrs = corrs[:T, :]
 
     for t in np.arange(T):
-        Y[t, :] = np.random.multivariate_normal(mean=np.zeros([K]) + .1, cov=tc.vec2mat(corrs[t, :]))
+        Y[t, :] = np.random.multivariate_normal(
+            mean=np.zeros([K]) + 0.1, cov=tc.vec2mat(corrs[t, :])
+        )
 
     return Y, corrs
 
 
-def simulate_data(datagen='ramping', return_corrs=False, set_random_seed=False, S=1, T=100, K=10, B=5):
+def simulate_data(
+    datagen="ramping", return_corrs=False, set_random_seed=False, S=1, T=100, K=10, B=5
+):
     """
     Simulate timeseries data
 
@@ -126,7 +134,12 @@ def simulate_data(datagen='ramping', return_corrs=False, set_random_seed=False, 
 
     """
 
-    datagen_funcs = {'block': block_dataset, 'ramping': ramping_dataset, 'constant': constant_dataset, 'random':random_dataset}
+    datagen_funcs = {
+        "block": block_dataset,
+        "ramping": ramping_dataset,
+        "constant": constant_dataset,
+        "random": random_dataset,
+    }
 
     if set_random_seed:
         if isinstance(set_random_seed, bool):

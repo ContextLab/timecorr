@@ -33,7 +33,7 @@ setup(
     extras_require={
         "docs": [
             "sphinx>=4.0.0",
-            "sphinx_bootstrap_theme==0.4.13",
+            "sphinx-book-theme",
             "sphinx-gallery",
             "numpydoc",
             "nbsphinx",

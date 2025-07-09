@@ -22,8 +22,6 @@ import os
 # import sys
 import sys
 
-import sphinx_bootstrap_theme
-
 sys.path.insert(0, os.path.abspath("../"))
 
 # Configure matplotlib to use non-interactive backend for documentation
@@ -125,7 +123,7 @@ todo_include_todos = False
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.
-html_theme = "bootstrap"
+html_theme = "sphinx_book_theme"
 
 # Theme options are theme-specific and customize the look and feel of a theme
 # further.  For a list of options available for each theme, see the
@@ -133,20 +131,18 @@ html_theme = "bootstrap"
 extlinks = {"github": "https://github.com/ContextLab/timecorr"}
 
 html_theme_options = {
-    "source_link_position": "footer",
-    "bootswatch_theme": "yeti",
-    "navbar_sidebarrel": False,
-    "bootstrap_version": "3",
-    "navbar_links": [
-        ("API", "api"),
-        ("Gallery", "auto_examples/index"),
-        ("Tutorials", "tutorials"),
-        ("Download", "http://www.github.com/ContextLab/timecorr", True),
-    ],
+    "repository_url": "https://github.com/ContextLab/timecorr",
+    "use_repository_button": True,
+    "use_issues_button": True,
+    "use_download_button": True,
+    "path_to_docs": "docs/",
+    "show_navbar_depth": 2,
 }
 
-# Add any paths that contain custom themes here, relative to this directory.
-html_theme_path = sphinx_bootstrap_theme.get_html_theme_path()
+# Add any paths that contain custom static files (such as style sheets) here,
+# relative to this directory. They are copied after the builtin static files,
+# so a file named "default.css" will overwrite the builtin "default.css".
+html_static_path = ['_static']
 
 # -- Options for HTMLHelp output ------------------------------------------
 

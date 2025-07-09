@@ -64,7 +64,7 @@ In this example, we plot the kernel options provided.
 
     # define functions
     laplace = {'name': 'Laplace', 'weights': tc.laplace_weights, 'params': {'scale': width}}
-    delta = {'name': '$\delta$', 'weights': tc.eye_weights, 'params': tc.eye_params}
+    delta = {'name': r'$\delta$', 'weights': tc.eye_weights, 'params': tc.eye_params}
     gaussian = {'name': 'Gaussian', 'weights': tc.gaussian_weights, 'params': {'var': width}}
     mexican_hat = {'name': 'Mexican hat', 'weights': tc.mexican_hat_weights, 'params': {'sigma': width}}
 
@@ -96,7 +96,7 @@ In this example, we plot the kernel options provided.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.091 seconds)
+   **Total running time of the script:** (0 minutes 0.082 seconds)
 
 
 .. _sphx_glr_download_auto_examples_plot_explore_kernels.py:

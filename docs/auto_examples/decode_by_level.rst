@@ -24,7 +24,10 @@ Decode by level
 
 In this example, we load in some example data, and decode by level of higher order correlation.
 
-.. GENERATED FROM PYTHON SOURCE LINES 10-48
+NOTE: This example currently has compatibility issues with the timepoint_decoder function.
+For a working example, please see the enhanced version in docs/auto_examples/decode_by_level.py
+
+.. GENERATED FROM PYTHON SOURCE LINES 13-81
 
 .. code-block:: Python
 
@@ -36,9 +39,19 @@ In this example, we load in some example data, and decode by level of higher ord
     import hypertools as hyp
     import numpy as np
 
+    print("Timepoint Decoding Example")
+    print("="*30)
+    print("NOTE: This example currently has compatibility issues.")
+    print("Please see docs/auto_examples/decode_by_level.py for a working version.")
+    print("="*30)
 
     # load example data
     data = hyp.load('weights').get_data()
+
+    # Convert to numpy array format required by timepoint_decoder
+    # timepoint_decoder expects a numpy array with shape (n_subjects, T, K)
+    data_array = np.array(data)
+    print(f"Data shape: {data_array.shape} (subjects, timepoints, features)")
 
     # define your weights parameters
     width = 10
@@ -48,25 +61,45 @@ In this example, we load in some example data, and decode by level of higher ord
     # if integer, returns decoding accuracy, error, and rank for specified level
     level = 2
 
-    # run timecorr with specified functions for calculating correlations, as well as combining and reducing
-    results = tc.timepoint_decoder(np.array(data), level=level, combine=tc.corrmean_combine,
-                                   cfun=tc.isfc, rfun='eigenvector_centrality', weights_fun=laplace['weights'],
-                                   weights_params=laplace['params'])
+    print(f"\nAttempting timepoint decoding at level {level}...")
 
-    # returns only decoding results for level 2
-    print(results)
+    try:
+        # run timecorr with specified functions for calculating correlations, as well as combining and reducing
+        results = tc.timepoint_decoder(data_array, level=level, combine=tc.corrmean_combine,
+                                       cfun=tc.isfc, rfun='eigenvector_centrality', weights_fun=laplace['weights'],
+                                       weights_params=laplace['params'])
+    
+        # returns only decoding results for level 2
+        print("✓ SUCCESS: Level 2 decoding results:")
+        print(results)
+    
+    except Exception as e:
+        print(f"✗ ERROR: {e}")
+        print("This function has compatibility issues with the current version.")
 
     # set your number of levels
     # if list or array of integers, returns decoding accuracy, error, and rank for all levels
     levels = np.arange(int(level) + 1)
 
-    # run timecorr with specified functions for calculating correlations, as well as combining and reducing
-    results = tc.timepoint_decoder(np.array(data), level=levels, combine=tc.corrmean_combine,
-                                   cfun=tc.isfc, rfun='eigenvector_centrality', weights_fun=laplace['weights'],
-                                   weights_params=laplace['params'])
+    print(f"\nAttempting multi-level decoding for levels {levels}...")
 
-    # returns decoding results for all levels up to level 2
-    print(results)
+    try:
+        # run timecorr with specified functions for calculating correlations, as well as combining and reducing
+        results = tc.timepoint_decoder(data_array, level=levels, combine=tc.corrmean_combine,
+                                       cfun=tc.isfc, rfun='eigenvector_centrality', weights_fun=laplace['weights'],
+                                       weights_params=laplace['params'])
+    
+        # returns decoding results for all levels up to level 2
+        print("✓ SUCCESS: Multi-level decoding results:")
+        print(results)
+    
+    except Exception as e:
+        print(f"✗ ERROR: {e}")
+        print("This function has compatibility issues with the current version.")
+
+    print("\n" + "="*60)
+    print("RECOMMENDATION: Use the enhanced version in docs/auto_examples/decode_by_level.py")
+    print("which uses synthetic data and includes comprehensive error handling.")
 
 .. _sphx_glr_download_auto_examples_decode_by_level.py:
 

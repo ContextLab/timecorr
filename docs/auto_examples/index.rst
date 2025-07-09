@@ -32,23 +32,6 @@ Gallery of Examples
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we load in some example data, and find optimal level weights for decoding.">
-
-.. only:: html
-
-  .. image:: /auto_examples/images/thumb/sphx_glr_decode_by_weighted_level_thumb.png
-    :alt:
-
-  :ref:`sphx_glr_auto_examples_decode_by_weighted_level.py`
-
-.. raw:: html
-
-      <div class="sphx-glr-thumbnail-title">Optimized weights by level for decoding</div>
-    </div>
-
-
-.. raw:: html
-
     <div class="sphx-glr-thumbcontainer" tooltip="In this example, we simulate data">
 
 .. only:: html
@@ -83,6 +66,23 @@ Gallery of Examples
 
 .. raw:: html
 
+    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we load in some example data, and find optimal level weights for decoding.">
+
+.. only:: html
+
+  .. image:: /auto_examples/images/thumb/sphx_glr_decode_by_weighted_level_thumb.png
+    :alt:
+
+  :ref:`sphx_glr_auto_examples_decode_by_weighted_level.py`
+
+.. raw:: html
+
+      <div class="sphx-glr-thumbnail-title">Optimized weights by level for decoding</div>
+    </div>
+
+
+.. raw:: html
+
     <div class="sphx-glr-thumbcontainer" tooltip="In this example, we load in some example data, and decode by level of higher order correlation.">
 
 .. only:: html
@@ -98,6 +98,23 @@ Gallery of Examples
     </div>
 
 
+.. raw:: html
+
+    <div class="sphx-glr-thumbcontainer" tooltip="This example demonstrates timepoint decoding using hierarchical correlation levels. This simplified version uses synthetic data to ensure reliability.">
+
+.. only:: html
+
+  .. image:: /auto_examples/images/thumb/sphx_glr_decode_by_level_simple_thumb.png
+    :alt:
+
+  :ref:`sphx_glr_auto_examples_decode_by_level_simple.py`
+
+.. raw:: html
+
+      <div class="sphx-glr-thumbnail-title">Decode by level (Simple Version)</div>
+    </div>
+
+
 .. thumbnail-parent-div-close
 
 .. raw:: html
@@ -109,10 +126,11 @@ Gallery of Examples
    :hidden:
 
    /auto_examples/calculate_dynamic_correlations
-   /auto_examples/decode_by_weighted_level
    /auto_examples/plot_simulate_data
    /auto_examples/plot_explore_kernels
+   /auto_examples/decode_by_weighted_level
    /auto_examples/decode_by_level
+   /auto_examples/decode_by_level_simple
 
 
 .. only:: html

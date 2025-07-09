@@ -26,6 +26,7 @@ setup(
         "sphinx>=2.0.0",
         "duecredit>=0.7.0",
         "hypertools>=0.7.0",
+        "numpy>=1.14.2",
         "scipy>=1.2.1",
         "scikit-learn>=0.19.2",
     ],

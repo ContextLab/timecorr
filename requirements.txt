@@ -2,5 +2,6 @@ nose
 sphinx
 duecredit
 hypertools>=0.7.0
+numpy>=1.14.2
 scipy>=1.2.1
 scikit-learn>=0.19.2

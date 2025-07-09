@@ -117,7 +117,7 @@ def simulate_data(datagen='ramping', return_corrs=False, set_random_seed=False, 
         Number of blocks
 
     Returns
-    ----------
+    -------
     data : np.ndarray
         A samples by number of electrodes array of simulated iEEG data
 

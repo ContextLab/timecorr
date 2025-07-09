@@ -4,6 +4,10 @@ from scipy.io import loadmat
 import os
 import pytest
 
+# Configure matplotlib to use non-interactive backend for testing
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+
 from timecorr.helpers import gaussian_weights, gaussian_params, wcorr, wisfc, mat2vec, vec2mat, isfc, mean_combine, \
     corrmean_combine, timepoint_decoder, laplace_params, laplace_weights
 

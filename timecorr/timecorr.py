@@ -101,7 +101,7 @@ def timecorr(data, weights_function=gaussian_weights,
         Default: None (no dimensionality reduction)
 
     Returns
-    ----------
+    -------
     corrmats: moment-by-moment correlations
     """
 

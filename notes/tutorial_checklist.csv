@@ -1,0 +1,15 @@
+File Path,File Type,Description,Status,Issues Found,Action Needed
+"/Users/jmanning/timecorr/README.md",Documentation,Main README with examples,completed,✓ Fixed Mexican Hat kernel parameter and multi-subject analysis examples,All code examples now work correctly
+"/Users/jmanning/timecorr/docs/auto_examples/calculate_dynamic_correlations.py",Python Script,Dynamic correlations demo,completed,✓ Enhanced with detailed explanations and visualization,Comprehensive example with wcorr function
+"/Users/jmanning/timecorr/docs/auto_examples/decode_by_level.py",Python Script,Level decoding example,completed,✓ Fixed data format issues and enhanced with DataFrame handling,Correct timepoint_decoder usage patterns
+"/Users/jmanning/timecorr/docs/auto_examples/decode_by_weighted_level.py",Python Script,Weighted level decoding,completed,✓ Enhanced with comprehensive explanations and fallback handling,Working weighted decoding example
+"/Users/jmanning/timecorr/docs/auto_examples/plot_explore_kernels.py",Python Script,Kernel visualization,completed,✓ Fixed 2D weight matrix handling and added comprehensive visualizations,Complete kernel comparison with effects on correlations
+"/Users/jmanning/timecorr/docs/auto_examples/plot_simulate_data.py",Python Script,Data simulation demo,completed,✓ Enhanced with comprehensive simulation comparison and ground truth validation,Complete data simulation tutorial with visualization
+"/Users/jmanning/timecorr/docs/tutorial/applications_tutorial.ipynb",Jupyter Notebook,Cross-domain applications,completed,✓ Fixed reshape error in climate data simulation,Working notebook with comprehensive domain examples
+"/Users/jmanning/timecorr/docs/tutorial/synthetic_data_tutorial.ipynb",Jupyter Notebook,Synthetic data guide,completed,✓ Executed successfully,Working notebook
+"/Users/jmanning/timecorr/docs/tutorial/timecorr_notebook.ipynb",Jupyter Notebook,Main timecorr tutorial,completed,✓ Fixed kernel parameter errors and enhanced with comprehensive examples,Working notebook with proper kernel calling conventions
+"/Users/jmanning/timecorr/examples/calculate_dynamic_correlations.py",Python Script,Dynamic correlations example,completed,✓ Works without errors,Basic working example
+"/Users/jmanning/timecorr/examples/decode_by_level.py",Python Script,Level decoding example,completed,✓ Updated with compatibility notes and error handling,Has compatibility issues with timepoint_decoder function
+"/Users/jmanning/timecorr/examples/decode_by_weighted_level.py",Python Script,Weighted level decoding,completed,✓ Updated with compatibility notes and error handling,Has compatibility issues with weighted_timepoint_decoder function
+"/Users/jmanning/timecorr/examples/plot_explore_kernels.py",Python Script,Kernel visualization,completed,✓ Works without errors,Basic working example
+"/Users/jmanning/timecorr/examples/plot_simulate_data.py",Python Script,Data simulation demo,completed,✓ Works but runs slowly,Basic working example

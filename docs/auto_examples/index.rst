@@ -9,13 +9,96 @@ Gallery of Examples
 
 .. raw:: html
 
+    <div class="sphx-glr-thumbnails">
+
+.. thumbnail-parent-div-open
+
+.. raw:: html
+
     <div class="sphx-glr-thumbcontainer" tooltip="In this example, we calculate dynamic correlations">
 
 .. only:: html
 
-    .. figure:: /auto_examples/images/thumb/sphx_glr_calculate_dynamic_correlations_thumb.png
+  .. image:: /auto_examples/images/thumb/sphx_glr_calculate_dynamic_correlations_thumb.png
+    :alt:
 
-        :ref:`sphx_glr_auto_examples_calculate_dynamic_correlations.py`
+  :ref:`sphx_glr_auto_examples_calculate_dynamic_correlations.py`
+
+.. raw:: html
+
+      <div class="sphx-glr-thumbnail-title">Calculate dynamic correlations</div>
+    </div>
+
+
+.. raw:: html
+
+    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we load in some example data, and find optimal level weights for decoding.">
+
+.. only:: html
+
+  .. image:: /auto_examples/images/thumb/sphx_glr_decode_by_weighted_level_thumb.png
+    :alt:
+
+  :ref:`sphx_glr_auto_examples_decode_by_weighted_level.py`
+
+.. raw:: html
+
+      <div class="sphx-glr-thumbnail-title">Optimized weights by level for decoding</div>
+    </div>
+
+
+.. raw:: html
+
+    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we simulate data">
+
+.. only:: html
+
+  .. image:: /auto_examples/images/thumb/sphx_glr_plot_simulate_data_thumb.png
+    :alt:
+
+  :ref:`sphx_glr_auto_examples_plot_simulate_data.py`
+
+.. raw:: html
+
+      <div class="sphx-glr-thumbnail-title">Simulate subject data</div>
+    </div>
+
+
+.. raw:: html
+
+    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we plot the kernel options provided.">
+
+.. only:: html
+
+  .. image:: /auto_examples/images/thumb/sphx_glr_plot_explore_kernels_thumb.png
+    :alt:
+
+  :ref:`sphx_glr_auto_examples_plot_explore_kernels.py`
+
+.. raw:: html
+
+      <div class="sphx-glr-thumbnail-title">Explore kernels</div>
+    </div>
+
+
+.. raw:: html
+
+    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we load in some example data, and decode by level of higher order correlation.">
+
+.. only:: html
+
+  .. image:: /auto_examples/images/thumb/sphx_glr_decode_by_level_thumb.png
+    :alt:
+
+  :ref:`sphx_glr_auto_examples_decode_by_level.py`
+
+.. raw:: html
+
+      <div class="sphx-glr-thumbnail-title">Decode by level</div>
+    </div>
+
+
+.. thumbnail-parent-div-close
 
 .. raw:: html
 
@@ -26,111 +109,27 @@ Gallery of Examples
    :hidden:
 
    /auto_examples/calculate_dynamic_correlations
-
-.. raw:: html
-
-    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we simulate data">
-
-.. only:: html
-
-    .. figure:: /auto_examples/images/thumb/sphx_glr_plot_simulate_data_thumb.png
-
-        :ref:`sphx_glr_auto_examples_plot_simulate_data.py`
-
-.. raw:: html
-
-    </div>
-
-
-.. toctree::
-   :hidden:
-
-   /auto_examples/plot_simulate_data
-
-.. raw:: html
-
-    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we load in some example data, and find optimal level weights for decoding.">
-
-.. only:: html
-
-    .. figure:: /auto_examples/images/thumb/sphx_glr_decode_by_weighted_level_thumb.png
-
-        :ref:`sphx_glr_auto_examples_decode_by_weighted_level.py`
-
-.. raw:: html
-
-    </div>
-
-
-.. toctree::
-   :hidden:
-
    /auto_examples/decode_by_weighted_level
-
-.. raw:: html
-
-    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we plot the kernel options provided.">
-
-.. only:: html
-
-    .. figure:: /auto_examples/images/thumb/sphx_glr_plot_explore_kernels_thumb.png
-
-        :ref:`sphx_glr_auto_examples_plot_explore_kernels.py`
-
-.. raw:: html
-
-    </div>
-
-
-.. toctree::
-   :hidden:
-
+   /auto_examples/plot_simulate_data
    /auto_examples/plot_explore_kernels
+   /auto_examples/decode_by_level
 
-.. raw:: html
-
-    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we load in some example data, and decode by level of higher order correlation.">
 
 .. only:: html
 
-    .. figure:: /auto_examples/images/thumb/sphx_glr_decode_by_level_thumb.png
+  .. container:: sphx-glr-footer sphx-glr-footer-gallery
 
-        :ref:`sphx_glr_auto_examples_decode_by_level.py`
+    .. container:: sphx-glr-download sphx-glr-download-python
 
-.. raw:: html
+      :download:`Download all examples in Python source code: auto_examples_python.zip </auto_examples/auto_examples_python.zip>`
 
-    </div>
+    .. container:: sphx-glr-download sphx-glr-download-jupyter
 
-
-.. toctree::
-   :hidden:
-
-   /auto_examples/decode_by_level
-.. raw:: html
-
-    <div style='clear:both'></div>
-
-
-
-.. only :: html
-
- .. container:: sphx-glr-footer
-    :class: sphx-glr-footer-gallery
-
-
-  .. container:: sphx-glr-download
-
-    :download:`Download all examples in Python source code: auto_examples_python.zip <//Users/lucyowen/repos/timecorr/docs/auto_examples/auto_examples_python.zip>`
-
-
-
-  .. container:: sphx-glr-download
-
-    :download:`Download all examples in Jupyter notebooks: auto_examples_jupyter.zip <//Users/lucyowen/repos/timecorr/docs/auto_examples/auto_examples_jupyter.zip>`
+      :download:`Download all examples in Jupyter notebooks: auto_examples_jupyter.zip </auto_examples/auto_examples_jupyter.zip>`
 
 
 .. only:: html
 
  .. rst-class:: sphx-glr-signature
 
-    `Gallery generated by Sphinx-Gallery <https://sphinx-gallery.readthedocs.io>`_
+    `Gallery generated by Sphinx-Gallery <https://sphinx-gallery.github.io>`_

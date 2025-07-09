@@ -1,5 +1,5 @@
-timecorr.timecorr
-===============
+﻿timecorr.timecorr
+=================
 
 .. currentmodule:: timecorr
 

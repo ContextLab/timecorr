@@ -3,6 +3,10 @@ import numpy as np
 import pandas as pd
 import hypertools as hyp
 
+# Configure matplotlib to use non-interactive backend for testing
+import matplotlib
+matplotlib.use('Agg')  # Use non-interactive backend
+
 import timecorr as tc
 from timecorr.timecorr import timecorr
 from timecorr.simulate import simulate_data

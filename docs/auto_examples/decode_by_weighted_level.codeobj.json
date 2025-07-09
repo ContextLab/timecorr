@@ -1,0 +1,56 @@
+{
+ "hyp.load": [
+  {
+   "is_class": false,
+   "is_explicit": false,
+   "module": "hypertools",
+   "module_short": "hypertools",
+   "name": "load"
+  }
+ ],
+ "np.array": [
+  {
+   "is_class": false,
+   "is_explicit": false,
+   "module": "numpy",
+   "module_short": "numpy",
+   "name": "array"
+  }
+ ],
+ "tc.corrmean_combine": [
+  {
+   "is_class": false,
+   "is_explicit": false,
+   "module": "timecorr",
+   "module_short": "timecorr",
+   "name": "corrmean_combine"
+  }
+ ],
+ "tc.isfc": [
+  {
+   "is_class": false,
+   "is_explicit": false,
+   "module": "timecorr",
+   "module_short": "timecorr",
+   "name": "isfc"
+  }
+ ],
+ "tc.laplace_weights": [
+  {
+   "is_class": false,
+   "is_explicit": false,
+   "module": "timecorr",
+   "module_short": "timecorr",
+   "name": "laplace_weights"
+  }
+ ],
+ "tc.weighted_timepoint_decoder": [
+  {
+   "is_class": false,
+   "is_explicit": false,
+   "module": "timecorr",
+   "module_short": "timecorr",
+   "name": "weighted_timepoint_decoder"
+  }
+ ]
+}

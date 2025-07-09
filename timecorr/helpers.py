@@ -1212,7 +1212,7 @@ def r2z(r):
         Correlation value
 
     Returns
-    ----------
+    -------
     result : int or ndarray
         Fishers z transformed correlation value
 
@@ -1230,7 +1230,7 @@ def z2r(z):
         Fishers z transformed correlation value
 
     Returns
-    ----------
+    -------
     result : int or ndarray
         Correlation value
 
@@ -1256,7 +1256,7 @@ def mat2vec(m):
         Correlation matix
 
     Returns
-    ----------
+    -------
     result : ndarray
         Vector
 
@@ -1295,7 +1295,7 @@ def vec2mat(v):
         Vector
 
     Returns
-    ----------
+    -------
     m : ndarray
         Correlation matix
 
@@ -1354,7 +1354,7 @@ def plot_weights(weights, t=None, color='k', ax=None, xlab='Time (samples)', yla
         Time
 
     Returns
-    ----------
+    -------
     results : png
          Plot of weights
 
@@ -1383,6 +1383,10 @@ def plot_weights(weights, t=None, color='k', ax=None, xlab='Time (samples)', yla
 
     if outfile:
         plt.savefig(outfile)
-
-    else:
+    
+    # Don't call plt.show() automatically to avoid hanging in tests/CI
+    # Users can call plt.show() manually if needed
+    # Only show if not in CI environment and no outfile specified
+    import os
+    if not outfile and not (os.environ.get('CI') or os.environ.get('GITHUB_ACTIONS')):
         plt.show()

@@ -14,6 +14,12 @@ In this example, we simulate data
 import timecorr as tc
 import seaborn as sns
 import matplotlib.pyplot as plt
+import os
+
+# Configure matplotlib for CI environments
+if os.environ.get('CI') or os.environ.get('GITHUB_ACTIONS'):
+    import matplotlib
+    matplotlib.use('Agg')  # Use non-interactive backend in CI
 
 # simulate some data
 data, corrs = tc.simulate_data(datagen='block', return_corrs=True, set_random_seed=True, S=1, T=100, K=10, B=5)
@@ -24,15 +30,20 @@ tc_vec_data = tc.timecorr(tc.simulate_data(), weights_function=tc.gaussian_weigh
 # convert from vector to matrix format
 tc_mat_data = tc.vec2mat(tc_vec_data)
 
-# plot the 3 correlation matrices different timepoints
+# Helper function to show plots conditionally
+def show_plot():
+    """Show plot only in interactive environments, not in CI."""
+    if not (os.environ.get('CI') or os.environ.get('GITHUB_ACTIONS')):
+        plt.show()
 
+# plot the 3 correlation matrices different timepoints
 sns.heatmap(tc_mat_data[:, :, 48])
-plt.show()
+show_plot()
 plt.clf()
 sns.heatmap(tc_mat_data[:, :, 50])
-plt.show()
+show_plot()
 plt.clf()
 sns.heatmap(tc_mat_data[:, :, 52])
-plt.show()
+show_plot()
 plt.clf()
 

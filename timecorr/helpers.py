@@ -10,6 +10,7 @@ import hypertools as hyp
 import pandas as pd
 import warnings
 from matplotlib import pyplot as plt
+import math
 
 gaussian_params = {'var': 100}
 laplace_params = {'scale': 100}
@@ -24,7 +25,7 @@ def gaussian_weights(T, params=gaussian_params):
     if params is None:
         params = gaussian_params
 
-    c1 = np.divide(1, np.sqrt(2 * np.math.pi * params['var']))
+    c1 = np.divide(1, np.sqrt(2 * math.pi * params['var']))
     c2 = np.divide(-1, 2 * params['var'])
     sqdiffs = toeplitz(np.arange(T) ** 2)
     return c1 * np.exp(c2 * sqdiffs)
@@ -48,7 +49,7 @@ def t_weights(T, params=t_params):
     if params is None:
         params = t_params
 
-    c1 = np.divide(gamma((params['df'] + 1) / 2), np.sqrt(params['df'] * np.math.pi) * gamma(params['df'] / 2))
+    c1 = np.divide(gamma((params['df'] + 1) / 2), np.sqrt(params['df'] * math.pi) * gamma(params['df'] / 2))
     c2 = np.divide(-params['df'] + 1, 2)
 
     sqdiffs = toeplitz(np.arange(T) ** 2)
@@ -61,7 +62,7 @@ def mexican_hat_weights(T, params=mexican_hat_params):
     absdiffs = toeplitz(np.arange(T))
     sqdiffs = toeplitz(np.arange(T) ** 2)
 
-    a = np.divide(2, np.sqrt(3 * params['sigma']) * np.power(np.math.pi, 0.25))
+    a = np.divide(2, np.sqrt(3 * params['sigma']) * np.power(math.pi, 0.25))
     b = 1 - np.power(np.divide(absdiffs, params['sigma']), 2)
     c = np.exp(-np.divide(sqdiffs, 2 * np.power(params['sigma'], 2)))
 
@@ -285,7 +286,7 @@ def reduce(corrs, rfun=None):
         for each model.
 
         Another option is to use graph theoretic measures computed for each node.
-        The following measures are supported (via the brainconn toolbox):
+        The following measures are supported:
         eigenvector_centrality, pagerank_centrality, and strength.  (Each
         of these must be specified as a string; dictionaries not supported.)
 
@@ -294,18 +295,92 @@ def reduce(corrs, rfun=None):
     :return: dimensionality-reduced (or original) correlation matrices
     '''
 
-    try:
-        import brainconn as bc
-        _has_brainconn = True
-        graph_measures = {'eigenvector_centrality': bc.centrality.eigenvector_centrality_und,
-                          'pagerank_centrality': lambda x: bc.centrality.pagerank_centrality(x, d=0.85),
-                          'strength': bc.degree.strengths_und}
-    except ImportError:
-        _has_brainconn = False
+    # Define graph measures directly instead of using brainconn
+    def eigenvector_centrality_und(W):
+        """
+        Compute eigenvector centrality for undirected graph.
+        
+        Parameters
+        ----------
+        W : numpy.ndarray
+            Undirected weighted/binary connection matrix
+            
+        Returns
+        -------
+        numpy.ndarray
+            Eigenvector centrality
+        """
+        from scipy.linalg import eigh
+        
+        # Ensure matrix is symmetric
+        W = (W + W.T) / 2
+        
+        # Compute eigenvalues and eigenvectors
+        eigenvalues, eigenvectors = eigh(W)
+        
+        # Get the eigenvector corresponding to the largest eigenvalue
+        max_idx = np.argmax(eigenvalues)
+        centrality = np.abs(eigenvectors[:, max_idx])
+        
+        return centrality
+    
+    def pagerank_centrality(W, d=0.85, falff=None):
+        """
+        Compute PageRank centrality using the same algorithm as brainconn.
+        
+        Parameters
+        ----------
+        W : numpy.ndarray
+            Weighted/binary connection matrix (adjacency matrix)
+        d : float
+            Damping factor (default: 0.85)
+        falff : numpy.ndarray or None
+            Initial page rank probability, non-negative values. Default value is
+            None. If not specified, a naive bayesian prior is used.
+            
+        Returns
+        -------
+        numpy.ndarray
+            PageRank centrality values
+        """
+        from scipy import linalg
+        
+        N = len(W)
+        if falff is None:
+            norm_falff = np.ones((N,)) / N
+        else:
+            norm_falff = falff / np.sum(falff)
 
-        graph_measures = {'eigenvector_centrality': None,
-                          'pagerank_centrality': None,
-                          'strength': None}
+        deg = np.sum(W, axis=0)
+        deg[deg == 0] = 1
+        D1 = np.diag(1 / deg)
+        B = np.eye(N) - d * np.dot(W, D1)
+        b = (1 - d) * norm_falff
+        r = linalg.solve(B, b)
+        r /= np.sum(r)
+        return r
+    
+    def strengths_und(W):
+        """
+        Compute node strength for undirected graph.
+        
+        Parameters
+        ----------
+        W : numpy.ndarray
+            Undirected weighted connection matrix
+            
+        Returns
+        -------
+        numpy.ndarray
+            Node strengths
+        """
+        # For undirected graphs, strength is the sum of weights
+        return np.sum(W, axis=1)
+    
+    # Set up graph measures
+    graph_measures = {'eigenvector_centrality': eigenvector_centrality_und,
+                      'pagerank_centrality': lambda x: pagerank_centrality(x, d=0.85),
+                      'strength': strengths_und}
 
     if rfun is None:
         return corrs
@@ -317,19 +392,32 @@ def reduce(corrs, rfun=None):
     else:
         V = get_V(corrs.shape[1])
 
-    if _has_brainconn and rfun in graph_measures.keys():
+    if rfun in graph_measures.keys():
         return apply_by_row(corrs, graph_measures[rfun])
 
-    elif not _has_brainconn and rfun in graph_measures.keys():
-        raise ImportError('brainconn is not installed. Please install "git+https://github.com/FIU-Neuro/brainconn#egg=brainconn"')
-
     else:
-        red_corrs = hyp.reduce(corrs, reduce=rfun, ndims=V)
+        # Limit V to the number of samples to avoid PCA error
+        if type(corrs) is list:
+            n_samples = corrs[0].shape[0]
+        else:
+            n_samples = corrs.shape[0]
+        ndims = min(V, n_samples)
+        red_corrs = hyp.reduce(corrs, reduce=rfun, ndims=ndims)
 
         D = np.shape(red_corrs)[-1]
 
         if D < V :
-            red_corrs = np.hstack((red_corrs, np.zeros((D, V - D))))
+            # Pad with zeros to match expected output size
+            if isinstance(red_corrs, list):
+                # Handle list of arrays
+                red_corrs = [np.hstack((arr, np.zeros((arr.shape[0], V - D)))) for arr in red_corrs]
+            elif red_corrs.ndim == 2:
+                red_corrs = np.hstack((red_corrs, np.zeros((red_corrs.shape[0], V - D))))
+            elif red_corrs.ndim == 3:
+                red_corrs = np.hstack((red_corrs, np.zeros((red_corrs.shape[0], red_corrs.shape[1], V - D))))
+            else:
+                # Handle other cases or just return as is
+                pass
 
         return red_corrs
 

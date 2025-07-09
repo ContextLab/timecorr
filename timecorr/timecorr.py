@@ -94,7 +94,7 @@ def timecorr(data, weights_function=gaussian_weights,
         for each model.
 
         Another option is to use graph theoretic measures computed for each node.
-        The following measures are supported (via the brainconn toolbox):
+        The following measures are supported:
         eigenvector_centrality, pagerank_centrality, and strength.  (Each
         of these must be specified as a string; dictionaries not supported.)
 

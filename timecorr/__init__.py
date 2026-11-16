@@ -36,5 +36,6 @@ from .helpers import (
     weighted_timepoint_decoder,
     wisfc,
 )
+from .higher_order import features
 from .simulate import simulate_data
 from .timecorr import timecorr

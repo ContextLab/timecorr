@@ -34,7 +34,10 @@ n_samples = 1000
 
 R = toeplitz(np.linspace(0, 1, n_elecs)[::-1])
 
-data_sim = np.random.multivariate_normal(np.zeros(n_elecs), R, size=n_samples)
+# seeded so the estimator checks below are deterministic
+data_sim = np.random.RandomState(0).multivariate_normal(
+    np.zeros(n_elecs), R, size=n_samples
+)
 
 width = 10
 laplace = {"name": "Laplace", "weights": laplace_weights, "params": {"scale": width}}
@@ -103,11 +106,10 @@ def test_wcorr():
     # check if corresponding columns in 3d array produces 1
     assert np.isclose(corrs_col_arrays[4, 4, 500], 1)
     # check if toeplitz matrix is produced.  A single timepoint is a local
-    # estimate (Gaussian kernel, var 100: effective n = 35.4), so its largest
-    # entry error over the 190 pairs has 99.99th percentile 0.69 (20000
-    # simulated draws); the time average is a near-static estimate (max error
-    # at most 0.11 over 300 draws).
-    assert np.allclose(corrs_col_arrays[:, :, 500], R, atol=0.7)
+    # estimate (Gaussian kernel, var 100: effective n = 35.4); for the seeded
+    # draw its largest entry error at t=500 is 0.152.  The time average is a
+    # near-static estimate (largest entry error 0.035 for the seeded draw).
+    assert np.allclose(corrs_col_arrays[:, :, 500], R, atol=0.2)
     assert np.allclose(corrs_col_arrays.mean(axis=2), R, atol=0.2)
     # check if corrs is a numpy array
     assert isinstance(corrs, np.ndarray)

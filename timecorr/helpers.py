@@ -760,6 +760,33 @@ def _nan_weighted_mean(x, weights, tol=1e-5):
     return out
 
 
+def _fisher_symmetrize(c):
+    """
+    Symmetrize a (K, K, T) cross-correlation array as in Eq. 5 of the timecorr
+    paper: ``z2r((r2z(C) + r2z(C.T)) / 2)``.
+
+    Where one of ``C[i, j]`` and ``C[j, i]`` is exactly +-1 (infinite z), the
+    result is that sign; where they are +1 and -1, it is 0.  Entries outside
+    [-1, 1] (co-fluctuations from a delta kernel, which are not correlations)
+    are averaged without the transform.
+    """
+    ct = c.transpose(1, 0, 2)
+    out = (c + ct) / 2
+    ok = (np.abs(c) <= 1) & (np.abs(ct) <= 1)
+    za = r2z(c[ok])
+    zb = r2z(ct[ok])
+    infinite = np.isinf(za) | np.isinf(zb)
+    finite = ~infinite
+    res = np.empty(za.shape)
+    res[finite] = z2r((za[finite] + zb[finite]) / 2)
+    res[infinite] = np.sign(
+        np.where(np.isinf(za[infinite]), np.sign(za[infinite]), 0)
+        + np.where(np.isinf(zb[infinite]), np.sign(zb[infinite]), 0)
+    )
+    out[ok] = res
+    return out
+
+
 def wisfc(data, timepoint_weights, subject_weights=None):
     """
     Compute weighted inter-subject functional connectivity (ISFC).
@@ -767,8 +794,9 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     For each subject, the kernel-weighted correlations (see ``wcorr``) are
     computed between that subject's features and a weighted average of the
     subjects' data.  When the average is not the subject's own data, the
-    cross-correlation matrix ``C`` is symmetrized as ``(C + C.T) / 2`` before it
-    is vectorized.  NaN samples carry no weight.
+    cross-correlation matrix ``C`` is symmetrized by averaging the Fisher
+    z-transforms of ``C`` and ``C.T`` and inverting (``z2r``) before it is
+    vectorized; an entry of exactly +-1 dominates its pair.  NaN samples carry no weight.
 
     Parameters
     ----------
@@ -827,7 +855,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         b = _nan_weighted_mean(stacked, subject_weights[s, :])
         wc = wcorr(a, b, timepoint_weights)
         if not np.array_equal(a, b, equal_nan=True):
-            wc = (wc + wc.transpose(1, 0, 2)) / 2
+            wc = _fisher_symmetrize(wc)
         corrs.append(mat2vec(wc))
 
     return corrs
@@ -840,7 +868,8 @@ def isfc(data, timepoint_weights):
     ISFC computes correlations between each subject's data and the average of all other subjects,
     providing a measure of shared neural patterns across participants while avoiding
     self-correlation artifacts.  The subject-versus-others cross-correlation
-    matrix ``C`` is symmetrized as ``(C + C.T) / 2``.  With a single subject,
+    matrix ``C`` is symmetrized by averaging the Fisher z-transforms of ``C``
+    and ``C.T``.  With a single subject,
     the within-subject correlations are returned.
 
     Parameters

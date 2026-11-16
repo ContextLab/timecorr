@@ -364,7 +364,45 @@ def test_isfc_is_symmetrized_cross_correlation():
         m = vec2mat(out[s])
         for t in (0, 13, 39):
             C = _weighted_pearson(data[s], others, w[t])
-            assert np.allclose(m[:, :, t], (C + C.T) / 2, atol=1e-10, rtol=0)
+            # Eq. 5: average the Fisher z of C and C^T, then invert
+            expected = np.tanh((np.arctanh(C) + np.arctanh(C.T)) / 2)
+            assert np.allclose(m[:, :, t], expected, atol=1e-10, rtol=0)
+
+
+def test_isfc_symmetrization_handles_unit_correlations():
+    # subject 0 equals the others' average in feature 0 and its negative in
+    # feature 1, so C contains entries of exactly +1 and -1
+    rng = _rng(20)
+    T = 30
+    base = rng.randn(T, 3)
+    data = [base.copy(), base.copy(), base.copy()]
+    data[0][:, 1] = -base[:, 0]
+    data[1][:, 1] = base[:, 1]
+    data[2][:, 1] = base[:, 1]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = isfc(data, gaussian_weights(T, {"var": 20}))
+    m = vec2mat(out[0])
+    assert np.all(np.isfinite(m))
+    # C[0, 0] = 1 and C[1, 0] = -1 (subject feature 1 vs others' feature 0)
+    C = wcorr(data[0], data[1], gaussian_weights(T, {"var": 20}))
+    assert np.allclose(C[0, 0], 1) and np.allclose(C[1, 0], -1)
+    assert np.all(m[0, 0] == 1.0)
+    # pair (0, 1): z of C[0, 1] is finite, z of C[1, 0] is -inf -> -1
+    assert np.all(m[0, 1] == -1.0) and np.all(m[1, 0] == -1.0)
+
+
+def test_corrmean_combine_keeps_unit_diagonal():
+    rng = _rng(21)
+    data = [rng.randn(30, 3) for _ in range(3)]
+    auto = autofc(data, gaussian_weights(30, {"var": 20}))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        mean = tc.corrmean_combine(auto)
+    assert mean.shape == (30, 6)
+    assert np.all(mean[:, :3] == 1.0)
+    ref = np.tanh(np.mean([np.arctanh(x[:, 3:]) for x in auto], axis=0))
+    assert np.allclose(mean[:, 3:], ref, atol=1e-12, rtol=0)
 
 
 def test_wisfc_has_no_bare_except():

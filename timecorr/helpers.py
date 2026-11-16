@@ -4,6 +4,7 @@ from __future__ import division
 import math
 import warnings
 
+import datawrangler as dw
 import hypertools as hyp
 import numpy as np
 import pandas as pd
@@ -13,6 +14,11 @@ from scipy.linalg import toeplitz
 from scipy.optimize import minimize
 from scipy.special import gamma
 from scipy.stats import ttest_1samp as ttest
+
+try:  # polars is optional
+    import polars as pl
+except ImportError:  # pragma: no cover
+    pl = None
 
 gaussian_params = {"var": 100}
 laplace_params = {"scale": 100}
@@ -195,16 +201,93 @@ def boxcar_weights(T, params=boxcar_params):
     return np.multiply(toeplitz(np.arange(T)) < params["width"] / 2.0, 1.0)
 
 
-def format_data(data):
-    def zero_nans(x):
-        x[np.isnan(x)] = 0
-        return x
+def _is_polars(x):
+    return pl is not None and isinstance(x, (pl.DataFrame, pl.Series))
 
-    x = hyp.tools.format_data(
-        data,
-        ppca=False,
-    )
-    return list(map(zero_nans, x))
+
+def _check_numeric(x):
+    """Raise ValueError naming the first non-numeric column of a DataFrame."""
+    if isinstance(x, pd.DataFrame):
+        cols = list(zip(x.columns, x.dtypes))
+        numeric = [
+            pd.api.types.is_numeric_dtype(dt) or pd.api.types.is_bool_dtype(dt)
+            for _, dt in cols
+        ]
+    elif isinstance(x, pd.Series):
+        cols = [(x.name, x.dtype)]
+        numeric = [pd.api.types.is_numeric_dtype(x.dtype)]
+    elif _is_polars(x):
+        if isinstance(x, pl.Series):
+            cols = [(x.name, x.dtype)]
+        else:
+            cols = list(zip(x.columns, x.dtypes))
+        numeric = [dt.is_numeric() or dt == pl.Boolean for _, dt in cols]
+    else:
+        return
+    for (name, dt), ok in zip(cols, numeric):
+        if not ok:
+            raise ValueError(
+                f"Column {name!r} has non-numeric type {dt}; timecorr requires "
+                "numeric data."
+            )
+
+
+def format_data(data):
+    """
+    Convert input data to a list of writable float64 timepoints-by-features arrays.
+
+    Inputs are standardized with pydata-wrangler, so numpy arrays, pandas
+    DataFrames, polars DataFrames, and lists of these (possibly mixed) are
+    supported.  The caller's data are never modified, and NaNs in the output are
+    replaced with zeros.
+
+    Parameters
+    ----------
+    data : numpy.ndarray, pandas.DataFrame, polars.DataFrame, or list of these
+        One timepoints-by-features observations matrix per subject.
+
+    Returns
+    -------
+    list of numpy.ndarray
+        One new float64 (timepoints, features) array per subject.
+
+    Raises
+    ------
+    ValueError
+        If a DataFrame has a non-numeric column, or if subjects differ in
+        their number of timepoints or features.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import pandas as pd
+    >>> from timecorr.helpers import format_data
+    >>> out = format_data(pd.DataFrame(np.random.randn(10, 3)))
+    >>> out[0].shape
+    (10, 3)
+    """
+    items = list(data) if isinstance(data, (list, tuple)) else [data]
+    for x in items:
+        _check_numeric(x)
+
+    out = []
+    for x in items:
+        w = dw.wrangle(x)
+        if _is_polars(w):
+            w = w.to_numpy()
+        a = np.array(w, dtype=np.float64, copy=True)
+        if a.ndim == 1:
+            a = a[:, np.newaxis]
+        a[np.isnan(a)] = 0
+        out.append(a)
+
+    shapes = [a.shape for a in out]
+    if any(s != shapes[0] for s in shapes):
+        raise ValueError(
+            "All subjects must have the same number of timepoints and features; "
+            f"got shapes {shapes}."
+        )
+    return out
 
 
 def _is_empty(dict):

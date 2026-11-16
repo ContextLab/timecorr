@@ -124,15 +124,9 @@ def timecorr(
         else:
             return filt
 
-    if type(data) == list:
-        T = data[0].shape[0]
-        return_list = True
-    else:
-        T = data.shape[0]
-        data = [data]
-        return_list = False
-
+    return_list = isinstance(data, (list, tuple))
     data = format_data(data)
+    T = data[0].shape[0]
 
     weights = weights_function(T, weights_params)
 

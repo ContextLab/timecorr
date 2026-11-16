@@ -148,3 +148,18 @@ def test_smooth_shorter_than_window_keeps_series_length():
     kernel = kernel / kernel.sum()
     for c in range(y.shape[1]):
         np.testing.assert_allclose(out[:, c], np.convolve(kernel, y[:, c], mode="same"))
+
+
+@pytest.mark.parametrize("rfun", ["PCA", {"model": "PCA", "params": {}}])
+def test_one_element_list_returns_one_element_list(rfun):
+    V = seeded_vectorized_corrs(seed=3)
+    out = reduce([V], rfun=rfun)
+    assert isinstance(out, list) and len(out) == 1
+    assert np.array_equal(out[0], reduce(V, rfun=rfun))
+
+
+def test_one_element_list_padded_output_stays_list():
+    V = seeded_vectorized_corrs(T=4, K=5, seed=4)
+    out = reduce([V], rfun="PCA", ndims=6)
+    assert isinstance(out, list) and len(out) == 1
+    assert out[0].shape == (4, 6)

@@ -116,7 +116,8 @@ def gaussian_weights(T, params=gaussian_params, direction=None, include_zero=Tru
     --------
     >>> import timecorr as tc
     >>> weights = tc.gaussian_weights(50, {'var': 10})
-    >>> print(weights.shape)  # (50, 50)
+    >>> print(weights.shape)
+    (50, 50)
     """
     if params is None:
         params = gaussian_params
@@ -160,7 +161,8 @@ def laplace_weights(T, params=laplace_params, direction=None, include_zero=True)
     --------
     >>> import timecorr as tc
     >>> weights = tc.laplace_weights(50, {'scale': 5})
-    >>> print(weights.shape)  # (50, 50)
+    >>> print(weights.shape)
+    (50, 50)
     """
     if params is None:
         params = laplace_params
@@ -203,9 +205,12 @@ def eye_weights(T, params=eye_params, direction=None, include_zero=True):
     --------
     >>> import timecorr as tc
     >>> weights = tc.eye_weights(50, {})
-    >>> print(weights.shape)  # (50, 50)
-    >>> print(weights[0, 0])  # 1.0
-    >>> print(weights[0, 1])  # 0.0
+    >>> print(weights.shape)
+    (50, 50)
+    >>> print(weights[0, 0])
+    1.0
+    >>> print(weights[0, 1])
+    0.0
     """
 
     return _finish_kernel(np.eye(T), direction, include_zero)
@@ -337,7 +342,8 @@ def mexican_hat_weights(
     --------
     >>> import timecorr as tc
     >>> weights = tc.mexican_hat_weights(50, {'sigma': 5})
-    >>> print(weights.shape)  # (50, 50)
+    >>> print(weights.shape)
+    (50, 50)
     """
     if params is None:
         params = mexican_hat_params
@@ -1200,6 +1206,9 @@ def reduce(corrs, rfun=None, ndims=None):
         }
 
     red_corrs = hyp.reduce(corrs, reduce=rfun, ndims=n_fit, random_state=0)
+    if isinstance(corrs, list) and not isinstance(red_corrs, list):
+        # hypertools returns a bare array for a one-element list
+        red_corrs = [red_corrs]
 
     if n_fit < ndims:
         # Pad with zeros to match the requested output width

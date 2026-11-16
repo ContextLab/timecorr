@@ -302,7 +302,9 @@ def t_weights(T, params=t_params, direction=None, include_zero=True):
     return _finish_kernel(w, direction, include_zero)
 
 
-def mexican_hat_weights(T, params=mexican_hat_params, direction=None, include_zero=True):
+def mexican_hat_weights(
+    T, params=mexican_hat_params, direction=None, include_zero=True
+):
     """
     Generate Mexican Hat (Ricker) weighting function for dynamic correlations.
 
@@ -423,19 +425,22 @@ def _check_numeric(x):
             )
 
 
-def format_data(data):
+def format_data(data, fill_nan=True):
     """
     Convert input data to a list of writable float64 timepoints-by-features arrays.
 
     Inputs are standardized with pydata-wrangler, so numpy arrays, pandas
     DataFrames, polars DataFrames, and lists of these (possibly mixed) are
-    supported.  The caller's data are never modified, and NaNs in the output are
-    replaced with zeros.
+    supported.  The caller's data are never modified.  By default NaNs in the
+    output are replaced with zeros.
 
     Parameters
     ----------
     data : numpy.ndarray, pandas.DataFrame, polars.DataFrame, or list of these
         One timepoints-by-features observations matrix per subject.
+    fill_nan : bool, optional
+        If True (default), replace NaNs with zeros.  If False, keep them (the
+        correlation functions give NaN samples no weight).
 
     Returns
     -------
@@ -456,6 +461,8 @@ def format_data(data):
     >>> out = format_data(pd.DataFrame(np.random.randn(10, 3)))
     >>> out[0].shape
     (10, 3)
+    >>> bool(np.isnan(format_data(np.array([[np.nan, 1.0]]), fill_nan=False)[0][0, 0]))
+    True
     """
     items = list(data) if isinstance(data, (list, tuple)) else [data]
     for x in items:
@@ -469,7 +476,8 @@ def format_data(data):
         a = np.array(w, dtype=np.float64, copy=True)
         if a.ndim == 1:
             a = a[:, np.newaxis]
-        a[np.isnan(a)] = 0
+        if fill_nan:
+            a[np.isnan(a)] = 0
         out.append(a)
 
     shapes = [a.shape for a in out]
@@ -487,84 +495,340 @@ def _is_empty(dict):
     return False
 
 
-def wcorr(a, b, weights):
-    """
-    Compute moment-by-moment correlations between sets of observations
+# Relative tolerance below which a kernel-weighted variance counts as zero.  The
+# variance is compared with the kernel-weighted mean square of the (globally
+# centered) feature, so the test does not depend on the units of the data.
+_ZERO_VARIANCE_TOL = 1e-10
 
-    :param a: a number-of-timepoints by number-of-features observations matrix
-    :param b: a number-of-timepoints by number-of-features observations matrix
-    :param weights: a number-of-timepoints by number-of-timepoints weights matrix;
-        row t (weights[t, :]) holds the weights used to estimate at timepoint t
-    :return: a a.shape[1] by b.shape[1] by weights.shape[0] array of per-timepoint
-        correlation matrices.
-    """
+# Size, in float64 elements, of each temporary block used by wcorr (64 MB).  The
+# estimator holds a few such blocks at once, so peak extra memory stays well
+# under 1 GB regardless of the number of features.
+_WCORR_BLOCK_ELEMENTS = 2**23
 
-    def weighted_var_diffs(x, w):
-        w[np.isnan(w)] = 0
-        if np.sum(np.abs(w)) == 0:
-            weights_tiled = np.ones(x.shape)
+
+def _safe_divide(num, den):
+    """Elementwise num / den, with 0 wherever den is 0."""
+    out = np.zeros(np.broadcast(num, den).shape)
+    np.divide(num, den, out=out, where=den != 0)
+    return out
+
+
+def _nan_center(x):
+    """Subtract each column's mean over its non-NaN samples (0 for all-NaN columns)."""
+    valid = ~np.isnan(x)
+    total = np.where(valid, x, 0.0).sum(axis=0)
+    return x - _safe_divide(total, valid.sum(axis=0))
+
+
+def _zscore_columns(x):
+    """Population z-scores of each column; NaN samples and constant columns give 0."""
+    valid = ~np.isnan(x)
+    scale = np.where(valid, np.abs(x), 0.0).max(axis=0)
+    x0 = np.where(valid, _nan_center(x), 0.0)
+    sd = np.sqrt(_safe_divide((x0**2).sum(axis=0), valid.sum(axis=0)))
+    sd = np.where(sd <= _ZERO_VARIANCE_TOL * scale, 0.0, sd)
+    return _safe_divide(x0, sd)
+
+
+def _delta_wcorr(a, b, weights):
+    """Co-fluctuation estimate for a true delta kernel (one non-zero weight per row)."""
+    idx = np.argmax(weights != 0, axis=1)
+    za = _zscore_columns(a)[idx]
+    zb = _zscore_columns(b)[idx]
+    return np.einsum("ti,tj->ijt", za, zb)
+
+
+def _wcorr_blocks(a, b, weights, autocorrelation):
+    """
+    Kernel-weighted correlations, computed with matrix products over blocks of
+    feature pairs.  NaN samples are excluded pairwise (they carry no weight).
+    """
+    T, Ka = a.shape
+    Kb = b.shape[1]
+    W = weights
+    A = np.abs(W)
+    out = np.zeros([Ka, Kb, W.shape[0]])
+
+    a = _nan_center(a)
+    b = _nan_center(b)
+    has_nan = np.isnan(a).any() or np.isnan(b).any()
+
+    if not has_nan:
+        # Per-feature terms are shared by every pair: compute them once.
+        s = A.sum(axis=1)[:, np.newaxis]
+        sw = W.sum(axis=1)[:, np.newaxis]
+
+        def moments(x):
+            mean = _safe_divide(A @ x, s)
+            msq = A @ (x**2)
+            var = msq - s * mean**2
+            zero = var <= _ZERO_VARIANCE_TOL * msq
+            return mean, W @ x, np.where(zero, 0.0, var), zero
+
+        ma, wa, va, za = moments(a)
+        mb, wb, vb, zb = (ma, wa, va, za) if autocorrelation else moments(b)
+        n_products = 1
+    else:
+        ok_a = ~np.isnan(a)
+        ok_b = ~np.isnan(b)
+        a0 = np.where(ok_a, a, 0.0)
+        b0 = np.where(ok_b, b, 0.0)
+        n_products = 9
+
+    rows_per_block = max(1, _WCORR_BLOCK_ELEMENTS // (n_products * T * Kb))
+    for i0 in range(0, Ka, rows_per_block):
+        i1 = min(Ka, i0 + rows_per_block)
+        j0 = i0 if autocorrelation else 0
+        shape = (W.shape[0], i1 - i0, Kb - j0)
+
+        if not has_nan:
+            prod = (a[:, i0:i1, np.newaxis] * b[:, np.newaxis, j0:]).reshape(T, -1)
+            cross = (W @ prod).reshape(shape)
+            ma_i = ma[:, i0:i1, np.newaxis]
+            mb_j = mb[:, np.newaxis, j0:]
+            num = (
+                cross
+                - ma_i * wb[:, np.newaxis, j0:]
+                - mb_j * wa[:, i0:i1, np.newaxis]
+                + ma_i * mb_j * sw[:, :, np.newaxis]
+            )
+            var_a = va[:, i0:i1, np.newaxis]
+            var_b = vb[:, np.newaxis, j0:]
+            zero = za[:, i0:i1, np.newaxis] | zb[:, np.newaxis, j0:]
         else:
-            weights_tiled = np.tile(w[:, np.newaxis], [1, x.shape[1]])
+            pair_ok = ok_a[:, i0:i1, np.newaxis] & ok_b[:, np.newaxis, j0:]
+            x = a0[:, i0:i1, np.newaxis] * pair_ok
+            y = b0[:, np.newaxis, j0:] * pair_ok
+            n = x[0].size
+            terms = np.concatenate(
+                [t.reshape(T, -1) for t in (pair_ok.astype(float), x, y, x**2, y**2)],
+                axis=1,
+            )
+            s0, sx, sy, sxx, syy = np.split(A @ terms, 5, axis=1)
+            w0, wx, wy = np.split(W @ terms[:, : 3 * n], 3, axis=1)
+            wxy = W @ (x * y).reshape(T, -1)
+            mx = _safe_divide(sx, s0)
+            my = _safe_divide(sy, s0)
+            num = (wxy - mx * wy - my * wx + mx * my * w0).reshape(shape)
+            var_a = sxx - s0 * mx**2
+            var_b = syy - s0 * my**2
+            zero = (var_a <= _ZERO_VARIANCE_TOL * sxx) | (
+                var_b <= _ZERO_VARIANCE_TOL * syy
+            )
+            var_a, var_b, zero = (v.reshape(shape) for v in (var_a, var_b, zero))
 
-        mx = np.sum(np.multiply(weights_tiled, x), axis=0)[:, np.newaxis].T
-        diffs = x - np.tile(mx, [x.shape[0], 1])
-        varx = np.sum(diffs**2, axis=0)[:, np.newaxis].T
-
-        return varx, diffs
-
-    autocorrelation = np.isclose(a, b).all()
-    corrs = np.zeros([a.shape[1], b.shape[1], weights.shape[1]])
-
-    for t in np.arange(weights.shape[1]):
-        vara, diffs_a = weighted_var_diffs(a, weights[t, :])
+        den = np.sqrt(np.where(zero, 1.0, var_a * var_b))
+        r = np.where(zero, 0.0, np.clip(num / den, -1.0, 1.0))
 
         if autocorrelation:
-            varb = vara
-            diffs_b = diffs_a
+            c = i1 - i0
+            diag = np.arange(c)
+            r[:, diag, diag] = np.where(zero[:, diag, diag], 0.0, 1.0)
+            r[:, :, :c] = (r[:, :, :c] + r[:, :, :c].transpose(0, 2, 1)) / 2
+            out[i0:i1, i0:, :] = r.transpose(1, 2, 0)
+            out[i0:, i0:i1, :] = r.transpose(2, 1, 0)
         else:
-            varb, diffs_b = weighted_var_diffs(b, weights[t, :])
+            out[i0:i1, :, :] = r.transpose(1, 2, 0)
 
-        alpha = np.dot(diffs_a.T, diffs_b)
-        beta = np.sqrt(np.dot(vara.T, varb))
-        corrs[:, :, t] = np.divide(alpha, beta)
+    return out
 
-    return corrs
+
+def wcorr(a, b, weights):
+    """
+    Compute kernel-weighted correlations between two sets of observations.
+
+    Row ``t`` of ``weights`` (``weights[t, :]``) is the kernel used to estimate
+    the correlations at timepoint ``t``.  For each ``t`` and each pair of
+    features,
+
+    ``r = sum_tau w d_a d_b / sqrt(sum_tau |w| d_a**2 * sum_tau |w| d_b**2)``,
+
+    where ``w = weights[t, tau]`` and ``d = x - sum_tau(|w| x) / sum_tau |w|``
+    are deviations from the kernel-weighted mean.  For non-negative kernels
+    this is the weighted Pearson correlation; for signed kernels (for example
+    the Mexican hat) it stays within [-1, 1].
+
+    Special cases:
+
+    - A true delta kernel (every row has exactly one non-zero weight) gives the
+      co-fluctuation ``z_a(tau_t) z_b(tau_t)^T``, where each column is z-scored
+      over all timepoints and ``tau_t`` is the non-zero position in row ``t``.
+      Averaged over timepoints this equals the static correlation.
+    - Otherwise, a row with fewer than two non-zero weights is undefined: its
+      correlations are set to 0 and one ``UserWarning`` reports how many rows
+      were affected.  If every row is all zeros, ``ValueError`` is raised.
+    - NaN samples carry no weight: each pair of features uses only the
+      timepoints where both are observed.  NaN kernel weights count as 0.
+    - A feature whose kernel-weighted variance is zero (to a relative
+      tolerance of 1e-10) has correlation 0 with every feature, itself
+      included, at that timepoint.  Elsewhere the diagonal of an
+      autocorrelation is exactly 1.
+
+    Parameters
+    ----------
+    a : numpy.ndarray
+        Timepoints-by-features observations matrix (T, Ka).
+    b : numpy.ndarray
+        Timepoints-by-features observations matrix (T, Kb).
+    weights : numpy.ndarray
+        Kernel matrix with T columns; row ``t`` holds the weights used to
+        estimate at timepoint ``t``.  Usually T x T.
+
+    Returns
+    -------
+    numpy.ndarray
+        Array of shape (Ka, Kb, weights.shape[0]); entry ``[i, j, t]`` is the
+        correlation between ``a[:, i]`` and ``b[:, j]`` at timepoint ``t``.
+
+    Raises
+    ------
+    ValueError
+        If the inputs do not have T rows / T kernel columns, or if every row of
+        the kernel is zero.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import timecorr as tc
+    >>> x = np.random.RandomState(0).randn(100, 3)
+    >>> corrs = tc.wcorr(x, x, tc.gaussian_weights(100, {"var": 50}))
+    >>> corrs.shape
+    (3, 3, 100)
+    >>> print(np.diag(corrs[:, :, 0]))
+    [1. 1. 1.]
+    >>> uniform = tc.wcorr(x, x, tc.uniform_weights(100))
+    >>> bool(np.allclose(uniform[:, :, 10], np.corrcoef(x.T)))
+    True
+    """
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    if a.ndim == 1:
+        a = a[:, np.newaxis]
+    if b.ndim == 1:
+        b = b[:, np.newaxis]
+    weights = np.array(weights, dtype=np.float64, copy=True)
+    weights[np.isnan(weights)] = 0
+    if a.shape[0] != b.shape[0] or weights.ndim != 2 or weights.shape[1] != a.shape[0]:
+        raise ValueError(
+            "a and b must have the same number of rows (timepoints) T, and weights "
+            f"must have T columns; got a {a.shape}, b {b.shape}, weights {weights.shape}."
+        )
+
+    support = np.count_nonzero(weights, axis=1)
+    if np.all(support == 0):
+        raise ValueError(
+            "Every row of the kernel is zero; no correlation can be estimated."
+        )
+    if np.all(support == 1):
+        return _delta_wcorr(a, b, weights)
+
+    undefined = support < 2
+    if np.any(undefined):
+        warnings.warn(
+            f"{int(undefined.sum())} of {len(undefined)} timepoints have fewer than two "
+            "non-zero kernel weights; their correlations are undefined and set to 0.",
+            UserWarning,
+            stacklevel=2,
+        )
+        weights[undefined] = 0
+
+    autocorrelation = a is b or (
+        a.shape == b.shape and np.array_equal(a, b, equal_nan=True)
+    )
+    return _wcorr_blocks(a, b, weights, autocorrelation)
+
+
+def _nan_weighted_mean(x, weights, tol=1e-5):
+    """
+    Weighted mean over the last axis of x, ignoring NaN entries.
+
+    Matches ``weighted_mean`` when x has no NaNs: weights with magnitude at most
+    ``tol`` are dropped and the rest are normalized to sum to 1 (over the
+    entries that are observed).  If the weights sum to 0, the plain mean is
+    used.  Entries with no observed, weighted values are NaN.
+    """
+    weights = np.array(weights, dtype=np.float64, copy=True)
+    weights[np.isnan(weights)] = 0
+    if np.sum(weights) == 0:
+        weights = np.ones_like(weights)
+    weights[np.abs(weights) <= tol] = 0
+    valid = ~np.isnan(x)
+    num = np.where(valid, x, 0.0) @ weights
+    den = valid @ weights
+    out = np.full(num.shape, np.nan)
+    np.divide(num, den, out=out, where=den != 0)
+    return out
 
 
 def wisfc(data, timepoint_weights, subject_weights=None):
     """
-    Compute moment-by-moment correlations between sets of observations
+    Compute weighted inter-subject functional connectivity (ISFC).
 
-    :data: a list of number-of-timepoints by V matrices
-    :timepoint weights: a number-of-timepoints by number-of-timepoints weights matrix
-        specifying the per-timepoint weights to be considered (for each timepoint)
-    :subject weights: number-of-subjects by number-of-subjects weights matrix
-    :return: a list of number-of-timepoints by (V^2 - V)/2 + V correlation matrices
+    For each subject, the kernel-weighted correlations (see ``wcorr``) are
+    computed between that subject's features and a weighted average of the
+    subjects' data.  When the average is not the subject's own data, the
+    cross-correlation matrix ``C`` is symmetrized as ``(C + C.T) / 2`` before it
+    is vectorized.  NaN samples carry no weight.
+
+    Parameters
+    ----------
+    data : numpy.ndarray or list of numpy.ndarray
+        One timepoints-by-features (T, K) matrix per subject.
+    timepoint_weights : numpy.ndarray
+        Kernel matrix; row ``t`` is the kernel used to estimate at timepoint ``t``.
+    subject_weights : numpy.ndarray, scalar, or None, optional
+        Number-of-subjects by number-of-subjects matrix; row ``s`` weights the
+        subjects averaged for subject ``s``.  A scalar gives every other
+        subject that weight.  Default (None): each pair of subjects is weighted
+        by the correlation between their static correlation matrices, with
+        zero weight on the subject itself.
+
+    Returns
+    -------
+    list of numpy.ndarray or numpy.ndarray
+        One (T, K * (K + 1) / 2) array of vectorized correlation matrices per
+        subject (see ``mat2vec``); a single array if ``data`` is an array.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import timecorr as tc
+    >>> rng = np.random.RandomState(0)
+    >>> data = [rng.randn(50, 4) for _ in range(3)]
+    >>> out = tc.wisfc(data, tc.gaussian_weights(50, {"var": 20}))
+    >>> len(out), out[0].shape
+    (3, (50, 10))
     """
     if type(data) != list:
         return wisfc([data], timepoint_weights, subject_weights=subject_weights)[0]
 
+    S = len(data)
     if subject_weights is None:
         K = data[0].shape[1]
-        connectomes = np.zeros([len(data), int((K**2 - K) / 2)])
-        for s in np.arange(len(data)):
-            connectomes[s, :] = 1 - sd.pdist(data[s].T, metric="correlation")
-        subject_weights = 1 - sd.squareform(sd.pdist(connectomes, metric="correlation"))
-        np.fill_diagonal(subject_weights, 0)
+        iu = np.triu_indices(K, 1)
+        if len(iu[0]) == 0:  # one feature: no connectome to compare
+            subject_weights = np.zeros([S, S])
+        else:
+            static = np.ones([1, data[0].shape[0]])
+            connectomes = np.stack(
+                [wcorr(d, d, static)[:, :, 0][iu] for d in data], axis=1
+            )
+            subject_weights = wcorr(connectomes, connectomes, np.ones([1, len(iu[0])]))[
+                :, :, 0
+            ]
+            np.fill_diagonal(subject_weights, 0)
     elif np.isscalar(subject_weights):
-        subject_weights = subject_weights * np.ones([len(data), len(data)])
+        subject_weights = subject_weights * np.ones([S, S])
         np.fill_diagonal(subject_weights, 0)
 
+    stacked = np.stack(data, axis=2)
     corrs = []
     for s, a in enumerate(data):
-        b = weighted_mean(np.stack(data, axis=2), axis=2, weights=subject_weights[s, :])
+        b = _nan_weighted_mean(stacked, subject_weights[s, :])
         wc = wcorr(a, b, timepoint_weights)
-        wc[np.isnan(wc)] = 0
-        wc[np.isinf(wc)] = 1
-        try:
-            corrs.append(mat2vec(wc))
-        except:
-            print("mystery!")
+        if not np.array_equal(a, b, equal_nan=True):
+            wc = (wc + wc.transpose(1, 0, 2)) / 2
+        corrs.append(mat2vec(wc))
 
     return corrs
 
@@ -575,7 +839,9 @@ def isfc(data, timepoint_weights):
 
     ISFC computes correlations between each subject's data and the average of all other subjects,
     providing a measure of shared neural patterns across participants while avoiding
-    self-correlation artifacts.
+    self-correlation artifacts.  The subject-versus-others cross-correlation
+    matrix ``C`` is symmetrized as ``(C + C.T) / 2``.  With a single subject,
+    the within-subject correlations are returned.
 
     Parameters
     ----------
@@ -583,13 +849,15 @@ def isfc(data, timepoint_weights):
         List of timeseries data matrices, each of shape (timepoints, features).
         If a single array is provided, it will be converted to a list.
     timepoint_weights : numpy.ndarray
-        T x T matrix of temporal weights for dynamic correlations
+        T x T kernel matrix; row ``t`` is the kernel used to estimate at
+        timepoint ``t``.
 
     Returns
     -------
     list of numpy.ndarray
-        List of correlation matrices (one per subject), each showing correlations
-        between that subject and the average of all others
+        List of vectorized correlation matrices (one (T, K * (K + 1) / 2)
+        array per subject), each showing correlations between that subject and
+        the average of all others
 
     Examples
     --------
@@ -598,7 +866,8 @@ def isfc(data, timepoint_weights):
     >>> data = [np.random.randn(100, 10) for _ in range(5)]  # 5 subjects
     >>> weights = tc.gaussian_weights(100, {'var': 10})
     >>> isfc_results = tc.isfc(data, weights)
-    >>> len(isfc_results)  # 5
+    >>> len(isfc_results), isfc_results[0].shape
+    (5, (100, 55))
     """
     if type(data) != list:
         return isfc([data], timepoint_weights)[0]
@@ -619,13 +888,14 @@ def autofc(data, timepoint_weights):
         List of timeseries data matrices, each of shape (timepoints, features).
         If a single array is provided, it will be converted to a list.
     timepoint_weights : numpy.ndarray
-        T x T matrix of temporal weights for dynamic correlations
+        T x T kernel matrix; row ``t`` is the kernel used to estimate at
+        timepoint ``t``.
 
     Returns
     -------
     list of numpy.ndarray
-        List of correlation matrices (one per subject), each showing
-        within-subject correlations
+        List of vectorized correlation matrices (one (T, K * (K + 1) / 2)
+        array per subject), each showing within-subject correlations
 
     Examples
     --------
@@ -634,7 +904,8 @@ def autofc(data, timepoint_weights):
     >>> data = [np.random.randn(100, 10) for _ in range(3)]  # 3 subjects
     >>> weights = tc.gaussian_weights(100, {'var': 10})
     >>> auto_results = tc.autofc(data, weights)
-    >>> len(auto_results)  # 3
+    >>> len(auto_results), auto_results[0].shape
+    (3, (100, 55))
     """
     if type(data) != list:
         return autofc([data], timepoint_weights)[0]
@@ -2003,41 +2274,59 @@ def rmdiag(m):
 
 def r2z(r):
     """
-    Function that calculates the Fisher z-transformation
+    Fisher z-transformation (``arctanh``) of correlation values.
 
     Parameters
     ----------
-    r : int or ndarray
-        Correlation value
+    r : float or numpy.ndarray
+        Correlation value(s).
 
     Returns
     -------
-    result : int or ndarray
-        Fishers z transformed correlation value
+    float or numpy.ndarray
+        ``arctanh(r)``: ``+inf`` / ``-inf`` where ``r`` is exactly 1 / -1, and
+        NaN where ``|r| > 1`` or ``r`` is NaN.
 
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from timecorr.helpers import r2z
+    >>> print(r2z(np.array([0.0, 1.0, -1.0])))
+    [  0.  inf -inf]
     """
-    return 0.5 * (np.log(1 + r) - np.log(1 - r))
+    r = np.asarray(r, dtype=np.float64)
+    z = np.full(r.shape, np.nan)
+    inside = np.abs(r) < 1
+    z[inside] = np.arctanh(r[inside])
+    z[r == 1] = np.inf
+    z[r == -1] = -np.inf
+    return z[()]
 
 
 def z2r(z):
     """
-    Function that calculates the inverse Fisher z-transformation
+    Inverse Fisher z-transformation (``tanh``).
 
     Parameters
     ----------
-    z : int or ndarray
-        Fishers z transformed correlation value
+    z : float or numpy.ndarray
+        Fisher z-transformed correlation value(s).
 
     Returns
     -------
-    result : int or ndarray
-        Correlation value
+    float or numpy.ndarray
+        ``tanh(z)``: 1 / -1 for ``+inf`` / ``-inf``, and 0 where ``z`` is NaN.
 
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from timecorr.helpers import z2r
+    >>> print(z2r(np.array([0.0, np.inf, -np.inf, np.nan])))
+    [ 0.  1. -1.  0.]
     """
-    r = np.divide((np.exp(2 * z) - 1), (np.exp(2 * z) + 1))
-    r[np.isnan(r)] = 0
-    r[np.isinf(r)] = np.sign(r)[np.isinf(r)]
-    return r
+    r = np.tanh(np.asarray(z, dtype=np.float64))
+    r = np.where(np.isnan(r), 0.0, r)
+    return r[()]
 
 
 def isodd(x):
@@ -2050,71 +2339,103 @@ def iseven(x):
 
 def mat2vec(m):
     """
-    Function that converts correlation matrix to a vector
+    Convert correlation matrices to vectors.
+
+    Each K x K matrix becomes a vector of length K * (K + 1) / 2: its diagonal
+    first, then its upper triangle in row-major order (the order of
+    ``scipy.spatial.distance.squareform``).  Only the upper triangle is read,
+    and NaNs there are replaced with 0.
 
     Parameters
     ----------
-    m : ndarray
-        Correlation matix
+    m : numpy.ndarray
+        A K x K matrix, or a K x K x T stack of matrices.
 
     Returns
     -------
-    result : ndarray
-        Vector
+    numpy.ndarray
+        A vector of length K * (K + 1) / 2, or a T x (K * (K + 1) / 2) matrix
+        with one row per timepoint.
 
+    Raises
+    ------
+    ValueError
+        If ``m`` is not 2- or 3-dimensional.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from timecorr.helpers import mat2vec
+    >>> print(mat2vec(np.array([[1.0, 0.5], [0.5, 1.0]])))
+    [1.  1.  0.5]
     """
-    K = m.shape[0]
-    V = int((((K**2) - K) / 2) + K)
-
+    m = np.asarray(m)
     if m.ndim == 2:
-        y = np.zeros(V)
-        y[0:K] = np.diag(m)
-
-        # force m to by symmetric
-        m = np.triu(rmdiag(m))
-        m[np.isnan(m)] = 0
-        m += m.T
-
-        y[K:] = sd.squareform(rmdiag(m))
-    elif m.ndim == 3:
-        T = m.shape[2]
-        y = np.zeros([T, V])
-        for t in np.arange(T):
-            y[t, :] = mat2vec(np.squeeze(m[:, :, t]))
-    else:
+        return mat2vec(m[:, :, np.newaxis])[0]
+    if m.ndim != 3:
         raise ValueError("Input must be a 2 or 3 dimensional Numpy array")
 
+    K = m.shape[0]
+    iu = np.triu_indices(K, 1)
+    y = np.zeros([m.shape[2], K + len(iu[0])])
+    y[:, :K] = np.diagonal(m, axis1=0, axis2=1)
+    upper = m[iu[0], iu[1], :].T
+    y[:, K:] = np.where(np.isnan(upper), 0, upper)
     return y
 
 
 def vec2mat(v):
     """
-    Function that converts vector back to correlation matrix
+    Convert vectors produced by ``mat2vec`` back to symmetric matrices.
 
     Parameters
     ----------
-    result : ndarray
-        Vector
+    v : numpy.ndarray
+        A vector of length K * (K + 1) / 2, or a T x (K * (K + 1) / 2) matrix
+        with one vector per row.
 
     Returns
     -------
-    m : ndarray
-        Correlation matix
+    numpy.ndarray
+        A K x K matrix for a vector input, or a K x K x T array for a matrix
+        input (including a 1 x (K * (K + 1) / 2) matrix).
 
+    Raises
+    ------
+    ValueError
+        If ``v`` is not 1- or 2-dimensional, or its length is not
+        K * (K + 1) / 2 for an integer K.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from timecorr.helpers import vec2mat
+    >>> print(vec2mat(np.array([1.0, 1.0, 0.5])))
+    [[1.  0.5]
+     [0.5 1. ]]
+    >>> vec2mat(np.zeros([4, 6])).shape
+    (3, 3, 4)
     """
-    if (v.ndim == 1) or (v.shape[0] == 1):
-        x = int(0.5 * (np.sqrt(8 * len(v) + 1) - 1))
-        return sd.squareform(v[x:]) + np.diag(v[0:x])
-    elif v.ndim == 2:
-        a = vec2mat(v[0, :])
-        y = np.zeros([a.shape[0], a.shape[1], v.shape[0]])
-        y[:, :, 0] = a
-        for t in np.arange(1, v.shape[0]):
-            y[:, :, t] = vec2mat(v[t, :])
-    else:
+    v = np.asarray(v)
+    if v.ndim == 1:
+        return vec2mat(v[np.newaxis, :])[:, :, 0]
+    if v.ndim != 2:
         raise ValueError("Input must be a 1 or 2 dimensional Numpy array")
 
-    return y
+    V = v.shape[1]
+    K = int(round(0.5 * (np.sqrt(8 * V + 1) - 1)))
+    if K * (K + 1) // 2 != V:
+        raise ValueError(
+            f"Vectors of length {V} do not correspond to a square matrix "
+            "(expected length K * (K + 1) / 2)."
+        )
+    iu = np.triu_indices(K, 1)
+    m = np.zeros([K, K, v.shape[0]], dtype=np.result_type(v.dtype, np.float64))
+    diag = np.arange(K)
+    m[diag, diag, :] = v[:, :K].T
+    m[iu[0], iu[1], :] = v[:, K:].T
+    m[iu[1], iu[0], :] = v[:, K:].T
+    return m
 
 
 def symmetric(m):

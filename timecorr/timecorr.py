@@ -18,11 +18,11 @@ def timecorr(
     weights_function=gaussian_weights,
     weights_params=None,
     include_timepoints="all",
-    include_zero=True,
     exclude_timepoints=None,
     combine=null_combine,
     cfun=isfc,
     rfun=None,
+    include_zero=True,
 ):
     """
     Computes dynamics correlations in single-subject or multi-subject data.
@@ -58,9 +58,6 @@ def timecorr(
         timepoints at or *before* the given timepoint), 'forward' or 'post' (only include
         timepoints at or *after* the given timepoint).  Row t of the weights matrix
         (weights[t, :]) is the kernel used to estimate at timepoint t.
-
-    include_zero: if False, the timepoint being estimated is excluded from its own estimate
-        (the diagonal of the weights matrix is zeroed).  Default: True.
 
     exclude_timepoints: additional option, used to filter out any timepoints less than x units
         of the timepoint whose correlations are being estimated.  For example, passing
@@ -123,9 +120,23 @@ def timecorr(
 
         Default: None (no dimensionality reduction)
 
+    include_zero: if False, the timepoint being estimated is excluded from its own estimate
+        (the diagonal of the weights matrix is zeroed).  Default: True.
+
     Returns
     -------
     corrmats: moment-by-moment correlations
+        One row per timepoint, each a vectorized correlation matrix (see
+        helpers.mat2vec).  NaN samples in the data carry no weight.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import timecorr as tc
+    >>> data = np.random.RandomState(0).randn(100, 5)
+    >>> corrs = tc.timecorr(data, weights_params={"var": 50})
+    >>> corrs.shape
+    (100, 15)
     """
 
     def temporal_filter(T, k):
@@ -139,7 +150,9 @@ def timecorr(
             return filt
 
     return_list = isinstance(data, (list, tuple))
-    data = format_data(data)
+    # NaN samples are kept for the correlation functions, which give them no
+    # weight; the smoothing path (cfun=None) receives zeros in their place.
+    data = format_data(data, fill_nan=not cfun)
     T = data[0].shape[0]
 
     weights = weights_function(T, weights_params)

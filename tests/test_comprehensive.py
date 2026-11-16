@@ -155,15 +155,17 @@ class TestCorrelationFunctions:
         """Test wcorr handles NaN weights."""
         weights_nan = self.weights.copy()
         weights_nan[0, :] = np.nan
-        corrs = wcorr(self.data_single, self.data_single, weights_nan)
+        with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+            corrs = wcorr(self.data_single, self.data_single, weights_nan)
         assert corrs.shape == (self.K, self.K, self.T)
         assert not np.any(np.isnan(corrs))  # Should handle NaNs gracefully
 
     def test_wcorr_zero_weights(self):
         """Test wcorr with zero weights."""
         weights_zero = np.zeros_like(self.weights)
-        corrs = wcorr(self.data_single, self.data_single, weights_zero)
-        assert corrs.shape == (self.K, self.K, self.T)
+        # An all-zero kernel defines no correlation at any timepoint.
+        with pytest.raises(ValueError):
+            wcorr(self.data_single, self.data_single, weights_zero)
 
     def test_autofc(self):
         """Test autofc function."""
@@ -351,7 +353,7 @@ class TestStatisticalFunctions:
         # Test with inf
         z_inf = np.array([np.inf, -np.inf])
         r_inf = z2r(z_inf)
-        assert r_inf[0] == 0  # inf becomes 0 (clamped)
+        assert r_inf[0] == 1  # inf becomes 1 (tanh(inf))
         assert r_inf[1] == -1  # -inf becomes -1
 
         # Test with nan
@@ -677,11 +679,13 @@ class TestTimecorrEdgeCases:
         data = np.random.randn(12, 4)
 
         # Test include pre
-        result_pre = timecorr(data, include_timepoints="pre")
+        with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+            result_pre = timecorr(data, include_timepoints="pre")
         assert isinstance(result_pre, np.ndarray)
 
         # Test include post
-        result_post = timecorr(data, include_timepoints="post")
+        with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+            result_post = timecorr(data, include_timepoints="post")
         assert isinstance(result_post, np.ndarray)
 
         # Test exclude positive
@@ -722,11 +726,11 @@ class TestErrorConditions:
         data_b = np.random.randn(5, 4)  # Different number of features
         weights = gaussian_weights(5)
 
-        # wcorr should handle different feature dimensions
-        # But the autocorrelation check fails with mismatched shapes
-        # This is expected behavior, so we test that it raises an error
+        # wcorr handles different feature dimensions
+        assert wcorr(data_a, data_b, weights).shape == (3, 4, 5)
+        # but not different numbers of timepoints
         with pytest.raises(ValueError):
-            wcorr(data_a, data_b, weights)
+            wcorr(data_a, np.random.randn(6, 4), weights)
 
 
 if __name__ == "__main__":

@@ -4,6 +4,7 @@ import hypertools as hyp
 import matplotlib
 import numpy as np
 import pandas as pd
+import pytest
 
 matplotlib.use("Agg")  # Use non-interactive backend
 
@@ -72,25 +73,27 @@ def test_include_timepoints_all():
 
 
 def test_include_timepoints_pre():
-    dyna_corrs_reduced_3 = timecorr(
-        sim_3,
-        rfun="PCA",
-        weights_function=laplace["weights"],
-        weights_params=laplace["params"],
-        include_timepoints="pre",
-    )
+    with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+        dyna_corrs_reduced_3 = timecorr(
+            sim_3,
+            rfun="PCA",
+            weights_function=laplace["weights"],
+            weights_params=laplace["params"],
+            include_timepoints="pre",
+        )
 
     assert np.shape(dyna_corrs_reduced_3) == np.shape(sim_3)
 
 
 def test_include_timepoints_post():
-    dyna_corrs_reduced_3 = timecorr(
-        sim_3,
-        rfun="PCA",
-        weights_function=laplace["weights"],
-        weights_params=laplace["params"],
-        include_timepoints="post",
-    )
+    with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+        dyna_corrs_reduced_3 = timecorr(
+            sim_3,
+            rfun="PCA",
+            weights_function=laplace["weights"],
+            weights_params=laplace["params"],
+            include_timepoints="post",
+        )
 
     assert np.shape(dyna_corrs_reduced_3) == np.shape(sim_3)
 

@@ -62,7 +62,9 @@ def test_one_sided_directly():
     w = np.arange(1.0, 17.0).reshape(4, 4)
     assert np.array_equal(tc.one_sided(w, "backward"), np.tril(w))
     assert np.array_equal(tc.one_sided(w, "forward"), np.triu(w))
-    assert np.array_equal(tc.one_sided(w, "backward", include_zero=False), np.tril(w, -1))
+    assert np.array_equal(
+        tc.one_sided(w, "backward", include_zero=False), np.tril(w, -1)
+    )
     assert np.array_equal(tc.one_sided(w, "forward", include_zero=False), np.triu(w, 1))
     with pytest.raises(ValueError):
         tc.one_sided(w, "pre")
@@ -78,18 +80,19 @@ def _flip_data():
 
 
 def _xy_at(data, t, include):
-    out = np.asarray(
-        tc.timecorr(
-            data,
-            weights_function=gaussian_weights,
-            weights_params={"var": 2000},
-            include_timepoints=include,
+    # the first (pre) or last (post) timepoint has a single-sample kernel
+    with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+        out = np.asarray(
+            tc.timecorr(
+                data,
+                weights_function=gaussian_weights,
+                weights_params={"var": 2000},
+                include_timepoints=include,
+            )
         )
-    )
     return out[t, 2]  # columns: vec of 2x2 corr matrix; index 2 is the x-y entry
 
 
-@pytest.mark.xfail(strict=True, reason="needs the kernel-weighted estimator (Task 3)")
 def test_pre_post_sign_flip_behavior():
     data = _flip_data()
     assert _xy_at(data, 101, "pre") > 0
@@ -110,7 +113,10 @@ class _Recorder:
 @pytest.mark.parametrize("flag", ["pre", "backward"])
 def test_timecorr_backward_weights_passed_to_cfun(flag):
     rec = _Recorder()
-    tc.timecorr(_flip_data(), weights_params={"var": 50}, include_timepoints=flag, cfun=rec)
+    with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+        tc.timecorr(
+            _flip_data(), weights_params={"var": 50}, include_timepoints=flag, cfun=rec
+        )
     w = rec.weights
     full = gaussian_weights(200, {"var": 50})
     assert np.all(w[np.triu_indices(200, k=1)] == 0)
@@ -121,7 +127,10 @@ def test_timecorr_backward_weights_passed_to_cfun(flag):
 @pytest.mark.parametrize("flag", ["post", "forward"])
 def test_timecorr_forward_weights_passed_to_cfun(flag):
     rec = _Recorder()
-    tc.timecorr(_flip_data(), weights_params={"var": 50}, include_timepoints=flag, cfun=rec)
+    with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+        tc.timecorr(
+            _flip_data(), weights_params={"var": 50}, include_timepoints=flag, cfun=rec
+        )
     w = rec.weights
     full = gaussian_weights(200, {"var": 50})
     assert np.all(w[np.tril_indices(200, k=-1)] == 0)
@@ -131,14 +140,15 @@ def test_timecorr_forward_weights_passed_to_cfun(flag):
 
 def test_timecorr_include_zero_false_and_exclude_compose():
     rec = _Recorder()
-    tc.timecorr(
-        _flip_data(),
-        weights_params={"var": 50},
-        include_timepoints="backward",
-        include_zero=False,
-        exclude_timepoints=-3,
-        cfun=rec,
-    )
+    with pytest.warns(UserWarning, match="5 of 200 timepoints"):
+        tc.timecorr(
+            _flip_data(),
+            weights_params={"var": 50},
+            include_timepoints="backward",
+            include_zero=False,
+            exclude_timepoints=-3,
+            cfun=rec,
+        )
     w = rec.weights
     idx = np.arange(200)
     lag = idx[:, None] - idx[None, :]  # t - tau
@@ -148,7 +158,7 @@ def test_timecorr_include_zero_false_and_exclude_compose():
 
 
 def test_timecorr_bad_include_timepoints():
-    with pytest.raises(Exception):
+    with pytest.raises(ValueError):
         tc.timecorr(_flip_data(), include_timepoints="sideways")
 
 

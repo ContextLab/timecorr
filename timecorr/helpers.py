@@ -1033,32 +1033,53 @@ def null_combine(corrs):
     return corrs
 
 
-def reduce(corrs, rfun=None):
+def reduce(corrs, rfun=None, ndims=None):
     """
-    :param corrs: a matrix of vectorized correlation matrices (output of mat2vec), or a list
-                  of such matrices
+    Reduce vectorized correlation matrices back to a (timepoints by features) matrix.
 
-    :param rfun: function to use for dimensionality reduction.  All hypertools and
-        scikit-learn functions are supported: PCA, IncrementalPCA, SparsePCA,
-        MiniBatchSparsePCA, KernelPCA, FastICA, FactorAnalysis, TruncatedSVD,
-        DictionaryLearning, MiniBatchDictionaryLearning, TSNE, Isomap,
-        SpectralEmbedding, LocallyLinearEmbedding, MDS, and UMAP.
+    Parameters
+    ----------
+    corrs : numpy.ndarray or list of numpy.ndarray
+        A matrix of vectorized correlation matrices (output of ``mat2vec``), or a
+        list of such matrices (one per subject).
+    rfun : None, str, dict, or callable
+        How to reduce the dimensionality.
 
-        Can be passed as a string, but for finer control of the model
-        parameters, pass as a dictionary, e.g.
-        reduction={‘model’ : ‘PCA’, ‘params’ : {‘whiten’ : True}}.
+        - ``None``: no reduction; ``corrs`` is returned unchanged.
+        - A hypertools / scikit-learn model name (PCA, IncrementalPCA, SparsePCA,
+          MiniBatchSparsePCA, KernelPCA, FastICA, FactorAnalysis, TruncatedSVD,
+          DictionaryLearning, MiniBatchDictionaryLearning, TSNE, Isomap,
+          SpectralEmbedding, LocallyLinearEmbedding, MDS, or UMAP), or a dict
+          such as ``{'model': 'PCA', 'params': {'whiten': True}}``.  When
+          ``corrs`` is a list, one model is fit jointly to all subjects.
+          ``random_state=0`` is passed to the model.
+        - One of the graph measures ``'eigenvector_centrality'``,
+          ``'pagerank_centrality'``, or ``'strength'`` (strings only), computed
+          per node for each timepoint.
+        - A callable ``f(list of numpy.ndarray) -> list of numpy.ndarray``.  A
+          single array is passed as a one-element list and the first element of
+          the result is returned.
+    ndims : int, optional
+        Number of output columns for model-based reduction.  Default: None, which
+        returns K columns for inputs with K(K+1)/2 features.  The model is never
+        asked for more components than the data can supply (the number of
+        features and of samples); any shortfall is filled with zero columns so
+        the output has exactly the requested width.
 
-        See scikit-learn specific model docs for details on parameters supported
-        for each model.
+    Returns
+    -------
+    numpy.ndarray or list of numpy.ndarray
+        The reduced (or original) matrices, in the same container type as ``corrs``.
 
-        Another option is to use graph theoretic measures computed for each node.
-        The following measures are supported:
-        eigenvector_centrality, pagerank_centrality, and strength.  (Each
-        of these must be specified as a string; dictionaries not supported.)
-
-        Default: None (no dimensionality reduction)
-
-    :return: dimensionality-reduced (or original) correlation matrices
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from timecorr.helpers import reduce
+    >>> corrs = np.random.RandomState(0).randn(20, 21)
+    >>> reduce(corrs, rfun='PCA', ndims=3).shape
+    (20, 3)
+    >>> reduce(corrs, rfun='PCA').shape
+    (20, 6)
     """
 
     # Define graph measures directly instead of using brainconn
@@ -1153,51 +1174,44 @@ def reduce(corrs, rfun=None):
     if rfun is None:
         return corrs
 
-    get_V = lambda x: int(np.divide(np.sqrt(8 * x + 1) - 1, 2))
+    if callable(rfun):
+        if isinstance(corrs, list):
+            return rfun(corrs)
+        return rfun([corrs])[0]
 
-    if type(corrs) is list:
-        V = get_V(corrs[0].shape[1])
-    else:
-        V = get_V(corrs.shape[1])
-
-    if rfun in graph_measures.keys():
+    if isinstance(rfun, str) and rfun in graph_measures:
         return apply_by_row(corrs, graph_measures[rfun])
 
-    else:
-        # Limit V to the number of samples to avoid PCA error
-        if type(corrs) is list:
-            n_samples = corrs[0].shape[0]
+    arrays = corrs if isinstance(corrs, list) else [corrs]
+    n_features = arrays[0].shape[1]
+    if ndims is None:
+        # K(K+1)/2 features back to K columns
+        ndims = int(np.divide(np.sqrt(8 * n_features + 1) - 1, 2))
+
+    # a model cannot return more components than there are features or samples
+    n_samples = sum(a.shape[0] for a in arrays)
+    n_fit = min(ndims, n_features, n_samples)
+
+    if isinstance(rfun, dict) and "params" in rfun:
+        # hypertools deprecated 'params' in favor of 'kwargs'
+        rfun = {
+            **{k: v for k, v in rfun.items() if k != "params"},
+            "kwargs": rfun["params"],
+        }
+
+    red_corrs = hyp.reduce(corrs, reduce=rfun, ndims=n_fit, random_state=0)
+
+    if n_fit < ndims:
+        # Pad with zeros to match the requested output width
+        pad = ndims - n_fit
+        if isinstance(red_corrs, list):
+            red_corrs = [
+                np.hstack((arr, np.zeros((arr.shape[0], pad)))) for arr in red_corrs
+            ]
         else:
-            n_samples = corrs.shape[0]
-        ndims = min(V, n_samples)
-        red_corrs = hyp.reduce(corrs, reduce=rfun, ndims=ndims)
+            red_corrs = np.hstack((red_corrs, np.zeros((red_corrs.shape[0], pad))))
 
-        D = np.shape(red_corrs)[-1]
-
-        if D < V:
-            # Pad with zeros to match expected output size
-            if isinstance(red_corrs, list):
-                # Handle list of arrays
-                red_corrs = [
-                    np.hstack((arr, np.zeros((arr.shape[0], V - D))))
-                    for arr in red_corrs
-                ]
-            elif red_corrs.ndim == 2:
-                red_corrs = np.hstack(
-                    (red_corrs, np.zeros((red_corrs.shape[0], V - D)))
-                )
-            elif red_corrs.ndim == 3:
-                red_corrs = np.hstack(
-                    (
-                        red_corrs,
-                        np.zeros((red_corrs.shape[0], red_corrs.shape[1], V - D)),
-                    )
-                )
-            else:
-                # Handle other cases or just return as is
-                pass
-
-        return red_corrs
+    return red_corrs
 
 
 def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=laplace_params):
@@ -1227,8 +1241,12 @@ def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=laplace_p
 
     kernel /= kernel.sum()
     x = np.zeros_like(w)
+    # centered convolution whose output always has the length of the series
+    # (np.convolve mode="same" returns max(len(kernel), len(series)) samples, which
+    # fails when the series is shorter than the window)
+    start = (len(kernel) - 1) // 2
     for i in range(0, w.shape[1]):
-        x[:, i] = np.convolve(kernel, w[:, i], mode="same")
+        x[:, i] = np.convolve(kernel, w[:, i], mode="full")[start : start + w.shape[0]]
     return x
 
 
@@ -2138,7 +2156,10 @@ def pca_decoder(
         len(np.unique(list(map(lambda x: x.shape[1], data)))) == 1
     ), "all data matrices must have the same number of features"
 
-    pca_data = np.asarray(hyp.reduce(list(data), ndims=dims))
+    # never request more components than the data has features or samples; the
+    # loop below slices the first d columns, so d > n_components is harmless
+    n_components = min(dims, data[0].shape[1], sum(x.shape[0] for x in data))
+    pca_data = np.asarray(hyp.reduce(list(data), ndims=n_components, random_state=0))
 
     group_assignments = get_xval_assignments(len(pca_data), nfolds)
     results_pd = pd.DataFrame()

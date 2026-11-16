@@ -29,7 +29,61 @@ uniform_params = {}
 boxcar_params = {"width": 10}
 
 
-def gaussian_weights(T, params=gaussian_params):
+def one_sided(weights, direction, include_zero=True):
+    """
+    Restrict a T x T kernel to the past or the future of each timepoint.
+
+    Row ``t`` of the kernel (``weights[t, :]``) is the kernel used to estimate
+    at timepoint ``t``.
+
+    Parameters
+    ----------
+    weights : numpy.ndarray
+        T x T kernel matrix.
+    direction : {'backward', 'forward'}
+        'backward' keeps ``weights[t, tau]`` for ``tau <= t``; 'forward' keeps
+        it for ``tau >= t``.  All other entries are set to zero.
+    include_zero : bool, optional
+        If False, the diagonal is also zeroed (``tau < t`` for 'backward',
+        ``tau > t`` for 'forward').  Default: True
+
+    Returns
+    -------
+    numpy.ndarray
+        T x T one-sided kernel (a new array).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import timecorr as tc
+    >>> w = tc.one_sided(np.ones([4, 4]), "backward")
+    >>> print(w[1])
+    [1. 1. 0. 0.]
+    >>> print(tc.one_sided(np.ones([4, 4]), "forward", include_zero=False)[1])
+    [0. 0. 1. 1.]
+    """
+    weights = np.asarray(weights)
+    if direction not in ("backward", "forward"):
+        raise ValueError(
+            f"Invalid direction: {direction!r}.  Must be 'backward' or 'forward'."
+        )
+    k = 0 if include_zero else (-1 if direction == "backward" else 1)
+    if direction == "backward":
+        return np.tril(weights, k)
+    return np.triu(weights, k)
+
+
+def _finish_kernel(w, direction, include_zero):
+    """Apply the optional direction and diagonal handling shared by all kernels."""
+    if direction is not None:
+        return one_sided(w, direction, include_zero)
+    if not include_zero:
+        w = w.copy()
+        np.fill_diagonal(w, 0)
+    return w
+
+
+def gaussian_weights(T, params=gaussian_params, direction=None, include_zero=True):
     """
     Generate Gaussian weighting function for dynamic correlations.
 
@@ -44,6 +98,13 @@ def gaussian_weights(T, params=gaussian_params):
     params : dict, optional
         Dictionary containing Gaussian parameters. Default: {'var': 100}
         - 'var' : float, variance of the Gaussian kernel
+    direction : {None, 'backward', 'forward'}, optional
+        If 'backward', only timepoints at or before each timepoint receive
+        weight (``weights[t, tau] = 0`` for ``tau > t``); if 'forward', only
+        timepoints at or after it do.  Default: None (two-sided kernel).
+    include_zero : bool, optional
+        If False, the diagonal is zeroed so that timepoint t does not
+        contribute to its own estimate.  Default: True
 
     Returns
     -------
@@ -63,10 +124,10 @@ def gaussian_weights(T, params=gaussian_params):
     c1 = np.divide(1, np.sqrt(2 * math.pi * params["var"]))
     c2 = np.divide(-1, 2 * params["var"])
     sqdiffs = toeplitz(np.arange(T) ** 2)
-    return c1 * np.exp(c2 * sqdiffs)
+    return _finish_kernel(c1 * np.exp(c2 * sqdiffs), direction, include_zero)
 
 
-def laplace_weights(T, params=laplace_params):
+def laplace_weights(T, params=laplace_params, direction=None, include_zero=True):
     """
     Generate Laplace (exponential) weighting function for dynamic correlations.
 
@@ -81,6 +142,13 @@ def laplace_weights(T, params=laplace_params):
     params : dict, optional
         Dictionary containing Laplace parameters. Default: {'scale': 100}
         - 'scale' : float, scale parameter of the Laplace distribution
+    direction : {None, 'backward', 'forward'}, optional
+        If 'backward', only timepoints at or before each timepoint receive
+        weight (``weights[t, tau] = 0`` for ``tau > t``); if 'forward', only
+        timepoints at or after it do.  Default: None (two-sided kernel).
+    include_zero : bool, optional
+        If False, the diagonal is zeroed so that timepoint t does not
+        contribute to its own estimate.  Default: True
 
     Returns
     -------
@@ -98,12 +166,13 @@ def laplace_weights(T, params=laplace_params):
         params = laplace_params
 
     absdiffs = toeplitz(np.arange(T))
-    return np.multiply(
+    w = np.multiply(
         np.divide(1, 2 * params["scale"]), np.exp(-np.divide(absdiffs, params["scale"]))
-    )  # scale by a factor of 2.5 to prevent near-zero rounding issues
+    )
+    return _finish_kernel(w, direction, include_zero)
 
 
-def eye_weights(T, params=eye_params):
+def eye_weights(T, params=eye_params, direction=None, include_zero=True):
     """
     Generate identity (delta) weighting function for dynamic correlations.
 
@@ -117,6 +186,13 @@ def eye_weights(T, params=eye_params):
         Number of timepoints in the timeseries
     params : dict, optional
         Empty dictionary (no parameters needed). Default: {}
+    direction : {None, 'backward', 'forward'}, optional
+        If 'backward', only timepoints at or before each timepoint receive
+        weight (``weights[t, tau] = 0`` for ``tau > t``); if 'forward', only
+        timepoints at or after it do.  Default: None (two-sided kernel).
+    include_zero : bool, optional
+        If False, the diagonal is zeroed so that timepoint t does not
+        contribute to its own estimate.  Default: True
 
     Returns
     -------
@@ -132,14 +208,86 @@ def eye_weights(T, params=eye_params):
     >>> print(weights[0, 1])  # 0.0
     """
 
-    return np.eye(T)
+    return _finish_kernel(np.eye(T), direction, include_zero)
 
 
-def uniform_weights(T, params=uniform_params):
-    return np.ones([T, T])
+def uniform_weights(T, params=uniform_params, direction=None, include_zero=True):
+    """
+    Generate a uniform weighting function for dynamic correlations.
+
+    Every timepoint receives the same weight (1) at every timepoint, so the
+    resulting correlations are static (non-dynamic) unless a direction is given.
+
+    Parameters
+    ----------
+    T : int
+        Number of timepoints in the timeseries
+    params : dict, optional
+        Unused; accepted for a uniform interface.  Default: {}
+    direction : {None, 'backward', 'forward'}, optional
+        If 'backward', only timepoints at or before each timepoint receive
+        weight (``weights[t, tau] = 0`` for ``tau > t``); if 'forward', only
+        timepoints at or after it do.  Default: None (two-sided kernel).
+    include_zero : bool, optional
+        If False, the diagonal is zeroed so that timepoint t does not
+        contribute to its own estimate.  Default: True
+
+    Returns
+    -------
+    numpy.ndarray
+        T x T matrix of ones (restricted according to ``direction`` and
+        ``include_zero``), where weights[i,j] is the weight given to timepoint j
+        when computing correlations at timepoint i
+
+    Examples
+    --------
+    >>> import timecorr as tc
+    >>> weights = tc.uniform_weights(5)
+    >>> print(weights.shape)
+    (5, 5)
+    >>> print(tc.uniform_weights(3, direction="backward"))
+    [[1. 0. 0.]
+     [1. 1. 0.]
+     [1. 1. 1.]]
+    """
+    return _finish_kernel(np.ones([T, T]), direction, include_zero)
 
 
-def t_weights(T, params=t_params):
+def t_weights(T, params=t_params, direction=None, include_zero=True):
+    """
+    Generate Student's t weighting function for dynamic correlations.
+
+    Each timepoint receives weights according to a Student's t density centered
+    at that timepoint.
+
+    Parameters
+    ----------
+    T : int
+        Number of timepoints in the timeseries
+    params : dict, optional
+        Dictionary containing t parameters. Default: {'df': 100}
+        - 'df' : float, degrees of freedom of the t distribution
+    direction : {None, 'backward', 'forward'}, optional
+        If 'backward', only timepoints at or before each timepoint receive
+        weight (``weights[t, tau] = 0`` for ``tau > t``); if 'forward', only
+        timepoints at or after it do.  Default: None (two-sided kernel).
+    include_zero : bool, optional
+        If False, the diagonal is zeroed so that timepoint t does not
+        contribute to its own estimate.  Default: True
+
+    Returns
+    -------
+    numpy.ndarray
+        T x T matrix of t weights, where weights[i,j] is the weight given to
+        timepoint j when computing correlations at timepoint i
+
+    Examples
+    --------
+    >>> import timecorr as tc
+    >>> weights = tc.t_weights(50, {'df': 10})
+    >>> print(weights.shape)
+    (50, 50)
+    """
     if params is None:
         params = t_params
 
@@ -150,10 +298,11 @@ def t_weights(T, params=t_params):
     c2 = np.divide(-params["df"] + 1, 2)
 
     sqdiffs = toeplitz(np.arange(T) ** 2)
-    return np.multiply(c1, np.power(1 + np.divide(sqdiffs, params["df"]), c2))
+    w = np.multiply(c1, np.power(1 + np.divide(sqdiffs, params["df"]), c2))
+    return _finish_kernel(w, direction, include_zero)
 
 
-def mexican_hat_weights(T, params=mexican_hat_params):
+def mexican_hat_weights(T, params=mexican_hat_params, direction=None, include_zero=True):
     """
     Generate Mexican Hat (Ricker) weighting function for dynamic correlations.
 
@@ -168,6 +317,13 @@ def mexican_hat_weights(T, params=mexican_hat_params):
     params : dict, optional
         Dictionary containing Mexican Hat parameters. Default: {'sigma': 10}
         - 'sigma' : float, scale parameter of the Mexican Hat wavelet
+    direction : {None, 'backward', 'forward'}, optional
+        If 'backward', only timepoints at or before each timepoint receive
+        weight (``weights[t, tau] = 0`` for ``tau > t``); if 'forward', only
+        timepoints at or after it do.  Default: None (two-sided kernel).
+    include_zero : bool, optional
+        If False, the diagonal is zeroed so that timepoint t does not
+        contribute to its own estimate.  Default: True
 
     Returns
     -------
@@ -191,14 +347,49 @@ def mexican_hat_weights(T, params=mexican_hat_params):
     b = 1 - np.power(np.divide(absdiffs, params["sigma"]), 2)
     c = np.exp(-np.divide(sqdiffs, 2 * np.power(params["sigma"], 2)))
 
-    return np.multiply(a, np.multiply(b, c))
+    return _finish_kernel(np.multiply(a, np.multiply(b, c)), direction, include_zero)
 
 
-def boxcar_weights(T, params=boxcar_params):
+def boxcar_weights(T, params=boxcar_params, direction=None, include_zero=True):
+    """
+    Generate a boxcar (moving window) weighting function for dynamic correlations.
+
+    Timepoints within ``width / 2`` samples of each timepoint receive weight 1;
+    all others receive weight 0.
+
+    Parameters
+    ----------
+    T : int
+        Number of timepoints in the timeseries
+    params : dict, optional
+        Dictionary containing boxcar parameters. Default: {'width': 10}
+        - 'width' : float, total width of the window (in samples)
+    direction : {None, 'backward', 'forward'}, optional
+        If 'backward', only timepoints at or before each timepoint receive
+        weight (``weights[t, tau] = 0`` for ``tau > t``); if 'forward', only
+        timepoints at or after it do.  Default: None (two-sided kernel).
+    include_zero : bool, optional
+        If False, the diagonal is zeroed so that timepoint t does not
+        contribute to its own estimate.  Default: True
+
+    Returns
+    -------
+    numpy.ndarray
+        T x T matrix of zeros and ones, where weights[i,j] is the weight given
+        to timepoint j when computing correlations at timepoint i
+
+    Examples
+    --------
+    >>> import timecorr as tc
+    >>> weights = tc.boxcar_weights(6, {'width': 4})
+    >>> print(weights[2])
+    [0. 1. 1. 1. 0. 0.]
+    """
     if params is None:
         params = boxcar_params
 
-    return np.multiply(toeplitz(np.arange(T)) < params["width"] / 2.0, 1.0)
+    w = np.multiply(toeplitz(np.arange(T)) < params["width"] / 2.0, 1.0)
+    return _finish_kernel(w, direction, include_zero)
 
 
 def _is_polars(x):
@@ -302,8 +493,8 @@ def wcorr(a, b, weights):
 
     :param a: a number-of-timepoints by number-of-features observations matrix
     :param b: a number-of-timepoints by number-of-features observations matrix
-    :param weights: a number-of-timepoints by number-of-timepoints weights matrix
-        specifying the per-timepoint weights to be considered (for each timepoint)
+    :param weights: a number-of-timepoints by number-of-timepoints weights matrix;
+        row t (weights[t, :]) holds the weights used to estimate at timepoint t
     :return: a a.shape[1] by b.shape[1] by weights.shape[0] array of per-timepoint
         correlation matrices.
     """
@@ -325,13 +516,13 @@ def wcorr(a, b, weights):
     corrs = np.zeros([a.shape[1], b.shape[1], weights.shape[1]])
 
     for t in np.arange(weights.shape[1]):
-        vara, diffs_a = weighted_var_diffs(a, weights[:, t])
+        vara, diffs_a = weighted_var_diffs(a, weights[t, :])
 
         if autocorrelation:
             varb = vara
             diffs_b = diffs_a
         else:
-            varb, diffs_b = weighted_var_diffs(b, weights[:, t])
+            varb, diffs_b = weighted_var_diffs(b, weights[t, :])
 
         alpha = np.dot(diffs_a.T, diffs_b)
         beta = np.sqrt(np.dot(vara.T, varb))

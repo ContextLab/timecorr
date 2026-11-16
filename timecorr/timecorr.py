@@ -2,7 +2,15 @@
 
 import numpy as np
 
-from .helpers import format_data, gaussian_weights, isfc, null_combine, reduce, smooth
+from .helpers import (
+    format_data,
+    gaussian_weights,
+    isfc,
+    null_combine,
+    one_sided,
+    reduce,
+    smooth,
+)
 
 
 def timecorr(
@@ -10,6 +18,7 @@ def timecorr(
     weights_function=gaussian_weights,
     weights_params=None,
     include_timepoints="all",
+    include_zero=True,
     exclude_timepoints=None,
     combine=null_combine,
     cfun=isfc,
@@ -45,8 +54,13 @@ def timecorr(
         at each timepoint.  This is applied after the weights function to further constrain
         which timepoints may be considered in computing the correlations at each timepoint.
 
-        Options: 'all' (default; include all timepoints), 'pre' (only include timepoints *before*
-        the given timepoint), 'post' (only include timepoints *after* the given timepoint).
+        Options: 'all' (default; include all timepoints), 'backward' or 'pre' (only include
+        timepoints at or *before* the given timepoint), 'forward' or 'post' (only include
+        timepoints at or *after* the given timepoint).  Row t of the weights matrix
+        (weights[t, :]) is the kernel used to estimate at timepoint t.
+
+    include_zero: if False, the timepoint being estimated is excluded from its own estimate
+        (the diagonal of the weights matrix is zeroed).  Default: True.
 
     exclude_timepoints: additional option, used to filter out any timepoints less than x units
         of the timepoint whose correlations are being estimated.  For example, passing
@@ -132,14 +146,17 @@ def timecorr(
 
     include_timepoints = include_timepoints.lower()
     if include_timepoints == "all":
-        pass
-    elif include_timepoints == "pre":
-        weights = np.tril(weights)
-    elif include_timepoints == "post":
-        weights = np.triu(weights)
+        if not include_zero:
+            weights = weights.copy()
+            np.fill_diagonal(weights, 0)
+    elif include_timepoints in ("backward", "pre"):
+        weights = one_sided(weights, "backward", include_zero)
+    elif include_timepoints in ("forward", "post"):
+        weights = one_sided(weights, "forward", include_zero)
     else:
-        raise Exception(
-            f"Invalid option for include_timepoints: '{include_timepoints}'.  Must be one of: 'all', 'pre', or 'post'."
+        raise ValueError(
+            f"Invalid option for include_timepoints: '{include_timepoints}'.  "
+            "Must be one of: 'all', 'backward', 'pre', 'forward', or 'post'."
         )
 
     if not (exclude_timepoints is None):

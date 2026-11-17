@@ -755,7 +755,9 @@ def carrier_reducer(blocks, K=None):
     The reducer holds no state: it infers the order from its input width
     (``K(K+1)/2`` at order 1, then ``c(c+1)/2`` for the ``c`` carriers kept
     at the order before).  At order ``n``, where each block has a single carrier,
-    it returns its input unchanged.
+    it returns its input unchanged.  It is meant for runs up to order ``n``:
+    beyond it the widths no longer identify the order (they usually match none
+    and raise, but can coincide with an earlier order's width).
 
     Parameters
     ----------

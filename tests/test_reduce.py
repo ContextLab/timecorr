@@ -136,8 +136,10 @@ def test_smooth_shorter_than_window_keeps_series_length():
     x = rng.randn(8, 3)
     out = smooth(x, windowsize=10)
     assert out.shape == x.shape
-    # for a series at least as long as the window, the result is the centered
-    # convolution that numpy's mode="same" returns
+    # for a series at least as long as the window, out[t] = sum_j kernel[j] *
+    # y[t + j - 4]: row 4 of the 10 x 10 kernel matrix weights sample j at offset
+    # j - 4 (row convention; Task 6 fixed smooth, which used to apply the row
+    # mirrored, as np.convolve(kernel, y, mode="same") does)
     y = rng.randn(30, 3)
     out = smooth(y, windowsize=10)
     assert out.shape == y.shape
@@ -146,8 +148,13 @@ def test_smooth_shorter_than_window_keeps_series_length():
     k = laplace_weights(10, params=laplace_params)
     kernel = k[4, :]  # windowsize 10: floor(10/2)-1 == ceil(10/2)-1 == 4
     kernel = kernel / kernel.sum()
+    expected = np.zeros_like(y)
+    for t in range(y.shape[0]):
+        for j in range(10):
+            if 0 <= t + j - 4 < y.shape[0]:
+                expected[t] += kernel[j] * y[t + j - 4]
     for c in range(y.shape[1]):
-        np.testing.assert_allclose(out[:, c], np.convolve(kernel, y[:, c], mode="same"))
+        np.testing.assert_allclose(out[:, c], expected[:, c])
 
 
 @pytest.mark.parametrize("rfun", ["PCA", {"model": "PCA", "params": {}}])

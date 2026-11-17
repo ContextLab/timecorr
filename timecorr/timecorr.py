@@ -1,5 +1,7 @@
 # coding: utf-8
 
+import warnings
+
 import numpy as np
 
 from .helpers import (
@@ -9,8 +11,30 @@ from .helpers import (
     null_combine,
     one_sided,
     reduce,
-    smooth,
 )
+
+
+def _kernel_smooth(x, weights):
+    """
+    Kernel-weighted mean of the rows of x: out[t] = sum_j |w[t, j]| x[j] / sum_j |w[t, j]|.
+
+    Row t of ``weights`` is the kernel used at timepoint t.  NaN samples get no
+    weight.  Entries with no weighted, observed sample are undefined; they are
+    set to 0 and one warning reports how many timepoints were affected.
+    """
+    w = np.abs(weights)
+    valid = ~np.isnan(x)
+    num = w @ np.where(valid, x, 0.0)
+    den = w @ valid.astype(np.float64)
+    out = np.zeros_like(num)
+    np.divide(num, den, out=out, where=den > 0)
+    undefined = np.any(den <= 0, axis=1)
+    if undefined.any():
+        warnings.warn(
+            f"Smoothing is undefined at {int(undefined.sum())} timepoint(s) (no "
+            "weighted, observed samples); those values are set to 0."
+        )
+    return out
 
 
 def timecorr(
@@ -99,6 +123,12 @@ def timecorr(
         list), the default cfun returns the moment-by-moment correlations for
         that array.  (Reference: http://www.nature.com/articles/ncomms12141)
 
+        If None, the data are smoothed instead of correlated: the output at
+        timepoint t is the mean of the samples weighted by |weights[t, :]| (the
+        same kernel rows, after include_timepoints, include_zero and
+        exclude_timepoints), with one timepoints-by-features array per subject.
+        NaN samples get no weight.
+
     rfun: function to use for dimensionality reduction.
 
         All hypertools and scikit-learn functions are supported: PCA, IncrementalPCA, SparsePCA,
@@ -149,10 +179,9 @@ def timecorr(
         else:
             return filt
 
-    return_list = isinstance(data, (list, tuple))
-    # NaN samples are kept for the correlation functions, which give them no
-    # weight; the smoothing path (cfun=None) receives zeros in their place.
-    data = format_data(data, fill_nan=not cfun)
+    # NaN samples are kept; both the correlation functions and the smoothing
+    # path (cfun=None) give them no weight.
+    data = format_data(data, fill_nan=False)
     T = data[0].shape[0]
 
     weights = weights_function(T, weights_params)
@@ -178,17 +207,12 @@ def timecorr(
     if cfun:
         corrs = reduce(combine(cfun(data, weights)), rfun=rfun)
 
-        if not (cfun is None):
-            return_list = False
-
     else:
-        corrs = combine(
-            smooth(data, kernel_fun=weights_function, kernel_params=weights_params)
-        ).tolist()
+        # smoothing path: kernel-weighted mean of the samples, using the same
+        # kernel rows (after include_timepoints, include_zero and
+        # exclude_timepoints) as the correlation path
+        corrs = combine([_kernel_smooth(x, weights) for x in data])
 
-    if return_list and (not (type(corrs) == list)):
-        return [corrs]
-    elif (not return_list) and (type(corrs) == list) and (len(corrs) == 1):
+    if isinstance(corrs, list) and len(corrs) == 1:
         return corrs[0]
-    else:
-        return corrs
+    return corrs

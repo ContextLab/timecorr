@@ -15,8 +15,6 @@ Temporal blur is therefore applied once, at the order being analyzed.
 
 import numbers
 
-import numpy as np
-
 from .helpers import (
     autofc,
     eye_weights,
@@ -101,6 +99,89 @@ def _as_list(x):
     return x if isinstance(x, list) else [x]
 
 
+def _analysis_path(
+    subjects,
+    weights_function=gaussian_weights,
+    weights_params=None,
+    cfun=isfc,
+    rfun="PCA",
+    ndims=None,
+    combine=null_combine,
+    include_timepoints="all",
+    include_zero=True,
+    groups=None,
+):
+    """
+    Analysis path of one order: ``reduce(combine(timecorr(subjects, kernel, cfun)))``.
+
+    ``subjects`` is a list of (T, d) arrays.  With ``groups=None`` all subjects
+    are analyzed together and the result is what ``combine`` returns, reduced.
+    With ``groups`` (a sequence of sequences of subject indices), ``cfun`` and
+    ``combine`` see only one group's subjects at a time, the combined results of
+    all groups are reduced jointly (one model, one shared space), and a list with
+    one entry per group is returned.
+    """
+
+    def analyze(members):
+        return combine(
+            _as_list(
+                timecorr(
+                    members,
+                    weights_function=weights_function,
+                    weights_params=weights_params,
+                    include_timepoints=include_timepoints,
+                    combine=null_combine,
+                    cfun=cfun,
+                    rfun=None,
+                    include_zero=include_zero,
+                )
+            )
+        )
+
+    if groups is None:
+        return reduce(analyze(subjects), rfun=rfun, ndims=ndims)
+
+    combined = [analyze([subjects[j] for j in g]) for g in groups]
+    # flatten every group's output into one list so a single reduction model is
+    # fit to all of them, then restore each group's container type
+    pieces, sizes = [], []
+    for c in combined:
+        if isinstance(c, list):
+            pieces.extend(c)
+            sizes.append(len(c))
+        else:
+            pieces.append(c)
+            sizes.append(None)
+    reduced = _as_list(reduce(pieces, rfun=rfun, ndims=ndims))
+    out, start = [], 0
+    for n in sizes:
+        if n is None:
+            out.append(reduced[start])
+            start += 1
+        else:
+            out.append(list(reduced[start : start + n]))
+            start += n
+    return out
+
+
+def _delta_path(subjects, rfun="PCA", ndims=None):
+    """
+    Delta path of one order: per-subject co-fluctuations (``eye_weights``,
+    ``autofc``), never combined, reduced jointly across subjects.  ``subjects`` is
+    a list of (T, d) arrays; a list of the same length is returned.
+    """
+    delta = _as_list(
+        timecorr(
+            subjects,
+            weights_function=eye_weights,
+            combine=null_combine,
+            cfun=autofc,
+            rfun=None,
+        )
+    )
+    return _as_list(reduce(delta, rfun=rfun, ndims=ndims))
+
+
 def two_path_step(
     data,
     weights_function=gaussian_weights,
@@ -158,30 +239,18 @@ def two_path_step(
     single = not isinstance(data, (list, tuple))
     subjects = format_data(data, fill_nan=False)
 
-    analysis = _as_list(
-        timecorr(
-            subjects,
-            weights_function=weights_function,
-            weights_params=weights_params,
-            include_timepoints=include_timepoints,
-            combine=null_combine,
-            cfun=cfun,
-            rfun=None,
-            include_zero=include_zero,
-        )
+    X_next = _analysis_path(
+        subjects,
+        weights_function=weights_function,
+        weights_params=weights_params,
+        cfun=cfun,
+        rfun=rfun,
+        ndims=ndims,
+        combine=combine,
+        include_timepoints=include_timepoints,
+        include_zero=include_zero,
     )
-    X_next = reduce(combine(analysis), rfun=rfun, ndims=ndims)
-
-    delta = _as_list(
-        timecorr(
-            subjects,
-            weights_function=eye_weights,
-            combine=null_combine,
-            cfun=autofc,
-            rfun=None,
-        )
-    )
-    D_next = reduce(delta, rfun=delta_rfun, ndims=ndims)
+    D_next = _delta_path(subjects, rfun=delta_rfun, ndims=ndims)
 
     if single:
         if isinstance(X_next, list):

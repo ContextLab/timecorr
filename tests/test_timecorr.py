@@ -164,3 +164,50 @@ corrs = timecorr(
 )
 # assert()
 # assert len(corrs.get_time_data()[0]) == len(numpy_array)
+
+
+# ------------------------------------------- smoothing path (cfun=None)
+
+
+def _impulse(T=40, K=2, at=20):
+    x = np.zeros((T, K))
+    x[at, :] = 1.0
+    return x
+
+
+def test_smoothing_path_is_kernel_weighted_mean_of_rows():
+    """cfun=None gives sum_j |w[t, j]| x[j] / sum_j |w[t, j]| with the full kernel."""
+    rng = np.random.RandomState(0)
+    x = rng.randn(40, 3)
+    w = tc.gaussian_weights(40, {"var": 9})
+    out = tc.timecorr(x, cfun=None, weights_function=tc.gaussian_weights, weights_params={"var": 9})
+    expected = (w @ x) / w.sum(axis=1, keepdims=True)
+    assert isinstance(out, np.ndarray)
+    assert np.allclose(out, expected, atol=1e-12, rtol=0)
+
+
+def test_smoothing_path_respects_include_timepoints():
+    x = _impulse()
+    back = tc.timecorr(x, cfun=None, weights_params={"var": 9}, include_timepoints="backward")
+    fwd = tc.timecorr(x, cfun=None, weights_params={"var": 9}, include_timepoints="forward")
+    assert np.allclose(back[:20], 0) and np.all(back[20:] > 0)
+    assert np.allclose(fwd[21:], 0) and np.all(fwd[:21] > 0)
+
+
+def test_smoothing_path_respects_include_zero_and_exclude_timepoints():
+    x = _impulse()
+    no_zero = tc.timecorr(x, cfun=None, weights_params={"var": 9}, include_zero=False)
+    assert np.allclose(no_zero[20], 0) and np.all(no_zero[19] > 0)
+    near = tc.timecorr(x, cfun=None, weights_params={"var": 9}, exclude_timepoints=3)
+    assert np.allclose(near[:17], 0) and np.allclose(near[24:], 0) and np.all(near[17:24] > 0)
+
+
+def test_smoothing_path_list_input_returns_arrays():
+    """List input with null_combine crashed on list.tolist()."""
+    rng = np.random.RandomState(1)
+    data = [rng.randn(30, 3) for _ in range(2)]
+    out = tc.timecorr(data, cfun=None, weights_params={"var": 9})
+    assert isinstance(out, list) and len(out) == 2
+    assert all(isinstance(o, np.ndarray) and o.shape == (30, 3) for o in out)
+    single = tc.timecorr(data[0], cfun=None, weights_params={"var": 9})
+    assert np.allclose(out[0], single)

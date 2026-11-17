@@ -271,7 +271,8 @@ def test_sign_parity_cascade_order3():
     assert blocks.shape == (3, 4)
     signs = np.sign(data)
     A = np.prod(signs[:, blocks], axis=2)  # (T, p) block products
-    target = vec2mat(truth["corrs"].mean(axis=0))
+    # signs carry the latent-sign correlation (truth without amplitude noise)
+    target = vec2mat(_latent(truth["corrs"], 3).mean(axis=0))
     assert np.abs(np.corrcoef(A.T) - target).max() <= 0.08
     for b in blocks:
         for i, j in itertools.combinations(b, 2):
@@ -279,6 +280,22 @@ def test_sign_parity_cascade_order3():
         assert abs(np.mean(np.prod(signs[:, b[:3]], axis=1))) < 0.06
         for i in b:
             assert abs(np.mean(signs[:, i])) < 0.06
+
+
+def _carried(latent, p, a=0.2):
+    """Correlation of the block products for latent-sign correlation ``latent``
+    (rows in mat2vec layout): off-diagonals times exp(-a**2), a the amplitude
+    noise (default 0.2), computed as the generator does."""
+    c = np.array(latent, dtype=float, copy=True)
+    c[..., p:] *= np.exp(-(a**2))
+    return c
+
+
+def _latent(carried, p, a=0.2):
+    """Inverse of ``_carried``: the correlation of the signs of the products."""
+    c = np.array(carried, dtype=float, copy=True)
+    c[..., p:] /= np.exp(-(a**2))
+    return c
 
 
 def _needs_clipping(corrs):
@@ -302,7 +319,8 @@ def test_truth_is_the_achieved_correlation_at_p10():
     assert _needs_clipping(truth["requested"][:1]).all()
     A = np.prod(np.sign(data[:, truth["blocks"]]), axis=2)
     empirical = np.corrcoef(A.T)
-    assert np.abs(empirical - vec2mat(truth["corrs"][0])).max() <= 0.03
+    # signs carry the latent-sign correlation (truth without amplitude noise)
+    assert np.abs(empirical - vec2mat(_latent(truth["corrs"][0], 10))).max() <= 0.03
     # the requested template differs from what the data carry
     assert np.abs(vec2mat(truth["requested"][0]) - empirical).max() > 0.05
     assert np.allclose(truth["corrs"][:, :10], 1.0)
@@ -326,10 +344,13 @@ def test_truth_is_the_achieved_correlation_block_p6():
     assert clipped.any()
     A = np.prod(np.sign(data[:, truth["blocks"]]), axis=2)
     for event in (slice(0, T // 2), slice(T // 2, T)):
-        target = vec2mat(truth["corrs"][event][0])
+        target = vec2mat(_latent(truth["corrs"][event][0], 6))
         assert np.abs(np.corrcoef(A[event].T) - target).max() <= 0.04
-    # unclipped timepoints report the requested template exactly
-    assert np.array_equal(truth["corrs"][~clipped], truth["requested"][~clipped])
+    # unclipped timepoints report the requested template exactly (as carried by
+    # the block products: off-diagonals times exp(-amplitude_noise**2))
+    assert np.array_equal(
+        truth["corrs"][~clipped], _carried(truth["requested"][~clipped], 6)
+    )
     assert not np.allclose(truth["corrs"][clipped], truth["requested"][clipped])
 
 
@@ -338,7 +359,8 @@ def test_truth_equals_request_when_no_clipping_is_needed():
         datagen="constant", return_corrs=True, set_random_seed=1, T=20, K=6, order=2
     )
     assert not _needs_clipping(truth["requested"]).any()
-    assert np.array_equal(truth["corrs"], truth["requested"])
+    # the block products carry the request with off-diagonals times exp(-0.2**2)
+    assert np.array_equal(truth["corrs"], _carried(truth["requested"], 3))
 
 
 def test_multi_order_truth_is_achieved_correlation():
@@ -350,7 +372,7 @@ def test_multi_order_truth_is_achieved_correlation():
     assert _needs_clipping(t["requested"][:1]).all()
     A = np.prod(np.sign(data[:, t["blocks"]]), axis=2)
     # same standard-error argument as the p=10 test above
-    assert np.abs(np.corrcoef(A.T) - vec2mat(t["corrs"][0])).max() <= 0.03
+    assert np.abs(np.corrcoef(A.T) - vec2mat(_latent(t["corrs"][0], 10))).max() <= 0.03
 
 
 @pytest.mark.parametrize("datagen", DATAGENS)
@@ -591,3 +613,55 @@ def test_simulate_data_docstring_returns_matches_output():
     assert isinstance(data, np.ndarray)
     out = tc.simulate_data(T=10, K=4, set_random_seed=1, return_corrs=True)
     assert len(out) == 2
+
+
+# ----------------------------------------------- truth with amplitude noise
+
+
+def _pearson_with_se(x, y):
+    """Pearson r and its large-sample standard error for non-normal data
+    (delta method: SE = sd(u) / sqrt(T) with u = zx zy - r (zx**2 + zy**2) / 2)."""
+    zx = (x - x.mean()) / x.std()
+    zy = (y - y.mean()) / y.std()
+    r = np.mean(zx * zy)
+    u = zx * zy - r * (zx**2 + zy**2) / 2
+    return r, u.std() / np.sqrt(len(x))
+
+
+def test_truth_scaled_by_amplitude_noise_matches_block_products():
+    # Each block product is A_j * exp(a * z_j) with independent z_j ~ N(0, 1), so
+    # corr(P_i, P_j) = corr(A_i, A_j) * E[e^{az}]**2 / E[e^{2az}] = corr(A) * exp(-a**2).
+    a, T = 0.5, 200000
+    data, truth = tc.simulate_data(
+        datagen="constant", return_corrs=True, set_random_seed=4, T=T, K=8,
+        order=2, amplitude_noise=a,
+    )
+    p = 4
+    assert not _needs_clipping(truth["requested"][:1]).any()
+    P = np.prod(data[:, truth["blocks"]], axis=2)  # (T, p) block products
+    carried = vec2mat(truth["corrs"][0])
+    unscaled = vec2mat(truth["requested"][0])  # the latent-sign correlation here
+    assert np.allclose(np.diag(carried), 1.0)
+    off = [(i, j) for i in range(p) for j in range(i + 1, p)]
+    assert np.allclose([carried[i, j] for i, j in off],
+                       [np.exp(-a**2) * unscaled[i, j] for i, j in off],
+                       rtol=1e-15, atol=0)
+    for i, j in off:
+        r, se = _pearson_with_se(P[:, i], P[:, j])
+        assert se < 0.01
+        # within 4 standard errors of the reported truth ...
+        assert abs(r - carried[i, j]) <= 4 * se, (i, j, r, carried[i, j], se)
+        # ... and, where the template is not near 0, far from the unscaled value
+        if abs(unscaled[i, j]) > 0.2:
+            assert abs(r - unscaled[i, j]) > 8 * se, (i, j, r, unscaled[i, j], se)
+    # the signs of the products still carry the unscaled correlation
+    A = np.sign(P)
+    assert np.abs(np.corrcoef(A.T) - unscaled).max() <= 4 / np.sqrt(T) * 4
+
+
+def test_truth_unscaled_without_amplitude_noise():
+    data, truth = tc.simulate_data(
+        datagen="constant", return_corrs=True, set_random_seed=1, T=20, K=6,
+        order=2, amplitude_noise=0.0,
+    )
+    assert np.array_equal(truth["corrs"], truth["requested"])

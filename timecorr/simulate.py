@@ -8,12 +8,13 @@ matrix as close to the requested ``R(t)`` as signs of Gaussians allow (exactly
 ``R(t)`` whenever ``sin(pi R(t) / 2)`` is positive semidefinite), and each is
 spread over a block of ``m = 2**(order-1)`` features whose product is ``A_j``.
 Every proper subset of a block has a product with mean zero, so the structure is
-absent below the embedded order, and the order-``n`` correlation matrix among the
-block products is the achieved latent-sign correlation, which is what the
-returned truth reports.  ``amplitude_noise`` is the standard deviation of the
-log-amplitude of each block's product (each of the ``m`` signs gets log-amplitude
-noise with standard deviation ``amplitude_noise / sqrt(m)``), so it sets the same
-difficulty at every order.
+absent below the embedded order.  ``amplitude_noise`` is the standard deviation
+of the log-amplitude of each block's product (each of the ``m`` signs gets
+log-amplitude noise with standard deviation ``amplitude_noise / sqrt(m)``), so it
+sets the same difficulty at every order.  The order-``n`` correlation matrix
+among the block products, which the returned truth reports, is the achieved
+latent-sign correlation with its off-diagonal entries multiplied by
+``exp(-amplitude_noise**2)``.
 """
 
 import numbers
@@ -346,7 +347,12 @@ def _generate(datagen, p, order, S, T, B, amplitude_noise, rng):
         return [_gaussian(R, mean, rng) for _ in range(S)], truth
 
     G, achieved = _latent_sign_correlation(R)
-    truth["corrs"] = _vectorize(achieved)
+    corrs = _vectorize(achieved)
+    # each block product is A_j * exp(amplitude_noise * z_j) with independent
+    # z_j ~ N(0, 1), so its correlation with another product is the latent-sign
+    # correlation times E[exp(a z)]**2 / E[exp(2 a z)] = exp(-amplitude_noise**2)
+    corrs[:, p:] *= np.exp(-(amplitude_noise**2))
+    truth["corrs"] = corrs
     A = np.sign(_gaussian(G, 0.0, rng))
     A[A == 0] = 1.0  # probability zero; keeps every value a sign
 
@@ -481,10 +487,12 @@ def simulate_data(
 
         - ``"order"``: the embedded order;
         - ``"corrs"``: (T, p(p+1)/2) correlation matrices, in ``mat2vec``
-          layout, that the latent signs (and so the block products) actually
-          have: ``(2 / pi) * arcsin(G)`` for the Gaussian correlation ``G``
-          used, which is the requested template wherever no projection was
-          needed;
+          layout, that the block products actually have.  The latent signs
+          have correlation ``(2 / pi) * arcsin(G)`` for the Gaussian
+          correlation ``G`` used (the requested template wherever no
+          projection was needed); amplitude noise multiplies the
+          off-diagonal entries by ``exp(-amplitude_noise**2)`` (0.96 at the
+          default 0.2), and the diagonal is 1;
         - ``"requested"``: (T, p(p+1)/2) template that was asked for, same
           layout;
         - ``"blocks"``: (p, 2**(order-1)) int array of the column indices of
@@ -598,11 +606,12 @@ def simulate_multi_order(
         ``S > 1``.
     truths : list of dict
         One dict per group, in the order of ``orders``, with the keys of
-        ``simulate_data``'s ``truth``: ``"order"``, ``"corrs"`` (the achieved
-        correlation in mat2vec layout), ``"requested"`` (the template asked
-        for; equal to ``"corrs"`` for order 1 and wherever no projection was
-        needed) and ``"blocks"`` (column indices in ``data``).  Shared by all
-        subjects.
+        ``simulate_data``'s ``truth``: ``"order"``, ``"corrs"`` (the
+        correlation the data carry, in mat2vec layout: for order > 1 the
+        achieved latent-sign correlation with off-diagonal entries multiplied
+        by ``exp(-amplitude_noise**2)``), ``"requested"`` (the template asked
+        for; equal to ``"corrs"`` for order 1) and ``"blocks"`` (column
+        indices in ``data``).  Shared by all subjects.
 
     Raises
     ------

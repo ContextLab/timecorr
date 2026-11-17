@@ -105,7 +105,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   log-amplitude of each block's product). New functions
   `simulate_multi_order`, `carrier_reducer`, `carrier_columns`,
   `nested_template` and `min_features`. For `order > 1`, `return_corrs=True`
-  returns a dict with keys `order`, `corrs` (the correlations the data carry),
+  returns a dict with keys `order`, `corrs` (the correlations the block products carry: the latent-sign correlation with off-diagonal entries times `exp(-amplitude_noise**2)`),
   `requested` and `blocks`. For `order >= 3` a `UserWarning` says that
   variance-based reduction cannot keep the structure. In the higher-order
   tutorial's measurement (lag-matched event contrast, 20 seeds), PCA keeps part

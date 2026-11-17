@@ -156,13 +156,20 @@ def test_timecorr():
 
 # unsure how to test 'across' mode
 
-corrs = timecorr(
-    numpy_array,
-    weights_function=gaussian_weights,
-    weights_params=gaussian_params,
-    cfun=isfc,
-)
-# assert()
+def test_two_timepoint_input_warns_and_returns_zeros():
+    # Every timepoint has fewer than 3 non-zero kernel weights, so the
+    # correlations are undefined: one warning, and zeros in their place.
+    with pytest.warns(UserWarning, match="fewer than 3 non-zero kernel weights"):
+        corrs = timecorr(
+            numpy_array,
+            weights_function=gaussian_weights,
+            weights_params=gaussian_params,
+            cfun=isfc,
+        )
+    assert corrs.shape == (2, 3)
+    assert np.array_equal(corrs, np.zeros((2, 3)))
+
+
 # assert len(corrs.get_time_data()[0]) == len(numpy_array)
 
 

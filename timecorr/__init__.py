@@ -37,5 +37,12 @@ from .helpers import (
     wisfc,
 )
 from .higher_order import features
-from .simulate import simulate_data
+from .simulate import (
+    carrier_columns,
+    carrier_reducer,
+    min_features,
+    nested_template,
+    simulate_data,
+    simulate_multi_order,
+)
 from .timecorr import timecorr

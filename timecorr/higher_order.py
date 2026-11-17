@@ -326,7 +326,9 @@ def features(
     data : numpy.ndarray, pandas.DataFrame, polars.DataFrame, or list of these
         One timepoints-by-features matrix per subject.  A 1-D array or a
         pandas or polars Series is one feature (shape ``(T, 1)``); arrays
-        with more than two dimensions raise ``ValueError``.
+        with more than two dimensions raise ``ValueError``.  NaN handling
+        (NaN samples carry no weight) applies to the input data at order 1;
+        ``X_0`` keeps the NaNs.
     order : int
         Highest order to compute (non-negative integer).  Default: 1.
     weights_function, weights_params : analysis kernel and its parameters
@@ -337,7 +339,10 @@ def features(
     rfun : None, str, dict, or callable
         Analysis-path reducer (see ``helpers.reduce``).  Default: "PCA".
     delta_rfun : None, str, dict, or callable
-        Delta-path reducer.  Default (None): the same as ``rfun``.
+        Delta-path reducer.  Default (None): the same as ``rfun``.  A
+        delta-kernel co-fluctuation matrix ``z z^T`` has rank one, so on the
+        delta path eigenvector centrality equals ``|z| / ||z||`` and the graph
+        measures carry no network structure.
     ndims : int, optional
         Output width of model-based reductions on both paths.  Default (None):
         ``K`` columns for ``K(K+1)/2`` inputs.

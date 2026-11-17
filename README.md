@@ -167,7 +167,7 @@ pip install --upgrade git+https://github.com/ContextLab/timecorr.git
 
 # Requirements
 
-Python 3.10 or later. Continuous integration runs the tests on Linux (Python 3.10 to 3.13); they also pass on macOS. The toolbox has not been tested on Windows.
+Python 3.10 or later. The toolbox is currently supported on Mac and Linux.  It has not been tested on Windows (and we expect key functionality not to work properly on Windows systems).
 
 Dependencies (installed by pip): pydata-wrangler, hypertools>=0.8, numpy, scipy, scikit-learn, pandas, matplotlib. Optional: polars (for polars DataFrame input), and the `test` and `docs` extras (`pip install "timecorr[test]"`, `pip install "timecorr[docs]"`).
 

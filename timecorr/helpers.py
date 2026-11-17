@@ -578,6 +578,11 @@ def _delta_wcorr(a, b, weights):
     return np.einsum("ti,tj->ijt", za, zb)
 
 
+def _wcorr_block_rows(T, Kb, n_products=1):
+    """Rows of ``a`` per block in ``_wcorr_blocks`` (each row pairs with Kb columns)."""
+    return max(1, _WCORR_BLOCK_ELEMENTS // (n_products * T * Kb))
+
+
 def _wcorr_blocks(a, b, weights, autocorrelation):
     """
     Kernel-weighted correlations, computed with matrix products over blocks of
@@ -615,7 +620,7 @@ def _wcorr_blocks(a, b, weights, autocorrelation):
         b0 = np.where(ok_b, b, 0.0)
         n_products = 9
 
-    rows_per_block = max(1, _WCORR_BLOCK_ELEMENTS // (n_products * T * Kb))
+    rows_per_block = _wcorr_block_rows(T, Kb, n_products)
     for i0 in range(0, Ka, rows_per_block):
         i1 = min(Ka, i0 + rows_per_block)
         j0 = i0 if autocorrelation else 0
@@ -821,26 +826,41 @@ def _fisher_symmetrize(c):
     Where one of ``C[i, j]`` and ``C[j, i]`` is exactly +-1 (infinite z), the
     result is that sign; where they are +1 and -1, it is 0.  Entries outside
     [-1, 1] (co-fluctuations from a delta kernel, which are not correlations)
-    are averaged without the transform.
+    are averaged without the transform (see ``_fisher_mean``).
+
+    ``c`` is overwritten and returned.  The work is done a block of timepoints
+    at a time, so the temporaries stay at block size rather than the size of
+    ``c``.
     """
-    ct = c.transpose(1, 0, 2)
-    out = (c + ct) / 2
-    ok = (np.abs(c) <= 1) & (np.abs(ct) <= 1)
-    out[ok] = _fisher_mean(np.stack([c[ok], ct[ok]]), axis=0)
-    return out
+    K = c.shape[0]
+    # _fisher_mean makes about ten temporaries of its input's size (which is
+    # twice the block): keep the block small enough that they stay below the
+    # workspace of wcorr's own blocks
+    step = max(1, _WCORR_BLOCK_ELEMENTS // (16 * max(1, K * K)))
+    for t0 in range(0, c.shape[2], step):
+        block = c[:, :, t0 : t0 + step]
+        block[...] = _fisher_mean(
+            np.stack([block, block.transpose(1, 0, 2)]), axis=0
+        )
+    return c
 
 
 def _fisher_mean(r, axis):
     """
     Average correlations along ``axis`` in Fisher z space: ``z2r(mean(r2z(r)))``.
 
+    Fisher z averaging applies to correlations only.  Where any value along
+    ``axis`` lies outside [-1, 1] (for example a co-fluctuation from a delta
+    kernel), the values are averaged on the raw scale (plain mean) instead.
     Values of exactly +-1 have infinite z.  Where only one sign of infinity
     occurs along ``axis`` the result is that sign (+-1).  Where both +inf and
     -inf occur they are excluded and the finite z values are averaged (0 if
     none remain).  NaN anywhere along ``axis`` gives NaN.  No numpy warnings
     are raised.
     """
-    z = r2z(r)
+    r = np.asarray(r, dtype=np.float64)
+    raw = np.any(np.abs(r) > 1, axis=axis)
+    z = r2z(np.where(np.abs(r) > 1, 0.0, r))
     pos = np.any(np.isposinf(z), axis=axis)
     neg = np.any(np.isneginf(z), axis=axis)
     nan = np.any(np.isnan(z), axis=axis)
@@ -848,6 +868,7 @@ def _fisher_mean(r, axis):
     total = np.where(finite, z, 0.0).sum(axis=axis)
     mean = z2r(_safe_divide(total, finite.sum(axis=axis).astype(np.float64)))
     out = np.where(pos & ~neg, 1.0, np.where(neg & ~pos, -1.0, mean))
+    out = np.where(raw, r.mean(axis=axis), out)
     return np.where(nan, np.nan, out)
 
 
@@ -921,6 +942,8 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         if not np.array_equal(a, b, equal_nan=True):
             wc = _fisher_symmetrize(wc)
         corrs.append(mat2vec(wc))
+        # free the (K, K, T) array before the next subject's is allocated
+        del wc
 
     return corrs
 
@@ -1038,6 +1061,10 @@ def corrmean_combine(corrs):
     entry of exactly +-1 has infinite z: where only one sign occurs across
     matrices the mean is that sign; where both +1 and -1 occur they are
     excluded and the remaining values are averaged (0 if none remain).
+    Fisher z applies to correlations only: an entry where any matrix has a
+    value outside [-1, 1] (for example the co-fluctuations of a delta kernel,
+    ``eye_weights``) is averaged on the raw scale (plain mean), with no NaN
+    and no warning.
 
     Parameters
     ----------
@@ -1105,7 +1132,10 @@ def tstat_combine(corrs, return_pvals=False):
     Element-wise one-sample t-tests (mean 0) across the matrices in a list.
 
     Each entry is Fisher z-transformed (``r2z``) and tested across the list
-    with ``scipy.stats.ttest_1samp``.
+    with ``scipy.stats.ttest_1samp``.  Fisher z applies to correlations only:
+    an entry where any matrix has a value outside [-1, 1] (for example the
+    co-fluctuations of a delta kernel, ``eye_weights``) is tested on the raw
+    values, with no NaN and no warning.
 
     Parameters
     ----------
@@ -1139,7 +1169,11 @@ def tstat_combine(corrs, return_pvals=False):
         ts = corrs
         ps = np.nan * np.zeros_like(corrs)
     else:
-        ts, ps = ttest(r2z(np.stack(corrs, axis=2)), popmean=0, axis=2)
+        stacked = np.stack(corrs, axis=2)
+        outside = np.abs(stacked) > 1
+        raw = np.any(outside, axis=2, keepdims=True)
+        vals = np.where(raw, stacked, r2z(np.where(outside, 0.0, stacked)))
+        ts, ps = ttest(vals, popmean=0, axis=2)
 
     if return_pvals:
         return ts, ps

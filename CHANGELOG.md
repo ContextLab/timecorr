@@ -39,6 +39,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `corrmean_combine`: the diagonal of averaged autocorrelations is 1 (it was
   0); where +1 and -1 both occur in a Fisher z average they are excluded and
   the remaining values are averaged.
+- Fisher z averaging applies to correlations only: in `corrmean_combine`,
+  `tstat_combine` and the ISFC symmetrization, an entry where any value lies
+  outside [-1, 1] (the co-fluctuations of a delta kernel, `eye_weights`) is
+  combined on the raw scale (plain mean; t-statistic of the raw values)
+  instead of giving NaN.
 - Input formatting goes through pydata-wrangler: numpy arrays, pandas
   DataFrames, polars DataFrames, and lists of them are accepted; inputs are
   never modified; subjects with mismatched shapes and non-numeric columns
@@ -83,8 +88,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`eye_weights`, `autofc`) gives the unblurred co-fluctuations passed to the
   next order, so each order is blurred by the kernel once. Separate reducers
   for the two paths (`rfun`, `delta_rfun`); `rfun=None` runs without
-  reduction, guarded by a memory estimate (`max_memory_gb`, default 4 GB) that
-  raises `MemoryError` before allocating.
+  reduction, guarded by an estimate of each step's peak memory for all
+  subjects together (`max_memory_gb`, default 4 GB) that raises `MemoryError`
+  before allocating. The estimate counts the `(d, d, T)` correlation array,
+  every subject's results, the `T x T` kernels and the block temporaries; it
+  does not count reducers or `combine` functions other than `null_combine`.
 - `timecorr.higher_order.two_path_step` (one order of the pipeline) and
   `timecorr.higher_order.estimate_memory_gb`.
 - One-sided kernels: `tc.one_sided`; `direction` (`'backward'`, `'forward'`)

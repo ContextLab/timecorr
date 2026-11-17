@@ -16,6 +16,7 @@ Temporal blur is therefore applied once, at the order being analyzed.
 import numbers
 
 from .helpers import (
+    _wcorr_block_rows,
     autofc,
     eye_weights,
     format_data,
@@ -28,21 +29,45 @@ from .timecorr import timecorr
 
 _BYTES_PER_GB = 1e9
 
+# Block temporaries of the correlation step, in multiples of one block
+# (``_wcorr_blocks`` keeps about this many block-sized arrays alive at once;
+# measured with tracemalloc for isfc and autofc).
+_WORKSPACE_BLOCKS = 6
 
-def _step_gb(d, T):
-    """Memory (GB) of one unreduced correlation step on a (T, d) input."""
-    v = d * (d + 1) // 2
-    return (T * d * d * 8 + T * v * 8) / _BYTES_PER_GB
 
-
-def estimate_memory_gb(K, order, T):
+def _step_gb(d, T, n_subjects=1, n_outputs=1):
     """
-    Estimate the memory used by each order of an unreduced feature pipeline.
+    Peak memory (GB) of one unreduced correlation step on ``n_subjects`` (T, d)
+    inputs that holds ``n_outputs`` (T, d(d+1)/2) results per subject.
+    """
+    d, T, S = int(d), int(T), int(n_subjects)
+    v = d * (d + 1) // 2
+    block = min(d, _wcorr_block_rows(T, d)) * T * d
+    elements = (
+        d * d * T  # the (d, d, T) correlation array of one subject
+        + S * T * v  # the analysis path's vectorized results, every subject
+        + 3 * S * T * d  # the inputs (and the copies made while formatting)
+        + 3 * T * T  # the kernel, its working copy and its absolute value
+        # the analysis path's block temporaries, or (when the delta path is
+        # computed too: it has no block temporaries) the delta results
+        + max(_WORKSPACE_BLOCKS * block, (n_outputs - 1) * S * T * v)
+    )
+    return elements * 8 / _BYTES_PER_GB
+
+
+def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False):
+    """
+    Estimate the peak memory of each order of an unreduced feature pipeline.
 
     Without reduction the number of features grows from ``d`` to ``d(d+1)/2`` at
     every order, starting from ``K``.  The correlation step at order ``k``
-    allocates a ``(d_{k-1}, d_{k-1}, T)`` array and a ``(T, d_k)`` vectorized
-    result, in float64, for each subject.
+    allocates one ``(d_{k-1}, d_{k-1}, T)`` array at a time, holds a
+    ``(T, d_k)`` vectorized result for every subject (two per subject once
+    the delta path has run too), and the analysis path uses block temporaries
+    of bounded size, all in float64.  The estimate is the peak of
+    ``tc.features(..., rfun=None)`` with the default ``combine``
+    (``null_combine``) for data without NaNs; other ``combine`` functions and
+    reducers allocate more.
 
     Parameters
     ----------
@@ -52,6 +77,11 @@ def estimate_memory_gb(K, order, T):
         Highest order computed.
     T : int
         Number of timepoints.
+    n_subjects : int, optional
+        Number of subjects.  Default: 1.
+    return_delta : bool, optional
+        Whether the delta path of the last order is computed too (as
+        ``features(..., return_delta=True)`` does).  Default: False.
 
     Returns
     -------
@@ -62,24 +92,26 @@ def estimate_memory_gb(K, order, T):
     Examples
     --------
     >>> from timecorr.higher_order import estimate_memory_gb
-    >>> [round(x, 6) for x in estimate_memory_gb(4, 2, 100)]
-    [0.0, 2.1e-05, 0.000124]
+    >>> [round(x, 3) for x in estimate_memory_gb(100, 2, 200, n_subjects=3)]
+    [0.0, 0.139, 102.484]
     """
     K = int(K)
     T = int(T)
     estimates = [0.0]
     d = K
-    for _ in range(int(order)):
-        estimates.append(_step_gb(d, T))
+    for k in range(1, int(order) + 1):
+        both_paths = k < order or return_delta
+        estimates.append(_step_gb(d, T, n_subjects, 2 if both_paths else 1))
         d = d * (d + 1) // 2
     return estimates
 
 
-def _largest_k(order, T, max_memory_gb):
+def _largest_k(order, T, max_memory_gb, n_subjects=1, return_delta=False):
     """Largest K whose unreduced estimates up to ``order`` all fit (0 if none)."""
 
     def fits(k):
-        return max(estimate_memory_gb(k, order, T)) <= max_memory_gb
+        est = estimate_memory_gb(k, order, T, n_subjects, return_delta)
+        return max(est) <= max_memory_gb
 
     if not fits(1):
         return 0
@@ -324,11 +356,14 @@ def features(
         not computed, so ``delta_rfun`` is not called at that step (and is not
         called at all when ``order`` is 1).  Default: False.
     max_memory_gb : float
-        Upper limit, in gigabytes (1e9 bytes), on the estimated memory of any one
-        correlation step (see ``estimate_memory_gb``).  It is checked on every
-        step, because the (d, d, T) correlation array is allocated whether or
-        not the result is then reduced; for large K, raising it is the remedy.
-        Default: 4.0.
+        Upper limit, in gigabytes (1e9 bytes), on the estimated peak memory of
+        any one correlation step for all subjects together (see
+        ``estimate_memory_gb``; the estimate covers the correlation step and
+        the unreduced results it holds, not the memory of reducers or of
+        ``combine`` functions other than ``null_combine``).  It is checked on
+        every step, because the (d, d, T) correlation array is allocated
+        whether or not the result is then reduced; for large K, raising it is
+        the remedy.  Default: 4.0.
 
     Returns
     -------
@@ -375,33 +410,35 @@ def features(
     T, K = subjects[0].shape
     delta_unreduced = (rfun if delta_rfun is None else delta_rfun) is None
 
+    S = len(subjects)
     if delta_unreduced:
         # widths are known in advance: refuse before computing anything
-        estimates = estimate_memory_gb(K, order, T)
+        estimates = estimate_memory_gb(K, order, T, S, return_delta)
         for k in range(1, order + 1):
             if estimates[k] > max_memory_gb:
-                fit = _largest_k(order, T, max_memory_gb)
+                fit = _largest_k(order, T, max_memory_gb, S, return_delta)
                 raise MemoryError(
                     f"Unreduced features at order {k} need about {estimates[k]:.3g} GB "
-                    f"per subject (K={K}, T={T}), more than max_memory_gb="
-                    f"{max_memory_gb}. The largest number of features that fits "
-                    f"orders up to {order} is K={fit}. Pass a reducer (rfun, "
-                    "delta_rfun), lower the order, or raise max_memory_gb."
+                    f"(K={K}, T={T}, {S} subject{'s' if S > 1 else ''}), more than "
+                    f"max_memory_gb={max_memory_gb}. The largest number of features "
+                    f"that fits orders up to {order} is K={fit}. Pass a reducer "
+                    "(rfun, delta_rfun), lower the order, or raise max_memory_gb."
                 )
 
     X = [subjects]
     D = [subjects]
     for k in range(1, order + 1):
         d = D[-1][0].shape[1]
-        step = _step_gb(d, T)
+        both_paths = k < order or return_delta
+        step = _step_gb(d, T, S, 2 if both_paths else 1)
         if step > max_memory_gb:
-            fit = _largest_k(1, T, max_memory_gb)
+            fit = _largest_k(1, T, max_memory_gb, S, both_paths)
             raise MemoryError(
-                f"The correlation step at order {k} needs about {step:.3g} GB per "
-                f"subject ({d} input features, T={T}), more than max_memory_gb="
-                f"{max_memory_gb}. The largest number of input features that fits "
-                f"one step is K={fit}. Reduce to fewer features (ndims, rfun, "
-                "delta_rfun) or raise max_memory_gb."
+                f"The correlation step at order {k} needs about {step:.3g} GB "
+                f"({d} input features, T={T}, {S} subject{'s' if S > 1 else ''}), "
+                f"more than max_memory_gb={max_memory_gb}. The largest number of "
+                f"input features that fits one step is K={fit}. Reduce to fewer "
+                "features (ndims, rfun, delta_rfun) or raise max_memory_gb."
             )
         analysis = dict(
             weights_function=weights_function,

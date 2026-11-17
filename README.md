@@ -224,7 +224,7 @@ pytest --doctest-modules timecorr/
 # Memory and run time
 
 - `timecorr` builds a `T x T` kernel and a `K x K x T` array of correlations for each subject, so memory grows with `T**2` and with `K**2 * T`.
-- Without reduction, the number of features grows from `K` to `K(K+1)/2` at every order. `tc.features(..., rfun=None)` estimates the memory of each step and raises `MemoryError` before allocating more than `max_memory_gb` (default 4 GB); the message gives the largest number of features that fits. `timecorr.higher_order.estimate_memory_gb(K, order, T)` returns the estimates.
+- Without reduction, the number of features grows from `K` to `K(K+1)/2` at every order. `tc.features(..., rfun=None)` estimates the memory of each step and raises `MemoryError` before allocating more than `max_memory_gb` (default 4 GB); the message gives the largest number of features that fits. `timecorr.higher_order.estimate_memory_gb(K, order, T, n_subjects)` returns the estimates (in GB, for all subjects together).
 - Dimensionality reduction (`rfun`, `delta_rfun`) keeps the number of features fixed at each order.
 
 # Getting Help

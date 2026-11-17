@@ -275,10 +275,28 @@ def test_estimate_memory_gb_values():
     est = estimate_memory_gb(4, 2, 100)
     assert len(est) == 3
     assert est[0] == 0.0
-    # order 1: 4 -> 10 columns; order 2: 10 -> 55 columns
-    assert est[1] == pytest.approx((100 * 4**2 * 8 + 100 * 10 * 8) / 1e9)
-    assert est[2] == pytest.approx((100 * 10**2 * 8 + 100 * 55 * 8) / 1e9)
+    # order 1: 4 -> 10 columns; order 2: 10 -> 55 columns.  Terms (float64
+    # elements): the (d, d, T) array, the results of every subject, 3 copies of
+    # the inputs, 3 T x T kernels, and the larger of 6 block temporaries (one
+    # block is all d x d pairs at these sizes) and the delta-path results
+    # (order 1 computes both paths; order 2 is the last and only analyzed).
+    assert est[1] == pytest.approx(
+        (100 * 4**2 + 100 * 10 + 3 * 100 * 4 + 3 * 100**2
+         + max(6 * 4 * 100 * 4, 100 * 10)) * 8 / 1e9
+    )
+    assert est[2] == pytest.approx(
+        (100 * 10**2 + 100 * 55 + 3 * 100 * 10 + 3 * 100**2
+         + max(6 * 10 * 100 * 10, 0)) * 8 / 1e9
+    )
     assert estimate_memory_gb(4, 0, 100) == [0.0]
+    # more subjects hold more results; the delta path of the last order counts
+    # only when it is returned
+    three = estimate_memory_gb(4, 2, 100, n_subjects=3)
+    assert three[2] == pytest.approx(
+        (100 * 10**2 + 3 * 100 * 55 + 3 * 3 * 100 * 10 + 3 * 100**2
+         + 6 * 10 * 100 * 10) * 8 / 1e9
+    )
+    assert estimate_memory_gb(4, 2, 100, return_delta=True)[2] >= est[2]
 
 
 def largest_k_brute_force(order, T, limit):
@@ -334,3 +352,38 @@ def test_backward_corrmean_pipeline_is_finite_and_warns_only_for_undefined_rows(
         "2 of 60 timepoints have fewer than 3 non-zero kernel weights; their "
         "correlations are undefined and set to 0.",
     )}
+
+
+@pytest.mark.parametrize("cfun_name", ["isfc", "autofc"])
+@pytest.mark.parametrize("K,T", [(100, 200), (300, 300)])
+def test_memory_estimate_matches_traced_peak_for_three_subjects(cfun_name, K, T):
+    """The guard's estimate is honest for the default (isfc) list path: the
+    traced peak of a 3-subject unreduced order-1 run is within 1.25x of it."""
+    import tracemalloc
+
+    S = 3
+    data = make_data(K=K, T=T, n_subjects=S)
+    est = estimate_memory_gb(K, 1, T, n_subjects=S)[1]
+    tracemalloc.start()
+    try:
+        X = tc.features(data, order=1, rfun=None, cfun=getattr(tc, cfun_name),
+                        weights_params={"var": 100})
+        peak = tracemalloc.get_traced_memory()[1] / 1e9
+    finally:
+        tracemalloc.stop()
+    assert len(X[1]) == S and X[1][0].shape == (T, K * (K + 1) // 2)
+    assert est / 1.25 <= peak <= 1.25 * est, (peak, est)
+
+
+def test_memory_guard_counts_subjects():
+    # order 2 of K=20, T=300: about 0.56 GB for one subject, 0.67 GB for three
+    one = estimate_memory_gb(20, 2, 300)[2]
+    three = estimate_memory_gb(20, 2, 300, n_subjects=3)[2]
+    assert one < 0.6 < three
+    data = make_data(K=20, T=300, n_subjects=3)
+    with pytest.raises(MemoryError) as info:
+        tc.features(data, order=2, rfun=None, max_memory_gb=0.6)
+    assert f"{three:.3g} GB" in str(info.value)
+    assert "3 subjects" in str(info.value)
+    X = tc.features(data[0], order=2, rfun=None, max_memory_gb=0.6)
+    assert X[2].shape == (300, 210 * 211 // 2)

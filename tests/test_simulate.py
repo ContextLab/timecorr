@@ -369,7 +369,10 @@ def test_nested_template_matches_empirical_cofluctuation_correlations():
     data, corrs = tc.simulate_data(
         datagen="constant", return_corrs=True, set_random_seed=5, T=20000, K=4
     )
-    _, D = tc.features(data, order=1, rfun=None, return_delta=True)
+    # T=20000: the three T x T kernel arrays of the analysis step alone take
+    # about 9.6 GB, which the memory guard counts (default limit 4 GB)
+    _, D = tc.features(data, order=1, rfun=None, return_delta=True,
+                       max_memory_gb=12.0)
     empirical = np.corrcoef(D[1].T)
     truth = tc.nested_template(corrs[0])
     assert truth.shape == (55,)

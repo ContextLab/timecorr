@@ -537,3 +537,60 @@ def test_timecorr_positional_order():
         "rfun",
         "include_zero",
     ]
+
+
+# Fisher z averaging applies to correlations only: entries with any value
+# outside [-1, 1] (delta-kernel co-fluctuations) are combined on the raw scale.
+def test_corrmean_combine_raw_mean_outside_unit_interval():
+    out = _no_warning_corrmean([[2.0, 0.5, 0.2], [0.5, 1.0, -3.0], [-0.3, 0.3, 0.4]])
+    assert np.allclose(out[0], np.mean([2.0, 0.5, -0.3]), atol=1e-15, rtol=0)
+    assert out[1] == 1.0  # all inside [-1, 1]: Fisher rule (+1 wins)
+    assert np.allclose(out[2], np.mean([0.2, -3.0, 0.4]), atol=1e-15, rtol=0)
+
+
+def test_tstat_combine_raw_scale_outside_unit_interval():
+    from scipy.stats import ttest_1samp
+
+    corrs = [np.array([[2.0, 0.5]]), np.array([[0.5, 0.2]]), np.array([[1.5, -0.1]])]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ts = tc.tstat_combine(corrs)
+    assert np.all(np.isfinite(ts))
+    assert np.isclose(ts[0, 0], ttest_1samp([2.0, 0.5, 1.5], 0).statistic)
+    assert np.isclose(
+        ts[0, 1], ttest_1samp(np.arctanh([0.5, 0.2, -0.1]), 0).statistic
+    )
+
+
+@pytest.mark.parametrize("combine", ["corrmean_combine", "tstat_combine"])
+def test_delta_kernel_group_combines_are_finite(combine):
+    rng = _rng(31)
+    data = [rng.randn(40, 4) for _ in range(3)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = tc.timecorr(
+            data, weights_function=eye_weights, cfun=tc.isfc,
+            combine=getattr(tc, combine),
+        )
+    assert out.shape == (40, 10)
+    assert np.all(np.isfinite(out))
+    if combine == "corrmean_combine":
+        # co-fluctuations are unbounded: the group value is their plain mean
+        per = tc.timecorr(data, weights_function=eye_weights, cfun=tc.isfc)
+        raw = np.any(np.abs(np.stack(per)) > 1, axis=0)
+        assert raw.any()
+        assert np.allclose(out[raw], np.mean(np.stack(per), axis=0)[raw],
+                           atol=1e-14, rtol=0)
+
+
+def test_features_corrmean_combine_finite_with_pca_and_delta_kernel():
+    rng = _rng(32)
+    data = [rng.randn(60, 5) for _ in range(3)]
+    for kernel in (gaussian_weights, eye_weights):
+        # no NaN reaches the reducer (hypertools would warn and impute it)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            X = tc.features(data, order=2, rfun="PCA", combine=tc.corrmean_combine,
+                            weights_function=kernel, weights_params=None)
+        for k in (1, 2):
+            assert np.all(np.isfinite(X[k]))

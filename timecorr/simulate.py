@@ -3,11 +3,14 @@ Simulated timeseries with known dynamic correlations.
 
 Order 1 data are Gaussian with a time-varying correlation matrix (the template).
 For ``order > 1`` the template is embedded at exactly that order with the
-sign-parity cascade: ``p`` latent signs ``A_j(t)`` have correlation matrix
-``R(t)``, and each is spread over a block of ``m = 2**(order-1)`` features whose
-product is ``A_j``.  Every proper subset of a block has a product with mean zero,
-so the structure is absent below the embedded order and the order-``n``
-correlation matrix among the block products is ``R(t)``.
+sign-parity cascade: ``p`` latent signs ``A_j(t)`` are drawn with a correlation
+matrix as close to the requested ``R(t)`` as signs of Gaussians allow (exactly
+``R(t)`` whenever ``sin(pi R(t) / 2)`` is positive semidefinite), and each is
+spread over a block of ``m = 2**(order-1)`` features whose product is ``A_j``.
+Every proper subset of a block has a product with mean zero, so the structure is
+absent below the embedded order, and the order-``n`` correlation matrix among the
+block products is the achieved latent-sign correlation, which is what the
+returned truth reports.
 """
 
 import numbers
@@ -328,19 +331,19 @@ def _generate(datagen, p, order, S, T, B, amplitude_noise, rng):
         raise ValueError(f"datagen must be one of {_DATAGENS}; got {datagen!r}.")
     R = _template(datagen, p, T, B, rng)
     m = 2 ** (order - 1)
+    requested = _vectorize(R)
     truth = {
         "order": order,
-        "corrs": _vectorize(R),
+        "corrs": requested.copy(),
+        "requested": requested,
         "blocks": np.arange(p * m).reshape(p, m),
     }
     if order == 1:
         mean = 0.0 if datagen == "random" else 0.1
         return [_gaussian(R, mean, rng) for _ in range(S)], truth
 
-    # latent signs A_j(t) with corr R(t): sign of a Gaussian with corr sin(pi R / 2)
-    G = np.sin(np.pi * R / 2)
-    w, v = np.linalg.eigh(G)
-    G = (v * np.clip(w, 1e-6, None)[:, np.newaxis, :]) @ np.transpose(v, (0, 2, 1))
+    G, achieved = _latent_sign_correlation(R)
+    truth["corrs"] = _vectorize(achieved)
     A = np.sign(_gaussian(G, 0.0, rng))
     A[A == 0] = 1.0  # probability zero; keeps every value a sign
 
@@ -353,6 +356,38 @@ def _generate(datagen, p, order, S, T, B, amplitude_noise, rng):
             X = X * np.exp(amplitude_noise * rng.standard_normal(X.shape))
         data.append(X)
     return data, truth
+
+
+def _latent_sign_correlation(R):
+    """
+    Gaussian correlation G whose signs have correlation as close to R as possible.
+
+    Signs of zero-mean Gaussians with correlation ``G`` have correlation
+    ``(2 / pi) * arcsin(G)``, so ``G = sin(pi R / 2)`` reproduces ``R`` exactly
+    when that matrix is positive semidefinite.  Otherwise (per timepoint) its
+    eigenvalues are clipped at 1e-6 and it is rescaled to unit diagonal; the
+    achieved sign correlation ``(2 / pi) * arcsin(G)`` then differs from ``R``.
+
+    Returns ``(G, achieved)``, both (T, p, p); ``achieved`` is ``R`` itself at
+    timepoints that need no clipping.
+    """
+    G = np.sin(np.pi * R / 2)
+    w, v = np.linalg.eigh(G)
+    clipped = w.min(axis=1) < 1e-6
+    achieved = R.copy()
+    if clipped.any():
+        wc, vc = np.clip(w[clipped], 1e-6, None), v[clipped]
+        Gc = (vc * wc[:, np.newaxis, :]) @ np.transpose(vc, (0, 2, 1))
+        s = np.sqrt(np.einsum("tii->ti", Gc))
+        Gc = Gc / (s[:, :, np.newaxis] * s[:, np.newaxis, :])
+        Gc = (Gc + np.transpose(Gc, (0, 2, 1))) / 2
+        idx = np.arange(Gc.shape[1])
+        Gc[:, idx, idx] = 1.0
+        G[clipped] = Gc
+        Ac = (2 / np.pi) * np.arcsin(np.clip(Gc, -1.0, 1.0))
+        Ac[:, idx, idx] = 1.0
+        achieved[clipped] = Ac
+    return G, achieved
 
 
 def _check_common(S, T, amplitude_noise):
@@ -383,9 +418,13 @@ def simulate_data(
     timepoint ``t`` is the template ``R(t)``.  With ``order=n > 1`` the template
     is embedded at exactly order ``n`` by the sign-parity cascade: ``K`` must be
     ``p * 2**(n-1)``, the features form ``p`` blocks of ``2**(n-1)`` columns,
-    and the order-``n`` correlation matrix among the ``p`` block products is
-    ``R(t)``.  The products of proper subsets of a block have mean zero, so
-    there is no structure at orders below ``n``.
+    and the order-``n`` correlation matrix among the ``p`` block products is the
+    correlation of ``p`` latent signs.  That equals ``R(t)`` whenever
+    ``sin(pi R(t) / 2)`` is positive semidefinite; otherwise the closest
+    reachable matrix is used (see ``truth`` below).  This happens more often as
+    ``p`` grows (for ``random_corrmat`` templates: rarely at p=3, mostly at p=6,
+    almost always at p=10).  The products of proper subsets of a block have mean
+    zero, so there is no structure at orders below ``n``.
 
     All subjects share the template (and, for ``order > 1``, the block layout and
     the latent signs ``A_j(t)``); everything else is drawn independently per
@@ -411,7 +450,8 @@ def simulate_data(
         Number of features.  For ``order > 1`` it must equal
         ``p * 2**(order-1)`` with ``p >= 2`` (see ``min_features``).  Default: 10.
     B : int
-        Number of events for ``datagen="block"``.  Default: 5.
+        Number of events for ``datagen="block"`` (positive integer; checked for
+        every ``datagen``).  Default: 5.
     order : int
         Order at which the template is embedded (positive integer).  Default: 1.
     amplitude_noise : float
@@ -429,9 +469,18 @@ def simulate_data(
         when ``S > 1``).
     truth : dict or list of dict
         Only with ``return_corrs=True`` and ``order > 1`` (in place of
-        ``corrs``): ``{"order": order, "corrs": (T, p(p+1)/2) template in
-        mat2vec layout, "blocks": (p, 2**(order-1)) int array of the column
-        indices of each block}`` (a list of S identical dicts when ``S > 1``).
+        ``corrs``): a dict (a list of S identical dicts when ``S > 1``) with
+
+        - ``"order"``: the embedded order;
+        - ``"corrs"``: (T, p(p+1)/2) correlation matrices, in ``mat2vec``
+          layout, that the latent signs (and so the block products) actually
+          have: ``(2 / pi) * arcsin(G)`` for the Gaussian correlation ``G``
+          used, which is the requested template wherever no projection was
+          needed;
+        - ``"requested"``: (T, p(p+1)/2) template that was asked for, same
+          layout;
+        - ``"blocks"``: (p, 2**(order-1)) int array of the column indices of
+          each block.
 
     Raises
     ------
@@ -472,6 +521,7 @@ def simulate_data(
     if datagen not in _DATAGENS:
         raise ValueError(f"datagen must be one of {_DATAGENS}; got {datagen!r}.")
     S, T, amplitude_noise = _check_common(S, T, amplitude_noise)
+    B = _check_positive_int("B", B)
     K = _check_positive_int("K", K)
     p = _template_size(K, order)
     rng = _make_rng(set_random_seed)
@@ -530,10 +580,12 @@ def simulate_multi_order(
         A (T, sum of the group widths) array, or a list of S of them when
         ``S > 1``.
     truths : list of dict
-        One dict per group, in the order of ``orders``: ``{"order",
-        "corrs": (T, p(p+1)/2) template in mat2vec layout, "blocks":
-        (p, 2**(order-1)) int array of column indices in ``data``}``.  Shared by
-        all subjects.
+        One dict per group, in the order of ``orders``, with the keys of
+        ``simulate_data``'s ``truth``: ``"order"``, ``"corrs"`` (the achieved
+        correlation in mat2vec layout), ``"requested"`` (the template asked
+        for; equal to ``"corrs"`` for order 1 and wherever no projection was
+        needed) and ``"blocks"`` (column indices in ``data``).  Shared by all
+        subjects.
 
     Raises
     ------
@@ -563,6 +615,7 @@ def simulate_multi_order(
     if datagen not in _DATAGENS:
         raise ValueError(f"datagen must be one of {_DATAGENS}; got {datagen!r}.")
     S, T, amplitude_noise = _check_common(S, T, amplitude_noise)
+    B = _check_positive_int("B", B)
     min_features(1, p)  # validates p
     p = int(p)
     rng = _make_rng(set_random_seed)

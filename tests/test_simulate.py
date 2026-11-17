@@ -216,7 +216,8 @@ def test_order2_truth_structure():
         datagen="ramping", return_corrs=True, set_random_seed=0, T=50, K=12, order=2
     )
     assert data.shape == (50, 12)
-    assert set(truth) == {"order", "corrs", "blocks"}
+    assert set(truth) == {"order", "corrs", "requested", "blocks"}
+    assert truth["requested"].shape == (50, 21)
     assert truth["order"] == 2
     assert truth["corrs"].shape == (50, 21)
     assert np.array_equal(truth["blocks"], np.arange(12).reshape(6, 2))
@@ -255,6 +256,87 @@ def test_sign_parity_cascade_order3():
         assert abs(np.mean(np.prod(signs[:, b[:3]], axis=1))) < 0.06
         for i in b:
             assert abs(np.mean(signs[:, i])) < 0.06
+
+
+def _needs_clipping(corrs):
+    """Whether sin(pi R / 2) has an eigenvalue below the generator's 1e-6 floor."""
+    G = np.sin(np.pi * vec2mat(corrs) / 2)
+    return np.linalg.eigvalsh(np.transpose(G, (2, 0, 1))).min(axis=1) < 1e-6
+
+
+def test_truth_is_the_achieved_correlation_at_p10():
+    # p=10: sin(pi R / 2) is almost never PSD, so the requested template cannot
+    # be reached exactly.  corr of two +/-1 signs has standard error at most
+    # 1/sqrt(T) = 1/sqrt(40000) = 0.005; the 0.03 tolerance is 6 standard errors.
+    data, truth = tc.simulate_data(
+        datagen="constant",
+        return_corrs=True,
+        set_random_seed=21,
+        T=40000,
+        K=20,
+        order=2,
+    )
+    assert _needs_clipping(truth["requested"][:1]).all()
+    A = np.prod(np.sign(data[:, truth["blocks"]]), axis=2)
+    empirical = np.corrcoef(A.T)
+    assert np.abs(empirical - vec2mat(truth["corrs"][0])).max() <= 0.03
+    # the requested template differs from what the data carry
+    assert np.abs(vec2mat(truth["requested"][0]) - empirical).max() > 0.05
+    assert np.allclose(truth["corrs"][:, :10], 1.0)
+    assert np.linalg.eigvalsh(vec2mat(truth["corrs"][0])).min() >= -1e-10
+
+
+def test_truth_is_the_achieved_correlation_block_p6():
+    # two events of 20000 timepoints: standard error <= 1/sqrt(20000) = 0.0071,
+    # tolerance 0.04 is more than 5 standard errors
+    T = 40000
+    data, truth = tc.simulate_data(
+        datagen="block",
+        return_corrs=True,
+        set_random_seed=3,
+        T=T,
+        K=12,
+        B=2,
+        order=2,
+    )
+    clipped = _needs_clipping(truth["requested"])
+    assert clipped.any()
+    A = np.prod(np.sign(data[:, truth["blocks"]]), axis=2)
+    for event in (slice(0, T // 2), slice(T // 2, T)):
+        target = vec2mat(truth["corrs"][event][0])
+        assert np.abs(np.corrcoef(A[event].T) - target).max() <= 0.04
+    # unclipped timepoints report the requested template exactly
+    assert np.array_equal(truth["corrs"][~clipped], truth["requested"][~clipped])
+    assert not np.allclose(truth["corrs"][clipped], truth["requested"][clipped])
+
+
+def test_truth_equals_request_when_no_clipping_is_needed():
+    data, truth = tc.simulate_data(
+        datagen="constant", return_corrs=True, set_random_seed=1, T=20, K=6, order=2
+    )
+    assert not _needs_clipping(truth["requested"]).any()
+    assert np.array_equal(truth["corrs"], truth["requested"])
+
+
+def test_multi_order_truth_is_achieved_correlation():
+    data, truths = tc.simulate_multi_order(
+        [1, 2], p=10, set_random_seed=21, T=40000, datagen="constant"
+    )
+    assert np.array_equal(truths[0]["corrs"], truths[0]["requested"])
+    t = truths[1]
+    assert _needs_clipping(t["requested"][:1]).all()
+    A = np.prod(np.sign(data[:, t["blocks"]]), axis=2)
+    # same standard-error argument as the p=10 test above
+    assert np.abs(np.corrcoef(A.T) - vec2mat(t["corrs"][0])).max() <= 0.03
+
+
+@pytest.mark.parametrize("datagen", DATAGENS)
+@pytest.mark.parametrize("B", [0, -2, 2.5])
+def test_bad_B_raises_for_every_datagen(datagen, B):
+    with pytest.raises(ValueError, match="B must be a positive integer"):
+        tc.simulate_data(datagen=datagen, B=B, K=4)
+    with pytest.raises(ValueError, match="B must be a positive integer"):
+        tc.simulate_multi_order([2], p=3, datagen=datagen, B=B)
 
 
 # ------------------------------------------------------------ nested template

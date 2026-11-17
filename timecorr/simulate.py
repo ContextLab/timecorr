@@ -505,7 +505,12 @@ def simulate_data(
         When the template has ``p = 2`` features (its correlation matrix has a
         single entry), and when ``order >= 3``, because variance-based reduction
         such as PCA cannot retain structure that exists only at order >= 3 (use
-        ``carrier_reducer`` or ``rfun=None``).
+        ``carrier_reducer`` or ``rfun=None``).  Measured in the higher-order
+        tutorial (lag-matched event contrast, 20 seeds, PCA on both paths):
+        structure embedded at order 2 is partly kept (0.21, against 0.08 for
+        noise and 0.47 with ``carrier_reducer``), so no warning is issued at
+        order 2; structure embedded at order 3 is not kept (0.00, against
+        0.02 for noise and 0.48 with ``carrier_reducer``).
 
     Examples
     --------

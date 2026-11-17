@@ -94,7 +94,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `simulate_multi_order`, `carrier_reducer`, `carrier_columns`,
   `nested_template` and `min_features`. For `order > 1`, `return_corrs=True`
   returns a dict with keys `order`, `corrs` (the correlations the data carry),
-  `requested` and `blocks`.
+  `requested` and `blocks`. For `order >= 3` a `UserWarning` says that
+  variance-based reduction cannot keep the structure. In the higher-order
+  tutorial's measurement (lag-matched event contrast, 20 seeds), PCA keeps part
+  of structure embedded at order 2 (0.21, against 0.08 for noise and 0.47 with
+  `carrier_reducer`) and none of structure embedded at order 3 (0.00, against
+  0.02 for noise and 0.48 with `carrier_reducer`).
 - New tutorial (`docs/tutorial/higher_order_tutorial.ipynb`) and gallery
   examples for one-sided kernels and recovery of simulated structure by order.
   The other three tutorials and the existing examples were updated to run on

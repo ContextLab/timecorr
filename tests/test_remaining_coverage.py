@@ -83,10 +83,17 @@ class TestRemainingCoverage:
         assert np.allclose(result, 0)
 
     def test_timepoint_decoder_nfolds_warning(self):
-        """nfolds=1 holds no one out: timepoint_decoder raises."""
+        """Test nfolds=1 warning at lines 592-594."""
+        # Create simple test data
         data = np.array([np.random.randn(8, 4) for _ in range(2)])
-        with pytest.raises(ValueError, match="nfolds"):
-            timepoint_decoder(data, nfolds=1, level=0)
+
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            result = timepoint_decoder(data, nfolds=1, level=0)
+            # Should trigger warning about circular analysis
+            assert len(w) > 0
+            assert "circular" in str(w[0].message)
+        assert result["folds"].tolist() == [0, 1]
 
     def test_timepoint_decoder_level_types(self):
         """An integer level computes levels 0..level and reports that level."""

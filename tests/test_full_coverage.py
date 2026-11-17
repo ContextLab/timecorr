@@ -161,9 +161,12 @@ class TestFullCoverageHelpers:
         # the subjects share a strong signal: decoding is far above chance (1/T)
         assert accuracy > 3 / self.T
 
-        # one fold cannot hold out anyone
-        with pytest.raises(ValueError, match="nfolds"):
+        # Test with nfolds=1 (should trigger warning)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
             timepoint_decoder(self.structured_data, nfolds=1, level=0)
+            assert len(w) > 0
+            assert "circular" in str(w[0].message)
 
     def test_weighted_timepoint_decoder(self):
         """Test weighted_timepoint_decoder function."""

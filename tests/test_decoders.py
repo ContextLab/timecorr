@@ -67,15 +67,29 @@ def _mean_accuracy(results, level):
 # ------------------------------------------------------- decoding accuracy
 
 
-@pytest.mark.parametrize("level", [0, 1])
-def test_timepoint_decoder_above_chance(level):
-    data = shared_ramping_data()
-    np.random.seed(0)
-    results = tc.timepoint_decoder(data, nfolds=2, level=level)
-    acc = _mean_accuracy(results, level)
-    # "at least 3 times chance"; isclose absorbs the rounding of a mean of folds
-    threshold = 3 * (1 / T)
-    assert acc >= threshold or np.isclose(acc, threshold), f"accuracy {acc:.4f} at level {level}"
+@pytest.mark.parametrize("seed", range(5))
+def test_timepoint_decoder_level0_above_chance(seed):
+    data = shared_ramping_data(seed=seed)
+    np.random.seed(seed)
+    results = tc.timepoint_decoder(data, nfolds=2, level=0)
+    acc = _mean_accuracy(results, 0)
+    assert acc >= 3 * (1 / T), f"accuracy {acc:.4f} at level 0, seed {seed}"
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_timepoint_decoder_level1_above_chance(seed):
+    """Level 1 with an analysis kernel suited to T=60 (Laplace, scale 5)."""
+    data = shared_ramping_data(seed=seed)
+    np.random.seed(seed)
+    results = tc.timepoint_decoder(
+        data,
+        nfolds=2,
+        level=1,
+        weights_fun=tc.laplace_weights,
+        weights_params={"scale": 5},
+    )
+    acc = _mean_accuracy(results, 1)
+    assert acc >= 3 * (1 / T), f"accuracy {acc:.4f} at level 1, seed {seed}"
 
 
 def test_weighted_decoder_level2_weights_finite_and_sum_to_one():
@@ -196,11 +210,24 @@ def test_weighted_decoder_prints_nothing(capsys):
     assert captured.out == "" and captured.err == ""
 
 
-def test_weighted_decoder_weights_use_training_subjects_only():
-    """The paper fits level weights on two halves of the training group only."""
+def _run_weighted(which, data, **kwargs):
+    if which == "weighted":
+        return weighted_timepoint_decoder(data, **kwargs)
+    return weighted_timepoint_decoder_ec([data], **kwargs)
+
+
+@pytest.mark.parametrize("which", ["weighted", "weighted_ec"])
+def test_weighted_decoder_weights_use_training_subjects_only(which):
+    """
+    The paper fits level weights on two halves of the training group only.
+
+    With no fitted reduction (rfun=None) nothing computed from the test group
+    reaches the weights, so replacing the test group's data leaves them unchanged.
+    """
     data = shared_ramping_data(S=8, T=30, K=4)
+    kwargs = dict(nfolds=2, level=1, weights_params={"scale": 5})
     np.random.seed(3)
-    first = weighted_timepoint_decoder(data, nfolds=2, level=1, weights_params={"scale": 5})
+    first = _run_weighted(which, data, **kwargs)
     # the decoder's first random draw is the fold assignment
     np.random.seed(3)
     assignments = get_xval_assignments(len(data), 2)
@@ -208,12 +235,13 @@ def test_weighted_decoder_weights_use_training_subjects_only():
     rng = np.random.RandomState(99)
     changed = [rng.randn(30, 4) if j in test_group else x for j, x in enumerate(data)]
     np.random.seed(3)
-    second = weighted_timepoint_decoder(
-        changed, nfolds=2, level=1, weights_params={"scale": 5}
-    )
+    second = _run_weighted(which, changed, **kwargs)
     cols = ["level_0", "level_1"]
     fold0 = (first["folds"] == 0) & (first["level"] == 1)
-    assert np.allclose(first.loc[fold0, cols].to_numpy(), second.loc[fold0, cols].to_numpy())
+    mu = first.loc[fold0, cols].to_numpy()
+    # the optimizer moved away from its uniform start, so equality is not trivial
+    assert not np.allclose(mu, 0.5, atol=0.05)
+    assert np.allclose(mu, second.loc[fold0, cols].to_numpy())
     # the test group's accuracy does change: its data are now noise
     assert not np.allclose(
         first.loc[fold0, "rank"].to_numpy(), second.loc[fold0, "rank"].to_numpy()
@@ -253,10 +281,13 @@ def test_timepoint_decoder_mu_weights_in_fisher_z():
         assert np.allclose(results[col].to_numpy(), expected[col].to_numpy())
 
 
-def test_timepoint_decoder_rejects_one_fold():
+def test_timepoint_decoder_one_fold_warns_circular():
+    """As in 0.2.0's documented behavior: nfolds=1 warns and splits the subjects in two."""
     data = shared_ramping_data(S=4, T=20, K=4)
-    with pytest.raises(ValueError, match="nfolds"):
-        tc.timepoint_decoder(data, nfolds=1, level=0)
+    np.random.seed(0)
+    with pytest.warns(UserWarning, match="circular"):
+        results = tc.timepoint_decoder(data, nfolds=1, level=0)
+    assert results["folds"].tolist() == [0, 1]
 
 
 def test_timepoint_decoder_accepts_dataframes():
@@ -355,3 +386,62 @@ def test_smooth_one_sided_kernel_uses_only_past_samples():
     # a backward kernel lets the impulse reach t >= 20 only
     assert np.allclose(out[:20, 0], 0)
     assert out[20:, 0].max() > 0
+
+
+# ------------------------------------------------- reduction and weights
+
+
+def test_weighted_decoder_pca_level2_joint_reduction():
+    """
+    With rfun="PCA" the delta path is reduced by one unsupervised model fit on
+    all subjects, test group included (as in the paper, Fig. 10b-c), so the test
+    group's data do reach the training features through that shared space.  The
+    supervised step, the level weights, is still fit on the training halves only.
+    """
+    from timecorr.decoding import _decoder_delta_chain
+
+    data = shared_ramping_data(S=8, T=30, K=4)
+    np.random.seed(0)
+    results = weighted_timepoint_decoder(
+        data, nfolds=2, level=2, rfun="PCA", weights_params={"scale": 5}
+    )
+    assert np.all(np.isfinite(results["accuracy"]))
+    full = results[results["level"] == 2][["level_0", "level_1", "level_2"]]
+    assert np.all(np.isfinite(full.to_numpy()))
+    assert np.allclose(full.sum(axis=1), 1)
+
+    # replacing four subjects changes the other subjects' reduced delta features
+    rng = np.random.RandomState(99)
+    changed = [rng.randn(30, 4) if j < 4 else x for j, x in enumerate(data)]
+    D = _decoder_delta_chain(data, level=2, rfun="PCA")
+    D_changed = _decoder_delta_chain(changed, level=2, rfun="PCA")
+    assert not np.allclose(D[1][7], D_changed[1][7])
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_optimize_weights_favors_informative_level(seed):
+    """One informative level among two at chance gets the largest weight."""
+    from timecorr.decoding import _decoding_matrix, optimize_weights
+
+    rng = np.random.RandomState(seed)
+    T_, K_ = 40, 10
+    template = rng.randn(T_, K_)
+    informative = _decoding_matrix(template + 0.7 * rng.randn(T_, K_), template)
+    chance = [_decoding_matrix(rng.randn(T_, K_), rng.randn(T_, K_)) for _ in range(2)]
+    corrs = np.array([chance[0], informative, chance[1]])
+    mu = optimize_weights(corrs)
+    assert np.all(np.isfinite(mu)) and np.all(mu >= -1e-12)
+    assert np.isclose(mu.sum(), 1)
+    assert np.argmax(mu) == 1
+    assert mu[1] >= 0.6  # uniform start: 1/3
+    # deterministic
+    assert np.array_equal(mu, optimize_weights(corrs))
+
+
+def test_weighted_decoder_ec_accepts_numpy_integer_level():
+    data = np.array(shared_ramping_data(S=6, T=20, K=4))
+    np.random.seed(4)
+    results = weighted_timepoint_decoder_ec(
+        [data], nfolds=2, level=np.int64(1), weights_params={"scale": 5}
+    )
+    assert list(results["level"]) == [0, 1, 0, 1]

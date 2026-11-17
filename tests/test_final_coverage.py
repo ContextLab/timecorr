@@ -164,10 +164,11 @@ class TestFinalCoverage:
         with pytest.raises(ValueError, match="at least 2"):
             weighted_timepoint_decoder(minimal_data, nfolds=2, level=0)
 
-        # the _ec decoder takes data indexed by level, and splits each fold again
+        # the _ec decoder takes data indexed by level, and also needs two
+        # training subjects per fold to fit the weights
         with pytest.raises(ValueError, match="indexed by level"):
             weighted_timepoint_decoder_ec(minimal_data, nfolds=2, level=0)
-        with pytest.raises(ValueError, match="cannot fill"):
+        with pytest.raises(ValueError, match="at least 2"):
             weighted_timepoint_decoder_ec([minimal_data], nfolds=2, level=0)
 
         np.random.seed(0)

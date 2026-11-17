@@ -121,6 +121,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `format_data` failed on read-only pandas 3 arrays.
 - `folding_levels` and `folding_levels_ec` failed for scalar settings and
   `rfun=None`.
+- Importing timecorr changed matplotlib's global font sizes (to 18-24
+  points); it no longer changes any matplotlib setting.
 
 ### Dependencies and packaging
 

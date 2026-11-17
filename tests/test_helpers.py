@@ -344,3 +344,25 @@ def timepoint_decoder_rfun_wrong():
 # def test_smooth():
 #   smooth_tester= smooth()
 #   assert isinstance(smooth_tester, np.array)
+
+
+def test_import_leaves_matplotlib_rcparams_unchanged():
+    """Importing timecorr must not change the user's global matplotlib settings
+    (0.2.0 set font sizes of 18-24 points at import time).  The dependencies
+    are imported first: hypertools itself sets ``backend_fallback`` on import."""
+    import subprocess
+    import sys
+
+    code = (
+        "import matplotlib as mpl\n"
+        "import matplotlib.pyplot, datawrangler, hypertools\n"
+        "before = {k: str(v) for k, v in mpl.rcParams.items()}\n"
+        "import timecorr\n"
+        "after = {k: str(v) for k, v in mpl.rcParams.items()}\n"
+        "changed = sorted(k for k in before if before[k] != after[k])\n"
+        "print(changed)\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+    assert out.stdout.strip() == "[]", out.stdout

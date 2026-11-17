@@ -48,7 +48,7 @@ extensions = [
 ]
 
 # do not allow nbsphinx errors
-nbsphinx_allow_errors = True
+nbsphinx_allow_errors = False
 
 # Disable notebook execution
 nbsphinx_execute = "never"

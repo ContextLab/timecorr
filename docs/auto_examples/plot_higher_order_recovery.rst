@@ -107,7 +107,7 @@ The recovery is high at the embedded order and near zero below it.
     for s, seed in enumerate(seeds):
         for n in orders:
             with warnings.catch_warnings():
-                # simulate_data warns that variance-based reduction (PCA) cannot
+                # simulate_data warns that variance-based reduction (PCA) may not
                 # retain structure that exists only at order >= 3; this example uses
                 # carrier_reducer instead
                 warnings.filterwarnings("ignore", message="The simulated structure")
@@ -160,7 +160,7 @@ The recovery is high at the embedded order and near zero below it.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 0.632 seconds)
+   **Total running time of the script:** (0 minutes 0.781 seconds)
 
 
 .. _sphx_glr_download_auto_examples_plot_higher_order_recovery.py:

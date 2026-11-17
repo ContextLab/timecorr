@@ -62,7 +62,7 @@ r = {n: np.full((n, len(seeds)), np.nan) for n in orders}
 for s, seed in enumerate(seeds):
     for n in orders:
         with warnings.catch_warnings():
-            # simulate_data warns that variance-based reduction (PCA) cannot
+            # simulate_data warns that variance-based reduction (PCA) may not
             # retain structure that exists only at order >= 3; this example uses
             # carrier_reducer instead
             warnings.filterwarnings("ignore", message="The simulated structure")

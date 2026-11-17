@@ -10,6 +10,7 @@ import scipy.spatial.distance as sd
 import timecorr as tc
 from timecorr.helpers import (
     autofc,
+    _fisher_symmetrize,
     boxcar_weights,
     eye_weights,
     gaussian_weights,
@@ -451,9 +452,42 @@ def test_isfc_symmetrization_handles_unit_correlations():
     # C[0, 0] = 1 and C[1, 0] = -1 (subject feature 1 vs others' feature 0)
     C = wcorr(data[0], data[1], gaussian_weights(T, {"var": 20}))
     assert np.allclose(C[0, 0], 1) and np.allclose(C[1, 0], -1)
-    assert np.all(m[0, 0] == 1.0)
-    # pair (0, 1): z of C[0, 1] is finite, z of C[1, 0] is -inf -> -1
-    assert np.all(m[0, 1] == -1.0) and np.all(m[1, 0] == -1.0)
+    # A cross-correlation of identical columns is a ratio of sums: it is
+    # within a few ulp of 1 (not always exactly 1, depending on the BLAS), so
+    # it is compared within 1e-12 (~4500 ulp, far below any real error).  The
+    # symmetrized diagonal entry is tanh(arctanh(C[0, 0])), which is within
+    # an ulp or two of C[0, 0] even when arctanh(C[0, 0]) is large (~9).
+    assert np.allclose(m[0, 0], 1.0, atol=1e-12, rtol=0)
+    # pair (0, 1): when C[1, 0] is exactly -1 its z is -inf and the pair is
+    # -1 (exact, by construction).  When the platform rounds C[1, 0] to within
+    # an ulp of -1 instead, its z is finite (~-9), and the pair is the Fisher
+    # average of the two entries; either way the result is what
+    # _fisher_symmetrize gives for the cross-correlation computed here (same
+    # function, same inputs, same machine), which is checked next to it.
+    if np.all(C[1, 0] == -1.0):
+        assert np.all(m[0, 1] == -1.0) and np.all(m[1, 0] == -1.0)
+    assert np.allclose(
+        m, _fisher_symmetrize(wcorr(data[0], data[1], gaussian_weights(T, {"var": 20}))),
+        atol=1e-12, rtol=0,
+    )
+
+
+def test_fisher_symmetrize_exact_unit_entries_dominate_their_pair():
+    # platform independent: the cross-correlation has entries of exactly
+    # +-1 by construction (not computed), so the rule is exact on any machine
+    C = np.zeros((3, 3, 4))
+    C[...] = 0.3
+    C[0, 0] = 1.0
+    C[1, 0] = -1.0
+    C[2, 1] = 1.0
+    C[1, 2] = -1.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = _fisher_symmetrize(C.copy())
+    assert np.all(out[0, 0] == 1.0)
+    assert np.all(out[1, 0] == -1.0) and np.all(out[0, 1] == -1.0)
+    assert np.all(out[2, 1] == 0.0) and np.all(out[1, 2] == 0.0)  # +1 and -1 cancel
+    assert np.allclose(out[0, 2], 0.3, atol=1e-12, rtol=0)
 
 
 def test_corrmean_combine_keeps_unit_diagonal():

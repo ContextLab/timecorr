@@ -92,17 +92,90 @@ def test_dict_rfun_with_params_is_supported_without_deprecation_warning():
     np.testing.assert_allclose(out.std(axis=0, ddof=1), 1.0, atol=1e-8)
 
 
+# Graph-measure tests.  The references below are computed in the test, on the
+# same machine as the code under test, by straightforward numpy routines, and
+# the comparison is by tolerance: two correct implementations of the same
+# linear algebra round differently under different BLAS/LAPACK builds
+# (Accelerate on macOS, OpenBLAS on Linux), so exact equality is not portable.
+#
+# Tolerance derivation.  The seeded inputs are 5 x 5 correlation matrices.
+# Strength: a sum of 5 terms of size <= 1, so the error is <= 4 * eps ~ 1e-15.
+# Eigenvector centrality: the error is about eps * ||W|| / gap, where gap is
+# the distance between the two largest eigenvalues (>= 0.03 here), so about
+# 1e-13 or less.  PageRank: the error is about n * eps * cond(B) for the
+# linear system B r = b (cond(B) <= 2e3 here), so about 1e-12 or less.
+# ATOL = 1e-9 leaves a margin of at least 1e3 over every bound, while the
+# measures change by ~1e-2 or more if their definition changes (for example
+# the damping factor).
+ATOL = 1e-9
+D = 0.85
+
+
+def _reference_strength(W):
+    return W.sum(axis=1)
+
+
+def _reference_eigenvector_centrality(W):
+    # absolute value of the leading eigenvector of the symmetrized matrix
+    # (eigh returns eigenvalues in ascending order, so the last column)
+    S = (W + W.T) / 2
+    _, vecs = np.linalg.eigh(S)
+    return np.abs(vecs[:, -1])
+
+
+def _reference_pagerank_centrality(W):
+    # r solves (I - D * W diag(1/colsum)) r = (1 - D)/N * 1, then r / sum(r);
+    # zero column sums are replaced by 1.  Computed here through an explicit
+    # inverse (the package solves the system with a LU solve).
+    N = W.shape[0]
+    deg = W.sum(axis=0)
+    deg = np.where(deg == 0, 1.0, deg)
+    B = np.eye(N) - D * (W / deg[None, :])
+    r = np.linalg.inv(B) @ np.full(N, (1 - D) / N)
+    return r / r.sum()
+
+
+REFERENCES = {
+    "eigenvector_centrality": _reference_eigenvector_centrality,
+    "pagerank_centrality": _reference_pagerank_centrality,
+    "strength": _reference_strength,
+}
+
+
+def _reference_series(V, name):
+    M = vec2mat(V)
+    return np.stack([REFERENCES[name](M[:, :, t]) for t in range(M.shape[2])])
+
+
 @pytest.mark.parametrize(
     "name", ["eigenvector_centrality", "pagerank_centrality", "strength"]
 )
-def test_graph_measures_unchanged_on_seeded_input(name):
-    ref = np.load(FIXTURE)
+def test_graph_measures_match_independent_reference_on_seeded_input(name):
     V = seeded_vectorized_corrs()
-    np.testing.assert_array_equal(V, ref["V"])
-    np.testing.assert_array_equal(reduce(V, rfun=name), ref[name])
+    np.testing.assert_allclose(
+        reduce(V, rfun=name), _reference_series(V, name), atol=ATOL, rtol=0
+    )
+    # a list input is reduced one element at a time
     out = reduce([V, V * 0.5], rfun=name)
-    np.testing.assert_array_equal(out[0], ref[name + "_l0"])
-    np.testing.assert_array_equal(out[1], ref[name + "_l1"])
+    np.testing.assert_allclose(out[0], _reference_series(V, name), atol=ATOL, rtol=0)
+    np.testing.assert_allclose(
+        out[1], _reference_series(V * 0.5, name), atol=ATOL, rtol=0
+    )
+
+
+@pytest.mark.parametrize(
+    "name", ["eigenvector_centrality", "pagerank_centrality", "strength"]
+)
+def test_graph_measures_match_saved_outputs_within_tolerance(name):
+    # Saved input and saved outputs (written before the reduction refactor, on
+    # another machine): the saved input is fed to the code, so both sides of
+    # the comparison come from the file except for the code under test.
+    ref = np.load(FIXTURE)
+    V = ref["V"]
+    np.testing.assert_allclose(reduce(V, rfun=name), ref[name], atol=ATOL, rtol=0)
+    out = reduce([V, V * 0.5], rfun=name)
+    np.testing.assert_allclose(out[0], ref[name + "_l0"], atol=ATOL, rtol=0)
+    np.testing.assert_allclose(out[1], ref[name + "_l1"], atol=ATOL, rtol=0)
 
 
 def test_strength_matches_row_sums_of_matrix():

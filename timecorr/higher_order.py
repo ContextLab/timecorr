@@ -393,18 +393,22 @@ def features(
                 f"one step is K={fit}. Reduce to fewer features (ndims, rfun, "
                 "delta_rfun) or raise max_memory_gb."
             )
-        x, delta = two_path_step(
-            D[-1],
+        analysis = dict(
             weights_function=weights_function,
             weights_params=weights_params,
             cfun=cfun,
             rfun=rfun,
-            delta_rfun=delta_rfun,
             ndims=ndims,
             combine=combine,
             include_timepoints=include_timepoints,
             include_zero=include_zero,
         )
+        if k == order and not return_delta:
+            # the last order's delta features feed nothing and are not returned:
+            # skip them (unreduced, they are as large as X_order)
+            X.append(_analysis_path(D[-1], **analysis))
+            break
+        x, delta = two_path_step(D[-1], delta_rfun=delta_rfun, **analysis)
         X.append(x)
         D.append(delta)
 

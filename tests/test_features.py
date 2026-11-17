@@ -64,6 +64,20 @@ def test_return_delta_false_returns_only_x():
     assert all(isinstance(x, np.ndarray) and x.shape == (T, K) for x in X)
 
 
+@pytest.mark.parametrize("n_subjects", [None, 3])
+def test_return_delta_does_not_change_x(n_subjects):
+    # without return_delta the last order's delta step is skipped; X is unchanged
+    data = make_data(n_subjects=n_subjects) if n_subjects else make_data()
+    for kwargs in ({"rfun": None}, {"ndims": 3}):
+        X = tc.features(data, order=2, weights_params={"var": 10}, **kwargs)
+        Xd, _ = tc.features(
+            data, order=2, weights_params={"var": 10}, return_delta=True, **kwargs
+        )
+        for x, xd in zip(X, Xd):
+            for a, b in zip(x if n_subjects else [x], xd if n_subjects else [xd]):
+                assert np.array_equal(a, b)
+
+
 def test_unreduced_widths_grow():
     X, D = tc.features(make_data(), order=2, rfun=None, return_delta=True)
     assert [x.shape for x in X] == [(T, 4), (T, 10), (T, 55)]

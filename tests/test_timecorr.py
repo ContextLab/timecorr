@@ -73,7 +73,7 @@ def test_include_timepoints_all():
 
 
 def test_include_timepoints_pre():
-    with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+    with pytest.warns(UserWarning, match="fewer than 3 non-zero kernel weights"):
         dyna_corrs_reduced_3 = timecorr(
             sim_3,
             rfun="PCA",
@@ -86,7 +86,7 @@ def test_include_timepoints_pre():
 
 
 def test_include_timepoints_post():
-    with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+    with pytest.warns(UserWarning, match="fewer than 3 non-zero kernel weights"):
         dyna_corrs_reduced_3 = timecorr(
             sim_3,
             rfun="PCA",

@@ -264,9 +264,21 @@ def test_constant_feature_everywhere():
 def test_short_series(T, kernel, params):
     K = 4
     x = _rng(13).randn(T, K)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
-        out = tc.timecorr(x, weights_function=kernel, weights_params=params)
+    if T < 3:
+        # R12: every row of a 2-timepoint kernel has 2 weights, so is undefined
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            out = tc.timecorr(x, weights_function=kernel, weights_params=params)
+        assert [(r.category, str(r.message)) for r in rec] == [(
+            UserWarning,
+            f"{T} of {T} timepoints have fewer than 3 non-zero kernel weights; "
+            "their correlations are undefined and set to 0.",
+        )]
+        assert np.all(out == 0)
+    else:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = tc.timecorr(x, weights_function=kernel, weights_params=params)
     assert out.shape == (T, K * (K + 1) // 2)
     assert np.all(np.isfinite(out))
 
@@ -288,6 +300,39 @@ def test_undefined_rows_zero_with_one_warning():
         assert np.all(out[:, :, t] == 0)
     assert np.all(np.isfinite(out))
     assert np.all(np.diag(out[:, :, 4]) == 1.0)
+
+
+def test_backward_kernel_rows_with_fewer_than_3_weights_are_zero():
+    # R12: two samples always give r = +-1, so a row needs 3 non-zero weights
+    rng = _rng(30)
+    T = 30
+    x = rng.randn(T, 3)
+    w = tc.one_sided(gaussian_weights(T, {"var": 10}), "backward", include_zero=True)
+    with pytest.warns(
+        UserWarning, match="2 of 30 timepoints have fewer than 3 non-zero kernel weights"
+    ) as rec:
+        out = wcorr(x, x, w)
+    assert len([r for r in rec if issubclass(r.category, UserWarning)]) == 1
+    assert np.all(out[:, :, 0] == 0) and np.all(out[:, :, 1] == 0)
+    defined = out[:, :, 2]
+    assert np.all(np.diag(defined) == 1.0)
+    off = defined[np.triu_indices(3, 1)]
+    assert np.all(np.abs(off) < 1) and np.all(off != 0)
+    ref = _weighted_pearson(x, x, w[2])
+    assert np.allclose(off, ref[np.triu_indices(3, 1)])
+
+
+def test_row_with_exactly_two_weights_is_undefined():
+    rng = _rng(31)
+    T = 20
+    x = rng.randn(T, 2)
+    w = gaussian_weights(T, {"var": 10})
+    w[10, :] = 0
+    w[10, [4, 9]] = 1.0
+    with pytest.warns(UserWarning, match=r"1 of 20 timepoints have fewer than 3"):
+        out = wcorr(x, x, w)
+    assert np.all(out[:, :, 10] == 0)
+    assert np.all(np.diag(out[:, :, 11]) == 1.0)
 
 
 def test_nan_kernel_weights_are_zero():
@@ -403,6 +448,38 @@ def test_corrmean_combine_keeps_unit_diagonal():
     assert np.all(mean[:, :3] == 1.0)
     ref = np.tanh(np.mean([np.arctanh(x[:, 3:]) for x in auto], axis=0))
     assert np.allclose(mean[:, 3:], ref, atol=1e-12, rtol=0)
+
+
+def _no_warning_corrmean(subjects):
+    # one row per subject; each row is one timepoint of vectorized values
+    corrs = [np.array([row], dtype=float) for row in subjects]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        return tc.corrmean_combine(corrs)[0]
+
+
+def test_corrmean_combine_opposite_infinities_use_remaining_finite():
+    # R11: +1 and -1 together are excluded; the finite z values are averaged
+    out = _no_warning_corrmean([[1.0], [-1.0], [0.5]])
+    assert np.allclose(out, [0.5], atol=1e-12, rtol=0)
+
+
+def test_corrmean_combine_only_opposite_infinities_give_zero():
+    assert np.array_equal(_no_warning_corrmean([[1.0], [-1.0]]), [0.0])
+    assert np.array_equal(_no_warning_corrmean([[1.0], [-1.0], [-1.0]]), [0.0])
+
+
+def test_corrmean_combine_same_sign_infinities_win():
+    out = _no_warning_corrmean([[1.0, -1.0], [1.0, -1.0], [0.3, 0.3]])
+    assert np.array_equal(out, [1.0, -1.0])
+
+
+def test_corrmean_combine_mixed_columns_in_one_call():
+    out = _no_warning_corrmean(
+        [[1.0, 1.0, 0.2], [-1.0, 1.0, 0.4], [0.5, 0.3, -0.1]]
+    )
+    ref = np.tanh(np.mean(np.arctanh([0.2, 0.4, -0.1])))
+    assert np.allclose(out, [0.5, 1.0, ref], atol=1e-12, rtol=0)
 
 
 def test_wisfc_has_no_bare_except():

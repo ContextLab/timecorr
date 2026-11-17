@@ -121,10 +121,10 @@ def test_x1_unreduced_equals_timecorr_with_kernel_options():
         include_timepoints="backward",
         include_zero=False,
     )
-    # the first two rows of a backward kernel without zero have < 2 weights
-    with pytest.warns(UserWarning, match="2 of 60 timepoints"):
+    # the first three rows of a backward kernel without zero have < 3 weights
+    with pytest.warns(UserWarning, match="3 of 60 timepoints"):
         X = tc.features(data, order=1, rfun=None, **kwargs)
-    with pytest.warns(UserWarning, match="2 of 60 timepoints"):
+    with pytest.warns(UserWarning, match="3 of 60 timepoints"):
         expected = tc.timecorr(data, **kwargs)
     assert_list_equal(X[1], expected)
 
@@ -303,3 +303,20 @@ def test_memory_guard_with_reduced_delta_path():
         tc.features(data, order=2, rfun=None, delta_rfun="PCA",
                     max_memory_gb=step / 2)
     assert f"{step:.3g} GB" in str(info.value)
+
+
+def test_backward_corrmean_pipeline_is_finite_and_warns_only_for_undefined_rows():
+    import warnings
+
+    data = make_data(n_subjects=S)
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        X = tc.features(data, order=1, rfun=None, include_timepoints="backward",
+                        combine=tc.corrmean_combine, weights_params={"var": 10})
+    assert np.all(np.isfinite(X[1]))
+    messages = {(r.category, str(r.message)) for r in rec}
+    assert messages == {(
+        UserWarning,
+        "2 of 60 timepoints have fewer than 3 non-zero kernel weights; their "
+        "correlations are undefined and set to 0.",
+    )}

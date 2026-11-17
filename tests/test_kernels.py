@@ -81,7 +81,7 @@ def _flip_data():
 
 def _xy_at(data, t, include):
     # the first (pre) or last (post) timepoint has a single-sample kernel
-    with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+    with pytest.warns(UserWarning, match="fewer than 3 non-zero kernel weights"):
         out = np.asarray(
             tc.timecorr(
                 data,
@@ -113,7 +113,7 @@ class _Recorder:
 @pytest.mark.parametrize("flag", ["pre", "backward"])
 def test_timecorr_backward_weights_passed_to_cfun(flag):
     rec = _Recorder()
-    with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+    with pytest.warns(UserWarning, match="fewer than 3 non-zero kernel weights"):
         tc.timecorr(
             _flip_data(), weights_params={"var": 50}, include_timepoints=flag, cfun=rec
         )
@@ -127,7 +127,7 @@ def test_timecorr_backward_weights_passed_to_cfun(flag):
 @pytest.mark.parametrize("flag", ["post", "forward"])
 def test_timecorr_forward_weights_passed_to_cfun(flag):
     rec = _Recorder()
-    with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+    with pytest.warns(UserWarning, match="fewer than 3 non-zero kernel weights"):
         tc.timecorr(
             _flip_data(), weights_params={"var": 50}, include_timepoints=flag, cfun=rec
         )
@@ -140,7 +140,10 @@ def test_timecorr_forward_weights_passed_to_cfun(flag):
 
 def test_timecorr_include_zero_false_and_exclude_compose():
     rec = _Recorder()
-    with pytest.warns(UserWarning, match="5 of 200 timepoints"):
+    # backward without zero keeps tau < t; exclude_timepoints=-3 also drops lags
+    # 1-3, so row t has max(0, t - 3) non-zero weights (tau = 0..t-4).  Rows
+    # 0-5 have fewer than 3 (R12), so 6 timepoints are undefined.
+    with pytest.warns(UserWarning, match="6 of 200 timepoints"):
         tc.timecorr(
             _flip_data(),
             weights_params={"var": 50},

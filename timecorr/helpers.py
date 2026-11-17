@@ -660,7 +660,8 @@ def wcorr(a, b, weights):
       co-fluctuation ``z_a(tau_t) z_b(tau_t)^T``, where each column is z-scored
       over all timepoints and ``tau_t`` is the non-zero position in row ``t``.
       Averaged over timepoints this equals the static correlation.
-    - Otherwise, a row with fewer than two non-zero weights is undefined: its
+    - Otherwise, a row with fewer than 3 non-zero weights is undefined (two
+      samples always give r = +-1, which carries no information): its
       correlations are set to 0 and one ``UserWarning`` reports how many rows
       were affected.  If every row is all zeros, ``ValueError`` is raised.
     - NaN samples carry no weight: each pair of features uses only the
@@ -728,10 +729,10 @@ def wcorr(a, b, weights):
     if np.all(support == 1):
         return _delta_wcorr(a, b, weights)
 
-    undefined = support < 2
+    undefined = support < 3
     if np.any(undefined):
         warnings.warn(
-            f"{int(undefined.sum())} of {len(undefined)} timepoints have fewer than two "
+            f"{int(undefined.sum())} of {len(undefined)} timepoints have fewer than 3 "
             "non-zero kernel weights; their correlations are undefined and set to 0.",
             UserWarning,
             stacklevel=2,
@@ -779,18 +780,29 @@ def _fisher_symmetrize(c):
     ct = c.transpose(1, 0, 2)
     out = (c + ct) / 2
     ok = (np.abs(c) <= 1) & (np.abs(ct) <= 1)
-    za = r2z(c[ok])
-    zb = r2z(ct[ok])
-    infinite = np.isinf(za) | np.isinf(zb)
-    finite = ~infinite
-    res = np.empty(za.shape)
-    res[finite] = z2r((za[finite] + zb[finite]) / 2)
-    res[infinite] = np.sign(
-        np.where(np.isinf(za[infinite]), np.sign(za[infinite]), 0)
-        + np.where(np.isinf(zb[infinite]), np.sign(zb[infinite]), 0)
-    )
-    out[ok] = res
+    out[ok] = _fisher_mean(np.stack([c[ok], ct[ok]]), axis=0)
     return out
+
+
+def _fisher_mean(r, axis):
+    """
+    Average correlations along ``axis`` in Fisher z space: ``z2r(mean(r2z(r)))``.
+
+    Values of exactly +-1 have infinite z.  Where only one sign of infinity
+    occurs along ``axis`` the result is that sign (+-1).  Where both +inf and
+    -inf occur they are excluded and the finite z values are averaged (0 if
+    none remain).  NaN anywhere along ``axis`` gives NaN.  No numpy warnings
+    are raised.
+    """
+    z = r2z(r)
+    pos = np.any(np.isposinf(z), axis=axis)
+    neg = np.any(np.isneginf(z), axis=axis)
+    nan = np.any(np.isnan(z), axis=axis)
+    finite = np.isfinite(z)
+    total = np.where(finite, z, 0.0).sum(axis=axis)
+    mean = z2r(_safe_divide(total, finite.sum(axis=axis).astype(np.float64)))
+    out = np.where(pos & ~neg, 1.0, np.where(neg & ~pos, -1.0, mean))
+    return np.where(nan, np.nan, out)
 
 
 def wisfc(data, timepoint_weights, subject_weights=None):
@@ -974,9 +986,30 @@ def corrmean_combine(corrs):
     """
     Compute the mean element-wise correlation across each matrix in a list.
 
-    :param corrs: a matrix of vectorized correlation matrices (output of mat2vec), or a list
-                  of such matrices
-    :return: a mean vectorized correlation matrix
+    Correlations are averaged in Fisher z space (``z2r(mean(r2z(r)))``).  An
+    entry of exactly +-1 has infinite z: where only one sign occurs across
+    matrices the mean is that sign; where both +1 and -1 occur they are
+    excluded and the remaining values are averaged (0 if none remain).
+
+    Parameters
+    ----------
+    corrs : numpy.ndarray or list of numpy.ndarray
+        A matrix of vectorized correlation matrices (output of ``mat2vec``), or
+        a list of such matrices (one per subject).
+
+    Returns
+    -------
+    numpy.ndarray
+        The element-wise mean; an array or one-element list is returned
+        unchanged.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from timecorr.helpers import corrmean_combine
+    >>> corrs = [np.array([[1.0, 0.5]]), np.array([[-1.0, 0.5]]), np.array([[0.5, 1.0]])]
+    >>> print(np.round(corrmean_combine(corrs), 6))
+    [[0.5 1. ]]
     """
     if not (type(corrs) == list):
         return corrs
@@ -985,7 +1018,7 @@ def corrmean_combine(corrs):
         return corrs
 
     else:
-        return z2r(np.mean(r2z(np.stack(corrs, axis=2)), axis=2))
+        return _fisher_mean(np.stack(corrs, axis=2), axis=2)
 
 
 def mean_combine(vals):

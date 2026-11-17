@@ -155,7 +155,7 @@ class TestCorrelationFunctions:
         """Test wcorr handles NaN weights."""
         weights_nan = self.weights.copy()
         weights_nan[0, :] = np.nan
-        with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+        with pytest.warns(UserWarning, match="fewer than 3 non-zero kernel weights"):
             corrs = wcorr(self.data_single, self.data_single, weights_nan)
         assert corrs.shape == (self.K, self.K, self.T)
         assert not np.any(np.isnan(corrs))  # Should handle NaNs gracefully
@@ -679,12 +679,12 @@ class TestTimecorrEdgeCases:
         data = np.random.randn(12, 4)
 
         # Test include pre
-        with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+        with pytest.warns(UserWarning, match="fewer than 3 non-zero kernel weights"):
             result_pre = timecorr(data, include_timepoints="pre")
         assert isinstance(result_pre, np.ndarray)
 
         # Test include post
-        with pytest.warns(UserWarning, match="fewer than two non-zero kernel weights"):
+        with pytest.warns(UserWarning, match="fewer than 3 non-zero kernel weights"):
             result_post = timecorr(data, include_timepoints="post")
         assert isinstance(result_post, np.ndarray)
 
@@ -716,9 +716,12 @@ class TestErrorConditions:
         small_data = np.random.randn(2, 2)
         weights = gaussian_weights(2)
 
-        # Should not crash
-        result = wcorr(small_data, small_data, weights)
+        # Should not crash.  Each of the 2 kernel rows has 2 non-zero weights,
+        # fewer than 3, so both timepoints are undefined (R12) and warned about.
+        with pytest.warns(UserWarning, match="2 of 2 timepoints have fewer than 3"):
+            result = wcorr(small_data, small_data, weights)
         assert result.shape == (2, 2, 2)
+        assert np.all(result == 0)
 
     def test_mismatched_dimensions(self):
         """Test functions with mismatched input dimensions."""

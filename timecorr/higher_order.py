@@ -122,7 +122,8 @@ def two_path_step(
         The previous order's delta features ``D_{k-1}`` (the raw data for
         ``k = 1``), one timepoints-by-features matrix per subject.
     weights_function, weights_params, cfun, combine, include_timepoints, include_zero
-        Analysis-path settings, passed to ``timecorr``.
+        Analysis-path settings, passed to ``timecorr``.  ``include_timepoints``
+        and ``include_zero`` shape the analysis kernel only, not the delta path.
     rfun : None, str, dict, or callable
         Reducer for the analysis path (see ``helpers.reduce``).  Default: "PCA".
     delta_rfun : None, str, dict, or callable
@@ -236,15 +237,19 @@ def features(
         Applied to the analysis path only (see ``timecorr``).  Default:
         ``null_combine``.
     include_timepoints : str
-        "all", "backward"/"pre", or "forward"/"post"; analysis kernel only.
+        "all", "backward"/"pre", or "forward"/"post".  Shapes the analysis
+        kernel only, not the delta path.
     include_zero : bool
-        Whether the estimated timepoint contributes to its own estimate
-        (analysis kernel only).  Default: True.
+        Whether the estimated timepoint contributes to its own estimate.
+        Shapes the analysis kernel only, not the delta path.  Default: True.
     return_delta : bool
         If True, also return ``[D_0, ..., D_order]``.  Default: False.
     max_memory_gb : float
         Upper limit, in gigabytes (1e9 bytes), on the estimated memory of any one
-        correlation step (see ``estimate_memory_gb``).  Default: 4.0.
+        correlation step (see ``estimate_memory_gb``).  It is checked on every
+        step, because the (d, d, T) correlation array is allocated whether or
+        not the result is then reduced; for large K, raising it is the remedy.
+        Default: 4.0.
 
     Returns
     -------

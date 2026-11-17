@@ -558,13 +558,16 @@ class TestUtilityFunctions:
         """Test plot_weights function."""
         weights = gaussian_weights(10)
 
-        # Just test that it doesn't crash
-        try:
-            plot_weights(weights)
-            plot_weights(weights, t=3, title="Test", xlab="Time", ylab="Weight")
-        except Exception:
-            # Plotting might fail in headless environment, that's ok
-            pass
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots()
+        assert plot_weights(weights, ax=ax) is ax  # default row: round(T / 2)
+        plot_weights(weights, t=3, title="Test", xlab="Time", ylab="Weight", ax=ax)
+        assert np.allclose(ax.lines[0].get_ydata(), weights[5, :])
+        assert np.allclose(ax.lines[1].get_ydata(), weights[3, :])
+        assert ax.get_title() == "Test"
+        assert ax.get_xlabel() == "Time" and ax.get_ylabel() == "Weight"
+        plt.close(fig)
 
 
 class TestSimulationFunctions:

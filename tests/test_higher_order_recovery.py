@@ -28,7 +28,8 @@ from timecorr.higher_order import estimate_memory_gb
 
 T = 1000
 B = 4
-SEED = 0
+SEED = 0  # the slow unreduced order-3 case and the multi-order case
+SEEDS = [0, 1, 2, 3, 4]
 RECOVERY = 0.8
 MULTI_ORDER_RECOVERY = 0.75
 CONTROL_TOLERANCE = 0.03
@@ -104,11 +105,11 @@ def _noise_control(d, seed):
     return _mean_abs_offdiag(tc.features(noise, order=1, rfun=None, **KERNEL)[1])
 
 
-def _assert_lower_orders_at_control(X, n):
+def _assert_lower_orders_at_control(X, n, seed):
     """Orders 1 .. n-1 of X carry no more structure than independent noise."""
     for k in range(1, n):
         observed = _mean_abs_offdiag(X[k])
-        control = _noise_control(_width(X[k]), seed=1000 + k)
+        control = _noise_control(_width(X[k]), seed=1000 * (seed + 1) + k)
         print(f"  order {k}: mean |r| {observed:.4f}, control {control:.4f}")
         assert abs(observed - control) <= CONTROL_TOLERANCE, (k, observed, control)
 
@@ -116,24 +117,26 @@ def _assert_lower_orders_at_control(X, n):
 # ------------------------------------------------------------- unreduced runs
 
 
-def test_unreduced_order1_recovery():
+@pytest.mark.parametrize("seed", SEEDS)
+def test_unreduced_order1_recovery(seed):
     data, corrs = tc.simulate_data(
-        datagen="block", return_corrs=True, set_random_seed=SEED, T=T, K=4, B=B
+        datagen="block", return_corrs=True, set_random_seed=seed, T=T, K=4, B=B
     )
     X = tc.features(data, order=1, rfun=None, **KERNEL)
     r = _recovery(X[1], np.arange(4), corrs)
-    print(f"unreduced order 1, p=4: recovery r {r:.4f}")
+    print(f"unreduced order 1, p=4, seed {seed}: recovery r {r:.4f}")
     assert r >= RECOVERY
 
 
-def test_unreduced_order2_recovery():
-    data, truth = _simulate(order=2, K=8)
+@pytest.mark.parametrize("seed", SEEDS)
+def test_unreduced_order2_recovery(seed):
+    data, truth = _simulate(order=2, K=8, seed=seed)
     X = tc.features(data, order=2, rfun=None, **KERNEL)
     cols = tc.carrier_columns(truth["blocks"], 1, 8).ravel()
     r = _recovery(X[2], cols, truth["corrs"])
-    print(f"unreduced order 2, p=4: recovery r {r:.4f}")
+    print(f"unreduced order 2, p=4, seed {seed}: recovery r {r:.4f}")
     assert r >= RECOVERY
-    _assert_lower_orders_at_control(X, 2)
+    _assert_lower_orders_at_control(X, 2, seed)
 
 
 @pytest.mark.slow
@@ -158,18 +161,19 @@ def test_unreduced_order3_recovery():
 
     cols = tc.carrier_columns(truth["blocks"], 2, 8).ravel()
     r = _recovery(X[3], cols, truth["corrs"])
-    print(f"unreduced order 3, p=2: recovery r {r:.4f}")
+    print(f"unreduced order 3, p=2, seed {SEED}: recovery r {r:.4f}")
     assert r >= RECOVERY
-    _assert_lower_orders_at_control(X, 3)
+    _assert_lower_orders_at_control(X, 3, SEED)
 
 
 # ---------------------------------------------------------- carrier reducer
 
 
+@pytest.mark.parametrize("seed", SEEDS)
 @pytest.mark.parametrize("order", [2, 3, 4, 5, 6])
-def test_carrier_reducer_recovery(order):
+def test_carrier_reducer_recovery(order, seed):
     p = 4
-    data, truth = _simulate(order=order, K=tc.min_features(order, p=p))
+    data, truth = _simulate(order=order, K=tc.min_features(order, p=p), seed=seed)
     X = tc.features(
         data,
         order=order,
@@ -179,9 +183,9 @@ def test_carrier_reducer_recovery(order):
     )
     assert X[order].shape == (T, p * (p + 1) // 2)
     r = _recovery(X[order], np.arange(p), truth["corrs"])
-    print(f"carrier reducer, order {order}, p={p}: recovery r {r:.4f}")
+    print(f"carrier reducer, order {order}, p={p}, seed {seed}: recovery r {r:.4f}")
     assert r >= RECOVERY
-    _assert_lower_orders_at_control(X, order)
+    _assert_lower_orders_at_control(X, order, seed)
 
 
 def test_order3_data_run_with_pca():

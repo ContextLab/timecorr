@@ -232,6 +232,28 @@ def test_amplitude_noise_zero_gives_signs():
     assert set(np.unique(data)) == {-1.0, 1.0}
 
 
+@pytest.mark.parametrize("order", [2, 5])
+def test_amplitude_noise_is_the_sd_of_each_block_products_log_amplitude(order):
+    # Ruling R21: amplitude_noise is the SD of log|product| of each block, at
+    # every order (per-sign SD = amplitude_noise / sqrt(2**(order-1))).
+    s, T, p = 0.3, 4000, 4
+    K = tc.min_features(order, p=p)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # the order >= 3 reduction warning
+        data, truth = tc.simulate_data(
+            return_corrs=True, set_random_seed=3, T=T, K=K, order=order,
+            amplitude_noise=s,
+        )
+    for block in truth["blocks"]:
+        log_amp = np.log(np.abs(data[:, block])).sum(axis=1)
+        # log|product| is Gaussian; the sample SD has standard error s / sqrt(2T)
+        assert abs(log_amp.std(ddof=1) - s) <= 4 * s / np.sqrt(2 * T)
+        # each member carries an equal share of the variance
+        per_sign = np.log(np.abs(data[:, block])).std(axis=0, ddof=1)
+        expected = s / np.sqrt(2 ** (order - 1))
+        assert np.all(np.abs(per_sign - expected) <= 4 * expected / np.sqrt(2 * T))
+
+
 def test_sign_parity_cascade_order3():
     T = 4000
     with pytest.warns(UserWarning, match="carrier_reducer"):

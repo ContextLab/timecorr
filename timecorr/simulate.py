@@ -10,7 +10,10 @@ spread over a block of ``m = 2**(order-1)`` features whose product is ``A_j``.
 Every proper subset of a block has a product with mean zero, so the structure is
 absent below the embedded order, and the order-``n`` correlation matrix among the
 block products is the achieved latent-sign correlation, which is what the
-returned truth reports.
+returned truth reports.  ``amplitude_noise`` is the standard deviation of the
+log-amplitude of each block's product (each of the ``m`` signs gets log-amplitude
+noise with standard deviation ``amplitude_noise / sqrt(m)``), so it sets the same
+difficulty at every order.
 """
 
 import numbers
@@ -353,7 +356,9 @@ def _generate(datagen, p, order, S, T, B, amplitude_noise, rng):
         X[:, :, -1] = A * np.prod(X[:, :, :-1], axis=2)  # block product == A_j
         X = X.reshape(T, p * m)
         if amplitude_noise > 0:
-            X = X * np.exp(amplitude_noise * rng.standard_normal(X.shape))
+            # per-sign SD amplitude_noise / sqrt(m): log|block product| has SD
+            # amplitude_noise at every order
+            X = X * np.exp(amplitude_noise / np.sqrt(m) * rng.standard_normal(X.shape))
         data.append(X)
     return data, truth
 
@@ -455,9 +460,12 @@ def simulate_data(
     order : int
         Order at which the template is embedded (positive integer).  Default: 1.
     amplitude_noise : float
-        For ``order > 1``: each sign is multiplied by ``exp(amplitude_noise * z)``
-        with ``z ~ N(0, 1)``, so the data are not binary.  Ignored for
-        ``order=1``.  Default: 0.2.
+        For ``order > 1``: the standard deviation of the log-amplitude of each
+        block's product, the same at every order.  Each of a block's
+        ``m = 2**(order-1)`` signs is multiplied by
+        ``exp(amplitude_noise / sqrt(m) * z)`` with independent ``z ~ N(0, 1)``,
+        so the data are not binary and ``log|product|`` is
+        ``N(0, amplitude_noise**2)``.  Ignored for ``order=1``.  Default: 0.2.
 
     Returns
     -------
@@ -573,6 +581,10 @@ def simulate_multi_order(
         Template size of every group (at least 2).  Default: 4.
     datagen, set_random_seed, S, T, B, amplitude_noise
         As in ``simulate_data``; one random generator is used for all groups.
+        ``amplitude_noise`` is applied per group: in a group of order ``n`` each
+        sign's log-amplitude has standard deviation
+        ``amplitude_noise / sqrt(2**(n-1))``, so every group's block products
+        have log-amplitude standard deviation ``amplitude_noise``.
 
     Returns
     -------

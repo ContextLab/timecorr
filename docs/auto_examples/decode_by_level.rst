@@ -33,7 +33,7 @@ with it. Order 0 is the data; order ``k >= 1`` is the dynamic inter-subject
 correlations (ISFC) of the order ``k - 1`` co-fluctuations, reduced here to one
 value per feature with eigenvector centrality.
 
-.. GENERATED FROM PYTHON SOURCE LINES 19-56
+.. GENERATED FROM PYTHON SOURCE LINES 19-55
 
 .. code-block:: Python
 
@@ -58,13 +58,12 @@ value per feature with eigenvector centrality.
 
     # decode with features of orders 0, 1 and 2 (every order up to the highest is
     # computed; the results for each listed order are returned)
-    # combine takes one function per order: order 0 holds activations, which are
-    # averaged as they are (mean_combine); orders 1 and 2 hold correlations, which
-    # are averaged in Fisher z space (corrmean_combine)
+    # corrmean_combine averages the groups' correlations (orders 1 and 2) in Fisher
+    # z space; order-0 activations are always averaged with mean_combine
     results = tc.timepoint_decoder(
         data,
         level=[0, 1, 2],
-        combine=[tc.mean_combine, tc.corrmean_combine, tc.corrmean_combine],
+        combine=tc.corrmean_combine,
         cfun=tc.isfc,
         rfun="eigenvector_centrality",
         weights_fun=laplace["weights"],

@@ -6,7 +6,7 @@
 
 Computation times
 =================
-**00:01.164** total execution time for 8 files **from auto_examples**:
+**00:01.175** total execution time for 8 files **from auto_examples**:
 
 .. container::
 
@@ -33,7 +33,7 @@ Computation times
      - Time
      - Mem (MB)
    * - :ref:`sphx_glr_auto_examples_plot_higher_order_recovery.py` (``plot_higher_order_recovery.py``)
-     - 00:00.621
+     - 00:00.632
      - 0.0
    * - :ref:`sphx_glr_auto_examples_plot_explore_kernels.py` (``plot_explore_kernels.py``)
      - 00:00.306

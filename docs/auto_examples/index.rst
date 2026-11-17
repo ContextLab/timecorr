@@ -74,23 +74,6 @@ the decoding scripts take up to about a minute each and are shown without output
 
 .. raw:: html
 
-    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we simulate data whose correlations change over time, compute their dynamic correlations with timecorr, and compare the estimates with the true correlations.">
-
-.. only:: html
-
-  .. image:: /auto_examples/images/thumb/sphx_glr_calculate_dynamic_correlations_thumb.png
-    :alt:
-
-  :doc:`/auto_examples/calculate_dynamic_correlations`
-
-.. raw:: html
-
-      <div class="sphx-glr-thumbnail-title">Calculate dynamic correlations</div>
-    </div>
-
-
-.. raw:: html
-
     <div class="sphx-glr-thumbcontainer" tooltip="In this example, we load the weights example dataset from hypertools (36 subjects, 300 timepoints, 100 features) and decode the timepoint from features of orders 0, 1 and 2 with timepoint_decoder.">
 
 .. only:: html
@@ -103,6 +86,23 @@ the decoding scripts take up to about a minute each and are shown without output
 .. raw:: html
 
       <div class="sphx-glr-thumbnail-title">Decode by level</div>
+    </div>
+
+
+.. raw:: html
+
+    <div class="sphx-glr-thumbcontainer" tooltip="In this example, we simulate data whose correlations change over time, compute their dynamic correlations with timecorr, and compare the estimates with the true correlations.">
+
+.. only:: html
+
+  .. image:: /auto_examples/images/thumb/sphx_glr_calculate_dynamic_correlations_thumb.png
+    :alt:
+
+  :doc:`/auto_examples/calculate_dynamic_correlations`
+
+.. raw:: html
+
+      <div class="sphx-glr-thumbnail-title">Calculate dynamic correlations</div>
     </div>
 
 
@@ -170,8 +170,8 @@ the decoding scripts take up to about a minute each and are shown without output
    /auto_examples/decode_by_level_simple
    /auto_examples/plot_explore_kernels
    /auto_examples/decode_by_weighted_level
-   /auto_examples/calculate_dynamic_correlations
    /auto_examples/decode_by_level
+   /auto_examples/calculate_dynamic_correlations
    /auto_examples/plot_simulate_data
    /auto_examples/plot_one_sided_kernels
    /auto_examples/plot_higher_order_recovery

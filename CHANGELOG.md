@@ -97,6 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `requested` and `blocks`.
 - New tutorial (`docs/tutorial/higher_order_tutorial.ipynb`) and gallery
   examples for one-sided kernels and recovery of simulated structure by order.
+  The other three tutorials and the existing examples were updated to run on
+  this version.
 
 ### Fixed
 

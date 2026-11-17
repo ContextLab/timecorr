@@ -176,7 +176,7 @@ def timepoint_decoder(
         Non-negative weights summing to one, one per order from 0 to
         ``max(level)``.  If given, the per-order decoding matrices are averaged
         in Fisher z space with these weights and a single result per fold is
-        returned (labelled with the highest level).  Default: None.
+        returned (labeled with the highest level).  Default: None.
     nfolds : int
         Number of groups (at most the number of subjects).  ``nfolds=1`` warns
         that the analysis is circular and splits the subjects into two groups,
@@ -296,10 +296,14 @@ def weighted_timepoint_decoder(
     Features are computed as in ``timepoint_decoder``.  In fold ``i``, group
     ``i`` is the test group and the remaining subjects are the training group.
     The training group is split in two halves; weights over the orders (non-
-    negative, summing to one) are chosen to minimize the decoding error between
-    the halves, and are then used to mix the test-versus-training decoding
-    matrices in Fisher z space (Owen, Chang & Manning, 2021, "Feature
-    weighting and testing").  The supervised step, fitting the weights, uses
+    negative, summing to one) are fit to the half-versus-half decoding
+    matrices by ``optimize_weights``, and are then used to mix the
+    test-versus-training decoding matrices in Fisher z space (Owen, Chang &
+    Manning, 2021, "Feature weighting and testing").  ``optimize_weights``
+    minimizes a smooth cross-entropy surrogate of decoding accuracy; the paper
+    describes maximizing decoding accuracy itself, which is piecewise constant
+    in the weights (timecorr 0.2.0's optimizer, started from equal weights,
+    stayed there).  The supervised step, fitting the weights, uses
     the training group only.  The dimensionality reduction (``rfun``) is
     unsupervised and, as in the paper (Fig. 10b-c), fit jointly on all
     subjects, test group included, so that every group's features share one
@@ -481,8 +485,11 @@ def folding_levels(
     -------
     in_smooth, out_smooth : numpy.ndarray
         Level 0: each group's data smoothed with the kernel (``timecorr`` with
-        ``cfun=None``) and combined.  Level ``k >= 1``: the analysis path of the
-        shared pipeline within each group, both groups reduced jointly.
+        ``cfun=None``) and combined.  This differs from ``timepoint_decoder``
+        and ``weighted_timepoint_decoder``, whose order-0 features are each
+        group's data combined without smoothing.  Level ``k >= 1``: the
+        analysis path of the shared pipeline within each group, both groups
+        reduced jointly.
     in_raw, out_raw : list of numpy.ndarray
         Level 0: the inputs.  Level ``k >= 1``: the delta path (per-subject
         co-fluctuations), all subjects reduced jointly.
@@ -641,7 +648,49 @@ def folding_levels_ec(
     combine=None,
     rfun=None,
 ):
+    """
+    One level of decoder features for two groups, from precomputed inputs.
 
+    Unlike ``folding_levels`` there is no delta path: each group's input is
+    used as given (for example features computed elsewhere for that level).
+
+    Parameters
+    ----------
+    infold_data, outfold_data : list of numpy.ndarray
+        Each group's input features for this level, one (T, d) array per
+        subject.
+    level : int
+        Level computed; selects the entry of list-valued settings.  Default: 0.
+    cfun, combine, rfun : function (or None), or a list indexed by level
+        Correlation function (used for ``level >= 1``), within-group combine
+        (default ``mean_combine``) and reducer (default None), each applied to
+        each group separately.
+    weights_fun, weights_params : kernel function and its parameters
+        Passed to ``timecorr``.  ``weights_fun`` is required.
+
+    Returns
+    -------
+    in_smooth, out_smooth : numpy.ndarray
+        Level 0: each group's data smoothed with the kernel (``timecorr`` with
+        ``cfun=None``) and combined.  Level ``k >= 1``: ``timecorr`` with
+        ``cfun`` applied within each group, then combined and reduced.
+    in_raw, out_raw : list of numpy.ndarray
+        The inputs, unchanged.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import timecorr as tc
+    >>> from timecorr.helpers import folding_levels_ec
+    >>> rng = np.random.RandomState(0)
+    >>> a = [rng.randn(20, 3) for _ in range(2)]
+    >>> b = [rng.randn(20, 3) for _ in range(2)]
+    >>> out = folding_levels_ec(a, b, level=1, cfun=tc.isfc,
+    ...                         weights_fun=tc.laplace_weights,
+    ...                         weights_params={"scale": 5})
+    >>> out[0].shape, out[1].shape
+    ((20, 6), (20, 6))
+    """
     from .timecorr import timecorr
 
     # settings may be single values or lists indexed by level (callers pass
@@ -719,21 +768,57 @@ def pca_decoder(
     rfun=None,
 ):
     """
-    :param data: a list of number-of-observations by number-of-features matrices
-    :param nfolds: number of cross-validation folds (train using out-of-fold data;
-                   test using in-fold data)
-    :param cfun: function for transforming the group data (default: isfc)
-    :param weights_fun: used to compute per-timepoint weights for cfun; default: laplace_weights
-    :param  weights_params: parameters passed to weights_fun; default: laplace_params
-    :params combine: function for combining data within each group, or a list of such functions (default: mean_combine)
-    :param rfun: function for reducing output (default: None)
-    :return: results dictionary with the following keys:
-       'rank': mean percentile rank (across all timepoints and folds) in the
-               decoding distribution of the true timepoint
-       'accuracy': mean percent accuracy (across all timepoints and folds)
-       'error': mean estimation error (across all timepoints and folds) between
-                the decoded and actual window numbers, expressed as a percentage
-                of the total number of windows
+    Decode timepoints from the first ``d`` principal components, for each ``d``.
+
+    All subjects are reduced jointly with PCA (``min(dims, features, samples)``
+    components).  Subjects are split into ``nfolds`` groups; in fold ``i``
+    group ``i`` is decoded against the remaining subjects.  For each ``d``
+    from 1 to ``dims``, each group's first ``d`` components are smoothed with
+    the kernel (``timecorr`` with ``cfun=None``, level 0 of
+    ``folding_levels``) and averaged across the group's subjects (padded with
+    zero columns to at least 3), and each decoded timepoint is assigned the
+    template timepoint whose pattern is most correlated with it.  These
+    features are smoothed, unlike the order-0 features of
+    ``timepoint_decoder``, which are the unsmoothed data.
+
+    Parameters
+    ----------
+    data : list of numpy.ndarray
+        One timepoints-by-features matrix per subject, all the same shape.
+    nfolds : int
+        Number of groups.  Default: 2.
+    dims : int
+        Largest number of components.  Default: 10.
+    cfun, combine, rfun
+        Accepted for compatibility and not used: the features are always the
+        smoothed components, combined with ``mean_combine``, without further
+        reduction.
+    weights_fun, weights_params : kernel function and its parameters
+        The smoothing kernel.  Default: ``laplace_weights`` with
+        ``laplace_params``.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per fold and number of components, with columns ``rank``,
+        ``accuracy`` and ``error`` (as in ``timepoint_decoder``), ``dims`` and
+        ``folds``.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import timecorr as tc
+    >>> from timecorr.helpers import pca_decoder
+    >>> rng = np.random.RandomState(0)
+    >>> shared = rng.randn(30, 6)
+    >>> data = [shared + 0.5 * rng.randn(30, 6) for _ in range(4)]
+    >>> np.random.seed(0)
+    >>> results = pca_decoder(data, nfolds=2, dims=3,
+    ...                       weights_params={"scale": 2})
+    >>> list(results.columns)
+    ['rank', 'accuracy', 'error', 'dims', 'folds']
+    >>> results["dims"].tolist(), results["folds"].tolist()
+    ([1, 2, 3, 1, 2, 3], [0, 0, 0, 1, 1, 1])
     """
 
     assert (
@@ -917,7 +1002,29 @@ def calculate_error(mu, corrs, metric="error", sign=1):
 
 
 def weight_corrs(corrs, mu):
+    """
+    Mix decoding matrices with weights, in Fisher z space.
 
+    Parameters
+    ----------
+    corrs : array-like, shape (levels, T, T)
+        Correlation matrices, one per level.
+    mu : array-like
+        One weight per level.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``z2r(sum_i mu_i * r2z(corrs_i))``, shape (T, T).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from timecorr.decoding import weight_corrs
+    >>> mixed = weight_corrs(np.array([np.eye(3) * 0.5, np.zeros((3, 3))]), [0.5, 0.5])
+    >>> print(np.round(np.diag(mixed), 3))
+    [0.268 0.268 0.268]
+    """
     assert np.shape(mu)[0] == len(corrs)
     weighted_corrs = 0
 
@@ -928,7 +1035,33 @@ def weight_corrs(corrs, mu):
 
 
 def decoder(corrs):
+    """
+    Score a decoding matrix.
 
+    Row ``t`` of ``corrs`` compares decoded timepoint ``t`` with every
+    template timepoint; the decoded label is the column with the largest
+    value.
+
+    Parameters
+    ----------
+    corrs : numpy.ndarray, shape (T, T)
+        Decoding matrix.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row with ``rank`` (mean fraction of template timepoints whose value
+        is at or below the true timepoint's), ``accuracy`` (fraction decoded
+        exactly) and ``error`` (mean absolute decoding error as a fraction of
+        T).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from timecorr.decoding import decoder
+    >>> decoder(np.eye(5))[["accuracy", "error"]].values.tolist()
+    [[1.0, 0.0]]
+    """
     next_results_pd = pd.DataFrame({"rank": [0], "accuracy": [0], "error": [0]})
     for t in np.arange(corrs.shape[0]):
         decoded_inds = np.argmax(corrs[t, :])
@@ -949,6 +1082,32 @@ def decoder(corrs):
 
 
 def get_xval_assignments(ndata, nfolds):
+    """
+    Random assignment of ``ndata`` items to ``nfolds`` groups of near-equal size.
+
+    Uses the global NumPy random state (``numpy.random.shuffle``).
+
+    Parameters
+    ----------
+    ndata : int
+        Number of items (for example subjects).
+    nfolds : int
+        Number of groups.
+
+    Returns
+    -------
+    numpy.ndarray
+        Group index (as float) of each item; groups have ``ceil(ndata / nfolds)``
+        items, the last one possibly fewer.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from timecorr.decoding import get_xval_assignments
+    >>> np.random.seed(0)
+    >>> sorted(get_xval_assignments(5, 2).tolist())
+    [0.0, 0.0, 0.0, 1.0, 1.0]
+    """
     group_assignments = np.zeros(ndata)
     groupsize = int(np.ceil(ndata / nfolds))
 

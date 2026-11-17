@@ -664,10 +664,22 @@ def wcorr(a, b, weights):
       were affected.  If every row is all zeros, ``ValueError`` is raised.
     - NaN samples carry no weight: each pair of features uses only the
       timepoints where both are observed.  NaN kernel weights count as 0.
-    - A feature whose kernel-weighted variance is zero (to a relative
-      tolerance of 1e-10) has correlation 0 with every feature, itself
-      included, at that timepoint.  Elsewhere the diagonal of an
-      autocorrelation is exactly 1.
+    - A feature is treated as constant at timepoint ``t`` when its
+      kernel-weighted variance there is at most 1e-10 times its
+      kernel-weighted mean square (after the feature's overall mean is
+      removed).  A constant feature has correlation 0 with every feature,
+      itself included, at that timepoint.  This is a numerical limit:
+      features whose local variance is below about 1e-10 of their mean square
+      are treated as constant.  A constant offset of the whole series does
+      not matter (the overall mean is removed first), but a step much larger
+      than the local fluctuations does: a unit-variance series that jumps by
+      1e6 halfway through is treated as constant on both sides of the jump.  Elsewhere the diagonal of an autocorrelation is exactly 1.
+
+    This estimator differs from Eq. 4 of Owen, Chang & Manning (2021) and
+    from timecorr 0.2.0, where the kernel set only the means and the
+    deviations were summed over all timepoints with equal weight; here the
+    kernel also weights the covariance and variance sums.  Numerical results
+    therefore differ from 0.2.0.
 
     Parameters
     ----------
@@ -885,8 +897,10 @@ def isfc(data, timepoint_weights):
     providing a measure of shared neural patterns across participants while avoiding
     self-correlation artifacts.  The subject-versus-others cross-correlation
     matrix ``C`` is symmetrized by averaging the Fisher z-transforms of ``C``
-    and ``C.T``.  With a single subject,
-    the within-subject correlations are returned.
+    and ``C.T``.  Averaging the subjects' results with
+    ``combine=corrmean_combine`` (also in Fisher z space) then gives Eq. 5 of
+    Owen, Chang & Manning (2021).  With a single subject, the within-subject
+    correlations are returned.
 
     Parameters
     ----------
@@ -1021,10 +1035,28 @@ def corrmean_combine(corrs):
 
 def mean_combine(vals):
     """
-    Compute the element-wise mean across each matrix in a list.
+    Compute the element-wise mean across the matrices in a list.
 
-    :param vals: a matrix, or a list of matrices
-    :return: a mean matrix
+    The values are averaged as they are (no Fisher z-transform; see
+    ``corrmean_combine`` for averaging correlations in z space).
+
+    Parameters
+    ----------
+    vals : numpy.ndarray or list of numpy.ndarray
+        A matrix, or a list of matrices of the same shape (one per subject).
+
+    Returns
+    -------
+    numpy.ndarray
+        The element-wise mean; an array is returned unchanged.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import timecorr as tc
+    >>> print(tc.mean_combine([np.ones((2, 3)), 3 * np.ones((2, 3))]))
+    [[2. 2. 2.]
+     [2. 2. 2.]]
     """
     if not (type(vals) == list):
         return vals
@@ -1034,17 +1066,38 @@ def mean_combine(vals):
 
 def tstat_combine(corrs, return_pvals=False):
     """
-    Compute element-wise t-tests (comparing distribution means to 0) across each
-    correlation matrix in a list.
+    Element-wise one-sample t-tests (mean 0) across the matrices in a list.
 
-    :param corrs: a matrix of vectorized correlation matrices (output of mat2vec), or a list
-                  of such matrices
+    Each entry is Fisher z-transformed (``r2z``) and tested across the list
+    with ``scipy.stats.ttest_1samp``.
 
-    :param return_pvals: Boolean (default: False).  If True, return a second matrix (or list)
-                         of the corresponding t-tests' p-values
+    Parameters
+    ----------
+    corrs : numpy.ndarray or list of numpy.ndarray
+        A matrix of vectorized correlation matrices (output of ``mat2vec``), or
+        a list of such matrices (one per subject).
+    return_pvals : bool
+        If True, also return the p-values.  Default: False.
 
-    :return: a matrix of t-statistics of the same shape as a matrix of vectorized correlation
-             matrices
+    Returns
+    -------
+    ts : numpy.ndarray
+        The t statistics, the shape of one input matrix.  An array input is
+        returned unchanged.
+    ps : numpy.ndarray
+        Only with ``return_pvals=True``: the two-sided p-values (all NaN for an
+        array input).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import timecorr as tc
+    >>> rng = np.random.RandomState(0)
+    >>> data = [rng.randn(30, 3) for _ in range(4)]
+    >>> ts = tc.timecorr(data, cfun=tc.isfc, combine=tc.tstat_combine,
+    ...                  weights_params={"var": 10})
+    >>> ts.shape
+    (30, 6)
     """
     if not (type(corrs) == list):
         ts = corrs
@@ -1060,12 +1113,28 @@ def tstat_combine(corrs, return_pvals=False):
 
 def null_combine(corrs):
     """
-    Placeholder function that returns the input
+    Return the input unchanged (the default ``combine`` of ``timecorr``).
 
-    :param corrs: a matrix of vectorized correlation matrices (output of mat2vec), or a list
-                  of such matrices
+    With list input, ``timecorr`` then returns one result per subject.
 
-    :return: the input
+    Parameters
+    ----------
+    corrs : numpy.ndarray or list of numpy.ndarray
+        A matrix of vectorized correlation matrices (output of ``mat2vec``), or
+        a list of such matrices.
+
+    Returns
+    -------
+    numpy.ndarray or list of numpy.ndarray
+        ``corrs``.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import timecorr as tc
+    >>> corrs = [np.zeros((5, 3)), np.ones((5, 3))]
+    >>> tc.null_combine(corrs) is corrs
+    True
     """
     return corrs
 
@@ -1317,14 +1386,14 @@ def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=None):
 
     kernel /= kernel.sum()
     x = np.zeros_like(w)
-    # The kernel is row ``centre`` of the window's kernel matrix, so entry j weights
-    # the sample j - centre steps away: x[t] = sum_j kernel[j] * w[t + j - centre].
+    # The kernel is row ``center`` of the window's kernel matrix, so entry j weights
+    # the sample j - center steps away: x[t] = sum_j kernel[j] * w[t + j - center].
     # That is a convolution with the reversed row (this matters for one-sided
     # kernels, and for even windows, whose row is not symmetric).  The "full"
     # output is sliced so the result always has the length of the series
     # (np.convolve mode="same" fails when the series is shorter than the window).
-    centre = (len(kernel) - 1) // 2
-    start = len(kernel) - 1 - centre
+    center = (len(kernel) - 1) // 2
+    start = len(kernel) - 1 - center
     for i in range(0, w.shape[1]):
         x[:, i] = np.convolve(kernel[::-1], w[:, i], mode="full")[
             start : start + w.shape[0]

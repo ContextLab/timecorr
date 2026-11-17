@@ -277,6 +277,11 @@ def features(
     """
     Compute features of every order from 0 to ``order`` with the two-path pipeline.
 
+    Order 1 is the dynamic correlations of the data; order ``k`` is the
+    dynamic correlations of the order-``(k-1)`` co-fluctuations, so the
+    order-``k`` features (without reduction) are correlations among products
+    of up to ``2**(k-1)`` of the original features.
+
     ``X_0 = D_0 = data``.  For ``k >= 1``,
     ``X_k = reduce(timecorr(D_{k-1}, analysis kernel, cfun, combine), rfun)`` and
     ``D_k = reduce(timecorr(D_{k-1}, eye_weights, cfun=autofc), delta_rfun)``, so
@@ -312,7 +317,10 @@ def features(
         Whether the estimated timepoint contributes to its own estimate.
         Shapes the analysis kernel only, not the delta path.  Default: True.
     return_delta : bool
-        If True, also return ``[D_0, ..., D_order]``.  Default: False.
+        If True, also return ``[D_0, ..., D_order]``.  If False, the delta
+        step of the last order (``D_order``), which feeds no later order, is
+        not computed, so ``delta_rfun`` is not called at that step (and is not
+        called at all when ``order`` is 1).  Default: False.
     max_memory_gb : float
         Upper limit, in gigabytes (1e9 bytes), on the estimated memory of any one
         correlation step (see ``estimate_memory_gb``).  It is checked on every

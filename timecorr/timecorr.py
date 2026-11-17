@@ -49,115 +49,100 @@ def timecorr(
     include_zero=True,
 ):
     """
-    Computes dynamics correlations in single-subject or multi-subject data.
+    Compute dynamic (moment-by-moment) correlations in one or more datasets.
+
+    For each timepoint ``t``, row ``t`` of the kernel matrix
+    (``weights[t, :]``) weights every timepoint's contribution, and ``cfun``
+    computes kernel-weighted correlations (see ``helpers.wcorr``).  The
+    estimator weights the covariance and variance sums as well as the means;
+    it differs from Eq. 4 of Owen, Chang & Manning (2021) and from timecorr
+    0.2.0, where the kernel set only the means, so numerical results differ
+    from 0.2.0.  For higher-order correlations computed as in the paper
+    (Fig. 10), see ``timecorr.features``.
 
     Parameters
     ----------
-    data: numpy array, pandas dataframe, or a list of numpy arrays/dataframes
-        Each numpy array (or dataframe) should have size timepoints by features.
-        If a list of arrays are passed, there should be one array per subject.
+    data : numpy.ndarray, pandas.DataFrame, polars.DataFrame, or list of these
+        A timepoints-by-features matrix, or a list of them (one per subject,
+        all the same shape).  Inputs are not modified.  NaN samples carry no
+        weight in the correlations.
+    weights_function : function
+        Called as ``weights_function(T, weights_params)``; returns a T x T
+        kernel matrix whose row ``t`` is the kernel used at timepoint ``t``.
+        Options: ``gaussian_weights`` (default), ``laplace_weights``,
+        ``t_weights``, ``mexican_hat_weights``, ``boxcar_weights``,
+        ``uniform_weights``, ``eye_weights`` (a delta kernel, which gives
+        co-fluctuations: products of the z-scored series), or a function of
+        your own with the same signature.
+    weights_params : dict or None
+        Parameters of the kernel, e.g. ``{"var": 100}`` for
+        ``gaussian_weights``.  Default: None (the kernel's defaults:
+        ``gaussian_params``, ``laplace_params``, ``t_params``, ``eye_params``,
+        ``mexican_hat_params``, ...).
+    include_timepoints : str
+        Which timepoints may contribute to the estimate at each timepoint:
+        "all" (default), "backward" (alias "pre": only timepoints at or before
+        ``t``), or "forward" (alias "post": only timepoints at or after ``t``).
+        Applied to the kernel matrix after it is built (see ``one_sided``).
+    exclude_timepoints : int or None
+        Further restricts the kernel by distance from ``t``.  A positive value
+        ``x`` keeps only the timepoints at most ``x`` samples from ``t``; a
+        negative value ``-x`` removes them (``t`` itself included), keeping
+        only timepoints more than ``x`` samples away.  Real values are rounded
+        to the nearest integer.  Default: None (no restriction).
+    combine : function
+        Applied to the per-subject results: ``null_combine`` (default; one
+        result per subject), ``corrmean_combine`` (Fisher z average),
+        ``mean_combine``, or ``tstat_combine``.
+    cfun : function or None
+        Correlation function, called as ``cfun(data, weights)``:
 
-    weights_function: a function of the form func(T, params) where
-        T is a non-negative integer specifying the number of timepoints to consider.
-
-        The function should return a T by T array containing the timepoint-specific
-        weights for each consecutive time point from 0 to T (not including T).
-
-        Default: gaussian_weights; options: laplace_weights, gaussian_weights,
-        t_weights, eye_weights, mexican_hat_weights
-
-    weights_params: used to pass parameters to the weights_params function. This
-        can be specified in any format (e.g. a scalar, list, object, dictionary,
-        etc.).
-
-        Default: None (use default parameters for the given weights function).
-        Options: gaussian_params, laplace_params, t_params, eye_params,
-        mexican_hat_params.
-
-    include_timepoints: determines which timepoints are used to estimate the correlations
-        at each timepoint.  This is applied after the weights function to further constrain
-        which timepoints may be considered in computing the correlations at each timepoint.
-
-        Options: 'all' (default; include all timepoints), 'backward' or 'pre' (only include
-        timepoints at or *before* the given timepoint), 'forward' or 'post' (only include
-        timepoints at or *after* the given timepoint).  Row t of the weights matrix
-        (weights[t, :]) is the kernel used to estimate at timepoint t.
-
-    exclude_timepoints: additional option, used to filter out any timepoints less than x units
-        of the timepoint whose correlations are being estimated.  For example, passing
-        exclude_timepoints=3 will exclude any timepoints 3 or more samples from the given timepoint.
-        When exclude timepoints is negative, it works inversely-- e.g. exclude_timepoints=-5 will
-        exclude any timepoints within 5 or fewer samples of the given timepoint.  Real-valued scalars
-        are supported but are rounded to the nearest Integer.
-
-        Default: None (no filtering).
-
-    combine: a function applied to either a single matrix of vectorized correlation
-        matrices, or a list of such matrices.  The function should return either
-        a numpy array or a list of numpy arrays.
-
-        Default: helpers.null_combine (a function that returns its input).  Other
-        useful functions:
-
-        helpers.corrmean_combine: take the element-wise average correlations across matrices
-        helpers.tstat_combine: return element-wise t-statistics across matrices
-
-    cfun: function to apply to the data array(s)
-        This function should be of the form
-        func(data, weights)
-
-        The function should support data as a numpy array or list of numpy
-        arrays.  When a list of numpy arrays is passed, the function should
-        apply the "across subjects" version of the analysis.  When a single
-        numpy array is passed, the function should apply the "within subjects"
-        version of the analysis.
-
-        weights is a numpy array with per-timepoint weights
-
-        The function should return a single numpy array with 1 row and an
-        arbitrary number of columns (the number of columns may be determined by
-        the function).
-
-        Default: A continuous verison of Inter-Subject Functional Connectivity
-        (Simony et al. 2017).  If only one data array is passed (rather than a
-        list), the default cfun returns the moment-by-moment correlations for
-        that array.  (Reference: http://www.nature.com/articles/ncomms12141)
-
-        If None, the data are smoothed instead of correlated: the output at
-        timepoint t is the mean of the samples weighted by |weights[t, :]| (the
-        same kernel rows, after include_timepoints, include_zero and
-        exclude_timepoints), with one timepoints-by-features array per subject.
-        NaN samples get no weight.
-
-    rfun: function to use for dimensionality reduction.
-
-        All hypertools and scikit-learn functions are supported: PCA, IncrementalPCA, SparsePCA,
-        MiniBatchSparsePCA, KernelPCA, FastICA, FactorAnalysis, TruncatedSVD,
-        DictionaryLearning, MiniBatchDictionaryLearning, TSNE, Isomap,
-        SpectralEmbedding, LocallyLinearEmbedding, MDS, and UMAP.
-
-        Can be passed as a string, but for finer control of the model
-        parameters, pass as a dictionary, e.g.
-        reduction={‘model’ : ‘PCA’, ‘params’ : {‘whiten’ : True}}.
-
-        See scikit-learn specific model docs for details on parameters supported
-        for each model.
-
-        Another option is to use graph theoretic measures computed for each node.
-        The following measures are supported:
-        eigenvector_centrality, pagerank_centrality, and strength.  (Each
-        of these must be specified as a string; dictionaries not supported.)
-
-        Default: None (no dimensionality reduction)
-
-    include_zero: if False, the timepoint being estimated is excluded from its own estimate
-        (the diagonal of the weights matrix is zeroed).  Default: True.
+        - ``isfc`` (default): with a list, each subject's features versus the
+          mean of the other subjects' features (inter-subject functional
+          connectivity; Simony et al., 2016); with one array, its own
+          correlations.
+        - ``wisfc``: versus a weighted mean of the other subjects.
+        - ``autofc``: each subject's own correlations.
+        - None: the data are smoothed instead of correlated: the output at
+          timepoint ``t`` is the mean of the samples weighted by
+          ``abs(weights[t, :])`` (the same kernel rows, after
+          ``include_timepoints``, ``include_zero`` and
+          ``exclude_timepoints``), one timepoints-by-features array per
+          subject.  NaN samples get no weight.
+    rfun : None, str, dict, or callable
+        Dimensionality reduction of the vectorized correlations (see
+        ``helpers.reduce``): a hypertools / scikit-learn model name such as
+        "PCA", "FastICA", "FactorAnalysis" or "IncrementalPCA"; a dict such as
+        ``{"model": "PCA", "params": {"whiten": True}}``; a graph measure
+        ("eigenvector_centrality", "pagerank_centrality", "strength"); or a
+        callable ``f(list_of_arrays) -> list_of_arrays``.  Model-based
+        reduction returns as many features as the data have.  Default: None
+        (no reduction).
+    include_zero : bool
+        If False, the timepoint being estimated is left out of its own
+        estimate (the diagonal of the kernel is zeroed).  Default: True.
 
     Returns
     -------
-    corrmats: moment-by-moment correlations
+    numpy.ndarray or list of numpy.ndarray
         One row per timepoint, each a vectorized correlation matrix (see
-        helpers.mat2vec).  NaN samples in the data carry no weight.
+        ``mat2vec``: the K diagonal entries, then the K(K-1)/2 entries above
+        the diagonal), or the reduced features when ``rfun`` is given, or the
+        smoothed data when ``cfun`` is None.  A list (one entry per subject)
+        when ``combine`` returns one; a single array otherwise.
+
+    Warns
+    -----
+    UserWarning
+        When some kernel rows have fewer than 3 non-zero weights (for example
+        the first timepoints of a backward kernel): the correlations there are
+        undefined and set to 0.
+
+    Raises
+    ------
+    ValueError
+        For an unknown ``include_timepoints``, subjects of different shapes,
+        non-numeric columns, or a kernel whose rows are all zero.
 
     Examples
     --------
@@ -167,6 +152,12 @@ def timecorr(
     >>> corrs = tc.timecorr(data, weights_params={"var": 50})
     >>> corrs.shape
     (100, 15)
+    >>> subjects = [np.random.RandomState(s).randn(100, 5) for s in range(3)]
+    >>> group = tc.timecorr(subjects, cfun=tc.isfc, combine=tc.corrmean_combine)
+    >>> group.shape
+    (100, 15)
+    >>> tc.timecorr(data, rfun="PCA").shape
+    (100, 5)
     """
 
     def temporal_filter(T, k):

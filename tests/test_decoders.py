@@ -445,3 +445,44 @@ def test_weighted_decoder_ec_accepts_numpy_integer_level():
         [data], nfolds=2, level=np.int64(1), weights_params={"scale": 5}
     )
     assert list(results["level"]) == [0, 1, 0, 1]
+
+
+def _shared_signal_data(S=6, T=50, K=5, seed=0):
+    """Subjects who share one activity pattern plus independent noise."""
+    rng = np.random.RandomState(seed)
+    shared = rng.randn(T, K)
+    return [shared + 0.5 * rng.randn(T, K) for _ in range(S)]
+
+
+def test_timepoint_decoder_level0_ignores_corrmean_combine():
+    # order-0 features are activations, not correlations: they are averaged
+    # with a plain mean whatever combine is given for the correlation orders
+    data = _shared_signal_data()
+    np.random.seed(0)
+    with_corrmean = tc.timepoint_decoder(data, level=0, combine=tc.corrmean_combine)
+    np.random.seed(0)
+    with_mean = tc.timepoint_decoder(data, level=0, combine=mean_combine)
+    pd.testing.assert_frame_equal(with_corrmean, with_mean)
+    assert np.all(np.isfinite(with_corrmean["accuracy"]))
+    assert with_corrmean["accuracy"].mean() > 0.5  # chance: 1/50
+
+
+def test_weighted_decoder_level0_ignores_corrmean_combine():
+    data = _shared_signal_data(S=8)
+    np.random.seed(1)
+    a = weighted_timepoint_decoder(data, nfolds=2, level=0, combine=tc.corrmean_combine)
+    np.random.seed(1)
+    b = weighted_timepoint_decoder(data, nfolds=2, level=0, combine=mean_combine)
+    pd.testing.assert_frame_equal(a, b)
+    assert a["accuracy"].mean() > 0.5
+
+
+@pytest.mark.parametrize("fun", [folding_levels, tc.helpers.folding_levels_ec])
+def test_folding_levels_level0_ignores_corrmean_combine(fun):
+    data = _shared_signal_data()
+    kw = {"weights_fun": laplace_weights, "weights_params": {"scale": 5}}
+    a = fun(data[:3], data[3:], level=0, combine=tc.corrmean_combine, **kw)
+    b = fun(data[:3], data[3:], level=0, combine=mean_combine, **kw)
+    assert np.all(np.isfinite(a[0])) and np.all(np.isfinite(a[1]))
+    np.testing.assert_array_equal(a[0], b[0])
+    np.testing.assert_array_equal(a[1], b[1])

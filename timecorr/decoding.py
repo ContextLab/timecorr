@@ -100,7 +100,8 @@ def _decoder_features(
     Returns ``feats`` with ``feats[k][g]`` the order-``k`` features of group
     ``g`` (a list of subject indices into ``data``):
 
-    - ``k = 0``: ``combine[0]`` of the group's data.
+    - ``k = 0``: the mean of the group's data (``mean_combine``, whatever
+      ``combine[0]`` is).
     - ``k >= 1``: the analysis path of the shared pipeline applied to the
       group's delta features ``D_{k-1}`` (``cfun[k]`` and ``combine[k]`` see one
       group at a time), with all groups reduced jointly by ``rfun[k]`` so they
@@ -118,7 +119,8 @@ def _decoder_features(
         D = _decoder_delta_chain(subjects, level, rfun)
     groups = [[int(j) for j in g] for g in groups]
 
-    feats = [[combine[0]([subjects[j] for j in g]) for g in groups]]
+    # order 0 is activations, not correlations: always a plain mean
+    feats = [[mean_combine([subjects[j] for j in g]) for g in groups]]
     for k in range(1, n):
         feats.append(
             _analysis_path(
@@ -190,7 +192,10 @@ def timepoint_decoder(
     weights_fun, weights_params : analysis kernel and its parameters.
         Default: ``laplace_weights`` with ``laplace_params``.
     combine : function or list of functions
-        Combines each group's per-subject features, or one per order.
+        Combines each group's per-subject features at orders ``k >= 1``, or
+        one per order.  Order 0 (activations, not correlations) is always
+        combined with ``mean_combine``, whatever is given here: Fisher z
+        averaging (``corrmean_combine``) is not defined for activations.
         Default: ``mean_combine``.
     rfun : None, str, dict, callable, or a list of these
         Reducer for orders ``k >= 1`` on both paths (see ``helpers.reduce``), or
@@ -485,7 +490,8 @@ def folding_levels(
     -------
     in_smooth, out_smooth : numpy.ndarray
         Level 0: each group's data smoothed with the kernel (``timecorr`` with
-        ``cfun=None``) and combined.  This differs from ``timepoint_decoder``
+        ``cfun=None``) and averaged with ``mean_combine`` (``combine`` is used
+        for levels ``k >= 1`` only).  This differs from ``timepoint_decoder``
         and ``weighted_timepoint_decoder``, whose order-0 features are each
         group's data combined without smoothing.  Level ``k >= 1``: the
         analysis path of the shared pipeline within each group, both groups
@@ -523,7 +529,7 @@ def folding_levels(
                     [x for x in group],
                     cfun=None,
                     rfun=rfun[0],
-                    combine=combine[0],
+                    combine=mean_combine,
                     weights_function=weights_fun,
                     weights_params=weights_params,
                 )
@@ -672,7 +678,8 @@ def folding_levels_ec(
     -------
     in_smooth, out_smooth : numpy.ndarray
         Level 0: each group's data smoothed with the kernel (``timecorr`` with
-        ``cfun=None``) and combined.  Level ``k >= 1``: ``timecorr`` with
+        ``cfun=None``) and averaged with ``mean_combine`` (``combine`` is used
+        for levels ``k >= 1`` only).  Level ``k >= 1``: ``timecorr`` with
         ``cfun`` applied within each group, then combined and reduced.
     in_raw, out_raw : list of numpy.ndarray
         The inputs, unchanged.
@@ -711,7 +718,7 @@ def folding_levels_ec(
                 [x for x in infold_data],
                 cfun=None,
                 rfun=rfun[level],
-                combine=combine[level],
+                combine=mean_combine,
                 weights_function=weights_fun,
                 weights_params=weights_params,
             )
@@ -721,7 +728,7 @@ def folding_levels_ec(
                 [x for x in outfold_data],
                 cfun=None,
                 rfun=rfun[level],
-                combine=combine[level],
+                combine=mean_combine,
                 weights_function=weights_fun,
                 weights_params=weights_params,
             )

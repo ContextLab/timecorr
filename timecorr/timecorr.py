@@ -64,7 +64,9 @@ def timecorr(
     ----------
     data : numpy.ndarray, pandas.DataFrame, polars.DataFrame, or list of these
         A timepoints-by-features matrix, or a list of them (one per subject,
-        all the same shape).  Inputs are not modified.  NaN samples carry no
+        all the same shape).  A 1-D array or a pandas or polars Series is one
+        feature (shape ``(T, 1)``); arrays with more than two dimensions raise
+        ``ValueError``.  Inputs are not modified.  NaN samples carry no
         weight in the correlations.
     weights_function : function
         Called as ``weights_function(T, weights_params)``; returns a T x T

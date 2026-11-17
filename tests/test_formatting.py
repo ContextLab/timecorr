@@ -113,3 +113,84 @@ def test_timecorr_multisubject_matches_numpy():
     got = tc.timecorr([_as("polars", VALUES), _as("pandas", VALUES2)], cfun=tc.isfc)
     for r, g in zip(ref, got):
         np.testing.assert_array_equal(r, g)
+
+
+def _layout_inputs():
+    wide = RNG.standard_normal((20, 8))
+    return {
+        "numpy": VALUES.copy(),
+        "numpy-fortran": np.asfortranarray(VALUES),
+        "numpy-sliced": wide[:, ::2],
+        "pandas": _as("pandas", VALUES),
+        "polars": _as("polars", VALUES),
+    }
+
+
+@pytest.mark.parametrize(
+    "kind", ["numpy", "numpy-fortran", "numpy-sliced", "pandas", "polars"]
+)
+def test_output_is_c_contiguous_float64(kind):
+    # The memory layout changes floating-point rounding in matrix products,
+    # so every input type must reach the estimator in the same layout.
+    src = _layout_inputs()[kind]
+    out = format_data(src)[0]
+    assert out.dtype == np.float64
+    assert out.flags["C_CONTIGUOUS"]
+    assert out.flags["OWNDATA"] and out.flags["WRITEABLE"]
+    np.testing.assert_array_equal(out, np.asarray(src))
+
+
+def test_layouts_give_identical_timecorr():
+    ins = _layout_inputs()
+    ref = tc.timecorr(np.ascontiguousarray(ins["numpy-sliced"]), cfun=tc.isfc)
+    np.testing.assert_array_equal(tc.timecorr(ins["numpy-sliced"], cfun=tc.isfc), ref)
+    ref2 = tc.timecorr(VALUES.copy(), cfun=tc.isfc)
+    for kind in ["numpy-fortran", "pandas", "polars"]:
+        np.testing.assert_array_equal(tc.timecorr(ins[kind], cfun=tc.isfc), ref2)
+
+
+@pytest.mark.parametrize("kind", ["numpy", "pandas", "polars"])
+def test_one_dimensional_input_is_one_feature(kind):
+    v = VALUES[:, 0].copy()
+    if kind == "numpy":
+        src = v
+    elif kind == "pandas":
+        src = pd.Series(v, name="x")
+    else:
+        src = pl.Series("x", v)
+    out = format_data(src)
+    assert len(out) == 1
+    assert out[0].shape == (20, 1)
+    np.testing.assert_array_equal(out[0][:, 0], v)
+    # also inside a list (one subject per item)
+    out2 = format_data([src, src])
+    assert [o.shape for o in out2] == [(20, 1), (20, 1)]
+
+
+def test_series_with_nan_is_filled():
+    v = VALUES[:, 0].copy()
+    v[2] = np.nan
+    out = format_data(pd.Series(v))[0]
+    assert out.shape == (20, 1) and out[2, 0] == 0
+    out = format_data(pl.Series("x", v), fill_nan=False)[0]
+    assert out.shape == (20, 1) and np.isnan(out[2, 0])
+
+
+@pytest.mark.parametrize("shape", [(2, 20, 3), (2, 2, 20, 3)])
+def test_three_or_more_dimensions_raise(shape):
+    with pytest.raises(ValueError, match=r"dimension.*" + r"\(" + ", ".join(map(str, shape)) + r"\)"):
+        format_data(np.zeros(shape))
+    with pytest.raises(ValueError, match=r"\(" + ", ".join(map(str, shape)) + r"\)"):
+        format_data([np.zeros(shape)])
+
+
+@pytest.mark.parametrize("value", [np.array(3.0), 3.0])
+def test_zero_dimensional_input_raises(value):
+    with pytest.raises(ValueError, match="0-dimensional"):
+        format_data(value)
+
+
+def test_timecorr_on_one_dimensional_input():
+    out = tc.timecorr(VALUES[:, 0].copy())
+    assert out.shape == (20, 1)
+    np.testing.assert_array_equal(out, np.ones((20, 1)))

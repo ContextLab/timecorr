@@ -429,19 +429,46 @@ def _check_numeric(x):
             )
 
 
+def _as_two_dimensional(x):
+    """Turn one subject's input into something 2-D, or raise ValueError."""
+    if isinstance(x, pd.Series) or (pl is not None and isinstance(x, pl.Series)):
+        return x.to_frame()
+    if isinstance(x, pd.DataFrame) or _is_polars(x):
+        return x
+    a = np.asarray(x)
+    if a.ndim == 0:
+        raise ValueError(
+            "Each subject's data must be a timepoints-by-features matrix (or a "
+            f"1-D array of timepoints); got a 0-dimensional input {x!r}."
+        )
+    if a.ndim == 1:
+        return a[:, np.newaxis]
+    if a.ndim > 2:
+        raise ValueError(
+            "Each subject's data must be a timepoints-by-features matrix; got an "
+            f"array with {a.ndim} dimensions, shape {a.shape}.  Pass a list "
+            "with one 2-D array per subject instead."
+        )
+    return a
+
+
 def format_data(data, fill_nan=True):
     """
     Convert input data to a list of writable float64 timepoints-by-features arrays.
 
     Inputs are standardized with pydata-wrangler, so numpy arrays, pandas
     DataFrames, polars DataFrames, and lists of these (possibly mixed) are
-    supported.  The caller's data are never modified.  By default NaNs in the
-    output are replaced with zeros.
+    supported.  A 1-D array or a pandas or polars Series is one feature
+    observed over its timepoints and becomes a (timepoints, 1) array.  The
+    caller's data are never modified.  By default NaNs in the output are
+    replaced with zeros.  Every returned array is C-contiguous, whatever the
+    input's memory layout, so equal values give bit-identical results.
 
     Parameters
     ----------
-    data : numpy.ndarray, pandas.DataFrame, polars.DataFrame, or list of these
-        One timepoints-by-features observations matrix per subject.
+    data : numpy.ndarray, pandas.DataFrame, polars.DataFrame, Series, or list of these
+        One timepoints-by-features observations matrix per subject (or one
+        1-D array or Series of timepoints per subject).
     fill_nan : bool, optional
         If True (default), replace NaNs with zeros.  If False, keep them (the
         correlation functions give NaN samples no weight).
@@ -454,8 +481,9 @@ def format_data(data, fill_nan=True):
     Raises
     ------
     ValueError
-        If a DataFrame has a non-numeric column, or if subjects differ in
-        their number of timepoints or features.
+        If a DataFrame has a non-numeric column, if an input is 0-dimensional
+        or has more than two dimensions, or if subjects differ in their
+        number of timepoints or features.
 
     Examples
     --------
@@ -467,6 +495,8 @@ def format_data(data, fill_nan=True):
     (10, 3)
     >>> bool(np.isnan(format_data(np.array([[np.nan, 1.0]]), fill_nan=False)[0][0, 0]))
     True
+    >>> format_data(pd.Series(np.arange(5.0)))[0].shape
+    (5, 1)
     """
     items = list(data) if isinstance(data, (list, tuple)) else [data]
     for x in items:
@@ -474,12 +504,18 @@ def format_data(data, fill_nan=True):
 
     out = []
     for x in items:
-        w = dw.wrangle(x)
+        w = dw.wrangle(_as_two_dimensional(x))
         if _is_polars(w):
             w = w.to_numpy()
-        a = np.array(w, dtype=np.float64, copy=True)
-        if a.ndim == 1:
-            a = a[:, np.newaxis]
+        # order="C": the memory layout changes floating-point rounding in the
+        # matrix products downstream, and pandas, polars and numpy inputs can
+        # arrive in different layouts.
+        a = np.array(w, dtype=np.float64, order="C", copy=True)
+        if a.ndim != 2:
+            raise ValueError(
+                "Each subject's data must be a timepoints-by-features matrix; "
+                f"got shape {a.shape} after conversion."
+            )
         if fill_nan:
             a[np.isnan(a)] = 0
         out.append(a)

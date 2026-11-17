@@ -42,7 +42,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Input formatting goes through pydata-wrangler: numpy arrays, pandas
   DataFrames, polars DataFrames, and lists of them are accepted; inputs are
   never modified; subjects with mismatched shapes and non-numeric columns
-  raise `ValueError`.
+  raise `ValueError`. A 1-D array or a pandas or polars Series is one feature
+  (shape `(T, 1)`); 0-dimensional inputs and arrays with more than two
+  dimensions raise `ValueError`. `format_data` always returns C-contiguous
+  arrays, so numpy, pandas and polars inputs with equal values give
+  bit-identical results.
 - `reduce`: a list is reduced with one model fit jointly to all subjects;
   new `ndims` argument; callable reducers; `random_state=0` is passed to the
   model; a one-element list returns a one-element list; the model is never

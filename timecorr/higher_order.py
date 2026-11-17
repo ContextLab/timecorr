@@ -292,7 +292,9 @@ def features(
     Parameters
     ----------
     data : numpy.ndarray, pandas.DataFrame, polars.DataFrame, or list of these
-        One timepoints-by-features matrix per subject.
+        One timepoints-by-features matrix per subject.  A 1-D array or a
+        pandas or polars Series is one feature (shape ``(T, 1)``); arrays
+        with more than two dimensions raise ``ValueError``.
     order : int
         Highest order to compute (non-negative integer).  Default: 1.
     weights_function, weights_params : analysis kernel and its parameters

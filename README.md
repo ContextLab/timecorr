@@ -139,7 +139,7 @@ A model name, a dict such as `{"model": "PCA", "params": {"whiten": True}}`, a g
 The tutorials are Jupyter notebooks in `docs/tutorial/`, also rendered on Read the Docs:
 
 - **Using timecorr** (`timecorr_notebook.ipynb`): simulation, kernels, the vectorized format, several subjects.
-- **Synthetic data** (`synthetic_data_tutorial.ipynb`): the simulated dataset types, kernels, estimates compared with the true correlations, ISFC.
+- **Synthetic data** (`synthetic_data_tutorial.ipynb`): the simulated dataset types, kernel shape and width compared against the true correlations, co-fluctuations from the delta kernel, several subjects, and a per-timepoint test across subjects.
 - **Higher-order correlations** (`higher_order_tutorial.ipynb`): the two paths of Fig. 10, `tc.features`, one-sided kernels, simulation and recovery at a chosen order, and the limits (feature counts, memory, variance-based reduction).
 - **Applications** (`applications_tutorial.ipynb`): dynamic correlations in simulated neuroscience, finance, climate and social-network data.
 

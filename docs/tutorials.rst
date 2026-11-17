@@ -24,10 +24,11 @@ several subjects (ISFC), and reducing correlations with ``rfun``.
 Synthetic data
 --------------
 
-``synthetic_data_tutorial.ipynb``: the four simulated dataset types (random,
-constant, block, ramping), the kernels, dynamic correlations estimated with each
-kernel and compared with the true correlations, and ISFC across subjects who
-share a template.
+``synthetic_data_tutorial.ipynb``: the four ways a simulated correlation
+template can change over time (constant, block, ramping, random); the kernels,
+and how their shape and width affect recovery of the template; the delta kernel
+and co-fluctuations; several subjects who share a template; and a test, across
+subjects, of each timepoint's correlation.
 
 Higher-order correlations
 -------------------------

@@ -26,8 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   co-fluctuations: products of the globally z-scored series at each timepoint.
   Their average over timepoints is the static correlation.
 - A kernel row with fewer than 3 non-zero weights gives an undefined
-  correlation; those timepoints are set to 0 and one `UserWarning` reports how
-  many there are. A kernel whose rows are all zero raises `ValueError`.
+  correlation; those timepoints are set to 0 and one `UserWarning` per call
+  (not per subject), attributed to the caller's line, reports how many there
+  are. A kernel whose rows are all zero raises `ValueError`.
 - Kernel convention: row `t` of a weights matrix (`weights[t, :]`) is the
   kernel used to estimate at timepoint `t`, everywhere in the package.
 - ISFC (`isfc`, `wisfc`): each subject-versus-others cross-correlation matrix
@@ -56,7 +57,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   new `ndims` argument; callable reducers; `random_state=0` is passed to the
   model; a one-element list returns a one-element list; the model is never
   asked for more components than the data have; dict `'params'` are passed to
-  hypertools as `'kwargs'`.
+  hypertools as `'kwargs'`, merged with any `'kwargs'` the dict also gives (a
+  key given in both with different values raises `ValueError`).
 - Decoders moved to the new module `timecorr.decoding` (same public names,
   still importable from `timecorr.helpers`; `timepoint_decoder` and
   `weighted_timepoint_decoder` also from `timecorr`). They compute
@@ -138,6 +140,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `timecorr(cfun=None)` crashed on list input and ignored the kernel options.
 - `smooth` applied the kernel row mirrored, crashed for series shorter than
   the window, and its default parameters broke non-Laplace kernels.
+- `get_xval_assignments` made empty folds when the number of folds did not
+  divide the number of items (for example 7 subjects in 5 folds), and the
+  decoders then crashed; folds now differ in size by at most one, and more
+  folds than items raise `ValueError`.
+- The weighted decoders raise a clear `ValueError` for an empty
+  `optimize_levels`.
+- `wisfc` default subject weights: with 2 or fewer features, or a subject
+  whose connectome is uncorrelated with every other one, the subject's own
+  data entered its reference (or the reference was NaN and the output all
+  zeros); the other subjects are now weighted equally, as documented.
+- `weighted_mean` failed with its default weights and modified the caller's
+  weights.
 - `random_corrmat` returned matrices that were not positive semidefinite;
   block lengths came from a float; the `simulate_data` docstring described the
   wrong return values.

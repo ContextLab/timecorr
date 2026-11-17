@@ -594,3 +594,45 @@ def test_features_corrmean_combine_finite_with_pca_and_delta_kernel():
                             weights_function=kernel, weights_params=None)
         for k in (1, 2):
             assert np.all(np.isfinite(X[k]))
+
+
+# wisfc default subject weights: zero weight on the subject itself, always
+def _with_exact_correlation(R, T, seed):
+    """(T, K) data whose sample correlation matrix is exactly R (to rounding)."""
+    rng = _rng(seed)
+    Z = rng.randn(T, R.shape[0])
+    Z -= Z.mean(axis=0)
+    Q, _ = np.linalg.qr(Z)  # centered, orthonormal columns
+    return Q @ np.linalg.cholesky(R).T
+
+
+def test_wisfc_default_weights_uncorrelated_connectomes_use_the_other_subject():
+    # The two connectomes (0.5, 0, -0.5) and (0.3, -0.3, 0.3) are uncorrelated,
+    # so the computed subject weight is ~1e-16; the reference must still be
+    # the other subject (it was all NaN, giving all-zero output).
+    R1 = np.array([[1, 0.5, 0.0], [0.5, 1, -0.5], [0.0, -0.5, 1]])
+    R2 = np.array([[1, 0.3, -0.3], [0.3, 1, 0.3], [-0.3, 0.3, 1]])
+    data = [_with_exact_correlation(R1, 40, 1), _with_exact_correlation(R2, 40, 2)]
+    w = gaussian_weights(40, {"var": 20})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = wisfc(data, w)
+    ref = wisfc(data, w, subject_weights=1 - np.eye(2))
+    for o, r in zip(out, ref):
+        assert np.array_equal(o, r)
+        assert np.any(o[:, 3:] != 0)
+
+
+@pytest.mark.parametrize("K", [1, 2])
+def test_wisfc_default_weights_with_too_few_features_exclude_the_subject(K):
+    # with K <= 2 there are fewer than 3 connectome entries to correlate, so
+    # every other subject gets the same weight and the subject itself none
+    rng = _rng(40 + K)
+    data = [rng.randn(30, K) for _ in range(3)]
+    w = gaussian_weights(30, {"var": 20})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = wisfc(data, w)
+    ref = wisfc(data, w, subject_weights=1 - np.eye(3))
+    for o, r in zip(out, ref):
+        assert np.array_equal(o, r)

@@ -332,8 +332,8 @@ class TestFullCoverageHelpers:
         assignments = get_xval_assignments(10, 3)
         assert len(assignments) == 10
         assert max(assignments) < 3
-        # groups of ceil(10 / 3) = 4, 4 and 2
-        assert sorted(np.bincount(assignments.astype(int)).tolist()) == [2, 4, 4]
+        # balanced groups (sizes differ by at most one): 4, 3 and 3
+        assert sorted(np.bincount(assignments.astype(int)).tolist()) == [3, 3, 4]
 
 class TestFullCoverageNumericalCorrectness:
     """Test numerical correctness of basic utility functions."""

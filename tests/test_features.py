@@ -387,3 +387,100 @@ def test_memory_guard_counts_subjects():
     assert "3 subjects" in str(info.value)
     X = tc.features(data[0], order=2, rfun=None, max_memory_gb=0.6)
     assert X[2].shape == (300, 210 * 211 // 2)
+
+
+# ------------------------------------------------- undefined-row warning
+
+
+def _undefined_warnings(rec):
+    return [r for r in rec if "non-zero kernel weights" in str(r.message)]
+
+
+def test_kernel_with_fewer_than_three_weights_everywhere_warns_all_rows():
+    # a backward boxcar of width 3 keeps t-1 and t: at most 2 weights per row
+    import warnings
+
+    x = make_data(T=30, K=3)
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        out = tc.timecorr(x, weights_function=tc.boxcar_weights,
+                          weights_params={"width": 3},
+                          include_timepoints="backward")
+    found = _undefined_warnings(rec)
+    assert len(found) == 1
+    assert str(found[0].message).startswith("30 of 30 timepoints have fewer than 3")
+    assert np.array_equal(out, np.zeros((30, 6)))
+
+
+@pytest.mark.parametrize("cfun_name", ["isfc", "autofc", "wisfc"])
+def test_undefined_row_warning_once_per_call_at_the_users_line(cfun_name):
+    import warnings
+
+    data = make_data(n_subjects=4)
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        tc.timecorr(data, cfun=getattr(tc, cfun_name), include_timepoints="backward",
+                    weights_params={"var": 10})
+    found = _undefined_warnings(rec)
+    assert len(found) == 1
+    assert found[0].filename == __file__
+
+
+def test_undefined_row_warning_points_at_the_users_line_through_features():
+    import warnings
+
+    data = make_data(n_subjects=3)
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        tc.features(data, order=2, include_timepoints="backward",
+                    weights_params={"var": 10})
+    found = _undefined_warnings(rec)
+    # one analysis call per order, each warning once
+    assert len(found) == 2
+    assert all(r.filename == __file__ for r in found)
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        tc.wcorr(data[0], data[1], tc.one_sided(tc.gaussian_weights(T), "backward"))
+    found = _undefined_warnings(rec)
+    assert len(found) == 1 and found[0].filename == __file__
+
+
+# ------------------------------------------- deferred triage: missing tests
+
+
+def test_list_returning_combine_on_single_array_input():
+    data = make_data()
+
+    def as_list(corrs):  # a combine that returns a list (like null_combine)
+        return [np.array(c, copy=True) for c in corrs]
+
+    X, D = tc.features(data, order=2, combine=as_list, return_delta=True,
+                       weights_params={"var": 10})
+    ref_X, ref_D = tc.features(data, order=2, return_delta=True,
+                               weights_params={"var": 10})
+    for k in (0, 1, 2):
+        assert isinstance(X[k], np.ndarray) and X[k].shape == (T, K)
+        assert isinstance(D[k], np.ndarray) and D[k].shape == (T, K)
+        assert np.array_equal(X[k], ref_X[k])
+        assert np.array_equal(D[k], ref_D[k])
+
+
+@pytest.mark.parametrize(
+    "option", [{"include_timepoints": "backward"}, {"include_zero": False}]
+)
+def test_kernel_options_reach_the_analysis_path_only(option):
+    import warnings
+
+    data = make_data(n_subjects=S)
+    common = dict(order=2, rfun=None, return_delta=True,
+                  weights_function=tc.laplace_weights, weights_params={"scale": 5})
+    ref_X, ref_D = tc.features(data, **common)
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        X, D = tc.features(data, **common, **option)
+    # the only warnings: a backward kernel leaves its first rows undefined
+    assert all("non-zero kernel weights" in str(r.message) for r in rec)
+    assert len(rec) == (2 if "include_timepoints" in option else 0)
+    for k in (1, 2):
+        assert_list_equal(D[k], ref_D[k])  # delta path unchanged
+        assert all(not np.array_equal(x, r) for x, r in zip(X[k], ref_X[k]))

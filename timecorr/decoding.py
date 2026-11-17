@@ -403,6 +403,11 @@ def _check_optimize_levels(optimize_levels, top):
     if optimize_levels is None:
         return list(range(top + 1))
     optimize_levels = [int(v) for v in optimize_levels]
+    if len(optimize_levels) == 0:
+        raise ValueError(
+            "optimize_levels must name at least one level (between 0 and "
+            f"{top}); got an empty sequence.  Pass None to use every level."
+        )
     if any(v < 0 or v > top for v in optimize_levels):
         raise ValueError(
             f"optimize_levels must lie between 0 and the highest level ({top}); "
@@ -637,11 +642,6 @@ def weighted_timepoint_decoder_ec(
     return _weighted_decode(
         subjects, D, nfolds, circular, top, optimize_levels, opt_init, settings
     )
-
-
-def _take(seq, mask):
-    """The entries of a sequence (list or array) where a boolean mask is True."""
-    return [seq[j] for j in np.where(mask)[0]]
 
 
 def folding_levels_ec(
@@ -1099,13 +1099,19 @@ def get_xval_assignments(ndata, nfolds):
     ndata : int
         Number of items (for example subjects).
     nfolds : int
-        Number of groups.
+        Number of groups, from 1 to ``ndata``.
 
     Returns
     -------
     numpy.ndarray
-        Group index (as float) of each item; groups have ``ceil(ndata / nfolds)``
-        items, the last one possibly fewer.
+        Group index (as float) of each item.  Every group is non-empty and
+        group sizes differ by at most one (the first ``ndata % nfolds`` groups
+        have one more item).
+
+    Raises
+    ------
+    ValueError
+        If ``nfolds`` is less than 1 or more than ``ndata``.
 
     Examples
     --------
@@ -1114,13 +1120,19 @@ def get_xval_assignments(ndata, nfolds):
     >>> np.random.seed(0)
     >>> sorted(get_xval_assignments(5, 2).tolist())
     [0.0, 0.0, 0.0, 1.0, 1.0]
+    >>> np.bincount(get_xval_assignments(7, 5).astype(int)).tolist()
+    [2, 2, 1, 1, 1]
     """
-    group_assignments = np.zeros(ndata)
-    groupsize = int(np.ceil(ndata / nfolds))
-
-    for i in range(1, nfolds):
-        inds = np.arange(i * groupsize, np.min([(i + 1) * groupsize, ndata]))
-        group_assignments[inds] = i
+    ndata = int(ndata)
+    nfolds = int(nfolds)
+    if not 1 <= nfolds <= ndata:
+        raise ValueError(
+            f"nfolds must be between 1 and the number of items ({ndata}); "
+            f"got {nfolds}."
+        )
+    sizes = np.full(nfolds, ndata // nfolds)
+    sizes[: ndata % nfolds] += 1
+    group_assignments = np.repeat(np.arange(nfolds, dtype=float), sizes)
     np.random.shuffle(group_assignments)
     return group_assignments
 

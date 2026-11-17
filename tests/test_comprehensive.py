@@ -501,9 +501,21 @@ class TestUtilityFunctions:
     """Test utility functions."""
 
     def test_weighted_mean_default(self):
-        """Test weighted_mean with default parameters."""
-        # Skip this test due to broadcasting bug in weighted_mean function
-        pytest.skip("weighted_mean has broadcasting issues")
+        """Test weighted_mean with default parameters (equal weights, last axis)."""
+        x = np.random.RandomState(0).randn(3, 4)
+        result = weighted_mean(x)
+        assert result.shape == (3,)
+        assert np.allclose(result, x.mean(axis=1), atol=1e-15, rtol=0)
+        result0 = weighted_mean(x, axis=0)
+        assert result0.shape == (4,)
+        assert np.allclose(result0, x.mean(axis=0), atol=1e-15, rtol=0)
+
+    def test_weighted_mean_does_not_modify_weights(self):
+        x = np.random.RandomState(1).randn(3, 4)
+        weights = np.array([2.0, np.nan, 1.0])
+        result = weighted_mean(x, axis=0, weights=weights)
+        assert np.allclose(result, (2 * x[0] + x[2]) / 3, atol=1e-15, rtol=0)
+        assert weights[0] == 2.0 and np.isnan(weights[1]) and weights[2] == 1.0
 
     def test_weighted_mean_custom_weights(self):
         """Test weighted_mean with custom weights."""

@@ -486,3 +486,46 @@ def test_folding_levels_level0_ignores_corrmean_combine(fun):
     assert np.all(np.isfinite(a[0])) and np.all(np.isfinite(a[1]))
     np.testing.assert_array_equal(a[0], b[0])
     np.testing.assert_array_equal(a[1], b[1])
+
+
+# ------------------------------------------------------------ folds
+
+
+@pytest.mark.parametrize("ndata", range(1, 13))
+def test_get_xval_assignments_never_makes_empty_folds(ndata):
+    for nfolds in range(1, ndata + 1):
+        np.random.seed(ndata * 100 + nfolds)
+        a = get_xval_assignments(ndata, nfolds)
+        assert len(a) == ndata
+        sizes = np.bincount(a.astype(int), minlength=nfolds)
+        assert len(sizes) == nfolds
+        assert sizes.min() >= 1, (ndata, nfolds, sizes)
+        assert sizes.max() - sizes.min() <= 1
+
+
+@pytest.mark.parametrize("nfolds", [0, -1, 8])
+def test_get_xval_assignments_rejects_impossible_fold_counts(nfolds):
+    with pytest.raises(ValueError, match="nfolds"):
+        get_xval_assignments(7, nfolds)
+
+
+@pytest.mark.parametrize("S,nfolds", [(7, 5), (5, 4)])
+def test_decoders_run_when_folds_do_not_divide_subjects(S, nfolds):
+    data = shared_ramping_data(S=S, T=30, K=4)
+    np.random.seed(0)
+    res = tc.timepoint_decoder(data, nfolds=nfolds, level=0)
+    assert sorted(res["folds"].unique().tolist()) == list(range(nfolds))
+    assert np.all(np.isfinite(res["accuracy"]))
+    np.random.seed(0)
+    res = weighted_timepoint_decoder(data, nfolds=nfolds, level=1,
+                                     weights_params={"scale": 5})
+    assert sorted(res["folds"].unique().tolist()) == list(range(nfolds))
+    assert np.all(np.isfinite(res["accuracy"]))
+
+
+@pytest.mark.parametrize("which", ["weighted", "weighted_ec"])
+def test_empty_optimize_levels_raises_clear_error(which):
+    data = shared_ramping_data(S=6, T=30, K=4)
+    with pytest.raises(ValueError, match="optimize_levels must name at least one level"):
+        _run_weighted(which, data, nfolds=2, level=1, optimize_levels=[],
+                      weights_params={"scale": 5})

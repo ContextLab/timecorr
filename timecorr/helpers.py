@@ -2,6 +2,8 @@
 from __future__ import division
 
 import math
+import os
+import sys
 import warnings
 
 import datawrangler as dw
@@ -398,6 +400,44 @@ def boxcar_weights(T, params=boxcar_params, direction=None, include_zero=True):
     return _finish_kernel(w, direction, include_zero)
 
 
+_PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+def _warn_user(message, category=UserWarning):
+    """
+    Warn with the location of the first caller outside the timecorr package,
+    so the warning points at the user's line however deep the call is.
+    """
+    frame = sys._getframe(1)
+    level = 2
+    while frame is not None and (
+        os.path.dirname(os.path.abspath(frame.f_code.co_filename)) == _PACKAGE_DIR
+    ):
+        frame = frame.f_back
+        level += 1
+    warnings.warn(message, category, stacklevel=level)
+
+
+def _undefined_rows_message(weights):
+    """
+    The undefined-row warning for a kernel (NaN weights count as 0), or None.
+
+    A row with fewer than 3 non-zero weights is undefined unless every row has
+    exactly one (a true delta kernel); an all-zero kernel is left to ``wcorr``
+    to reject.
+    """
+    support = np.count_nonzero(np.nan_to_num(weights, nan=0.0), axis=1)
+    if np.all(support == 0) or np.all(support == 1):
+        return None
+    undefined = support < 3
+    if not np.any(undefined):
+        return None
+    return (
+        f"{int(undefined.sum())} of {len(undefined)} timepoints have fewer than 3 "
+        "non-zero kernel weights; their correlations are undefined and set to 0."
+    )
+
+
 def _is_polars(x):
     return pl is not None and isinstance(x, (pl.DataFrame, pl.Series))
 
@@ -758,6 +798,11 @@ def wcorr(a, b, weights):
     >>> bool(np.allclose(uniform[:, :, 10], np.corrcoef(x.T)))
     True
     """
+    return _wcorr(a, b, weights)
+
+
+def _wcorr(a, b, weights, warn=True):
+    """``wcorr``; with ``warn=False`` the undefined-row warning is left to the caller."""
     a = np.asarray(a, dtype=np.float64)
     b = np.asarray(b, dtype=np.float64)
     if a.ndim == 1:
@@ -782,12 +827,8 @@ def wcorr(a, b, weights):
 
     undefined = support < 3
     if np.any(undefined):
-        warnings.warn(
-            f"{int(undefined.sum())} of {len(undefined)} timepoints have fewer than 3 "
-            "non-zero kernel weights; their correlations are undefined and set to 0.",
-            UserWarning,
-            stacklevel=2,
-        )
+        if warn:
+            _warn_user(_undefined_rows_message(weights))
         weights[undefined] = 0
 
     autocorrelation = a is b or (
@@ -894,7 +935,10 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         subjects averaged for subject ``s``.  A scalar gives every other
         subject that weight.  Default (None): each pair of subjects is weighted
         by the correlation between their static correlation matrices, with
-        zero weight on the subject itself.
+        zero weight on the subject itself.  Where that correlation is not
+        defined (``K <= 2`` features give fewer than 3 matrix entries) or is
+        at most 1e-5 in magnitude for every other subject, the other subjects
+        are weighted equally.
 
     Returns
     -------
@@ -919,8 +963,11 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     if subject_weights is None:
         K = data[0].shape[1]
         iu = np.triu_indices(K, 1)
-        if len(iu[0]) == 0:  # one feature: no connectome to compare
-            subject_weights = np.zeros([S, S])
+        others = 1 - np.eye(S)
+        if len(iu[0]) < 3:
+            # K <= 2: fewer than 3 connectome entries, so no correlation
+            # between connectomes is defined; weight the other subjects equally
+            subject_weights = others
         else:
             static = np.ones([1, data[0].shape[0]])
             connectomes = np.stack(
@@ -930,15 +977,25 @@ def wisfc(data, timepoint_weights, subject_weights=None):
                 :, :, 0
             ]
             np.fill_diagonal(subject_weights, 0)
+            # a subject whose connectome is uncorrelated with every other one
+            # (all weights at most 1e-5, which _nan_weighted_mean drops) would
+            # get no reference: weight the other subjects equally instead
+            empty = ~np.any(np.abs(subject_weights) > 1e-5, axis=1)
+            subject_weights[empty] = others[empty]
     elif np.isscalar(subject_weights):
         subject_weights = subject_weights * np.ones([S, S])
         np.fill_diagonal(subject_weights, 0)
+
+    # every subject shares the kernel: warn about undefined rows once per call
+    message = _undefined_rows_message(timepoint_weights)
+    if message is not None:
+        _warn_user(message)
 
     stacked = np.stack(data, axis=2)
     corrs = []
     for s, a in enumerate(data):
         b = _nan_weighted_mean(stacked, subject_weights[s, :])
-        wc = wcorr(a, b, timepoint_weights)
+        wc = _wcorr(a, b, timepoint_weights, warn=False)
         if not np.array_equal(a, b, equal_nan=True):
             wc = _fisher_symmetrize(wc)
         corrs.append(mat2vec(wc))
@@ -1226,12 +1283,17 @@ def reduce(corrs, rfun=None, ndims=None):
           MiniBatchSparsePCA, KernelPCA, FastICA, FactorAnalysis, TruncatedSVD,
           DictionaryLearning, MiniBatchDictionaryLearning, TSNE, Isomap,
           SpectralEmbedding, LocallyLinearEmbedding, MDS, or UMAP), or a dict
-          such as ``{'model': 'PCA', 'params': {'whiten': True}}``.  When
+          such as ``{'model': 'PCA', 'params': {'whiten': True}}`` (``'params'``
+          and ``'kwargs'`` are both passed to the model; a key given in both
+          with different values raises ``ValueError``).  When
           ``corrs`` is a list, one model is fit jointly to all subjects.
           ``random_state=0`` is passed to the model.
         - One of the graph measures ``'eigenvector_centrality'``,
           ``'pagerank_centrality'``, or ``'strength'`` (strings only), computed
-          per node for each timepoint.
+          per node for each timepoint.  A delta-kernel co-fluctuation matrix
+          ``z z^T`` has rank one, so on the delta path of ``features``
+          eigenvector centrality equals ``|z| / ||z||`` and the graph measures
+          carry no network structure.
         - A callable ``f(list of numpy.ndarray) -> list of numpy.ndarray``.  A
           single array is passed as a one-element list and the first element of
           the result is returned.
@@ -1369,10 +1431,21 @@ def reduce(corrs, rfun=None, ndims=None):
     n_fit = min(ndims, n_features, n_samples)
 
     if isinstance(rfun, dict) and "params" in rfun:
-        # hypertools deprecated 'params' in favor of 'kwargs'
+        # hypertools deprecated 'params' in favor of 'kwargs': merge both
+        params = dict(rfun["params"] or {})
+        kwargs = dict(rfun.get("kwargs") or {})
+        clash = sorted(
+            k for k in set(params) & set(kwargs) if params[k] is not kwargs[k]
+            and params[k] != kwargs[k]
+        )
+        if clash:
+            raise ValueError(
+                f"rfun gives different values for {clash} in 'params' and "
+                "'kwargs'; give each model argument once."
+            )
         rfun = {
-            **{k: v for k, v in rfun.items() if k != "params"},
-            "kwargs": rfun["params"],
+            **{k: v for k, v in rfun.items() if k not in ("params", "kwargs")},
+            "kwargs": {**kwargs, **params},
         }
 
     red_corrs = hyp.reduce(corrs, reduce=rfun, ndims=n_fit, random_state=0)
@@ -1475,7 +1548,10 @@ def weighted_mean(x, axis=None, weights=None, tol=1e-5):
     if axis is None:
         axis = len(x.shape) - 1
     if weights is None:
-        weights = np.ones([1, x.shape[axis]])
+        weights = np.ones(x.shape[axis])
+    else:
+        # work on a copy: the caller's weights are not modified
+        weights = np.array(weights, dtype=np.float64, copy=True)
 
     # remove nans and force weights to sum to 1
     weights[np.isnan(weights)] = 0

@@ -170,3 +170,26 @@ def test_one_element_list_padded_output_stays_list():
     out = reduce([V], rfun="PCA", ndims=6)
     assert isinstance(out, list) and len(out) == 1
     assert out[0].shape == (4, 6)
+
+
+def test_dict_rfun_with_params_and_kwargs_keeps_both():
+    a = seeded_vectorized_corrs(T=40, K=6)
+    rfun = {"model": "PCA", "params": {"svd_solver": "full"}, "kwargs": {"whiten": True}}
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = reduce(a, rfun=rfun, ndims=3)
+    # whiten (from 'kwargs') reached the model: unit-variance components
+    np.testing.assert_allclose(out.std(axis=0, ddof=1), 1.0, atol=1e-8)
+    ref = reduce(a, rfun={"model": "PCA", "kwargs": {"whiten": True, "svd_solver": "full"}},
+                 ndims=3)
+    np.testing.assert_array_equal(out, ref)
+    # the caller's dict is not modified
+    assert rfun == {"model": "PCA", "params": {"svd_solver": "full"},
+                    "kwargs": {"whiten": True}}
+
+
+def test_dict_rfun_with_conflicting_params_and_kwargs_raises():
+    a = seeded_vectorized_corrs(T=40, K=6)
+    rfun = {"model": "PCA", "params": {"whiten": True}, "kwargs": {"whiten": False}}
+    with pytest.raises(ValueError, match="whiten"):
+        reduce(a, rfun=rfun, ndims=3)

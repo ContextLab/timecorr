@@ -13,7 +13,7 @@ LICENSE = "MIT"
 
 setup(
     name="timecorr",
-    version="0.2.0",
+    version="0.3.0",
     description="Compute dynamic correlations, dynamic higher-order correlations, and dynamic graph theoretic measures in timeseries data",
     long_description=readme,
     long_description_content_type="text/markdown",
@@ -43,9 +43,10 @@ setup(
             "numpydoc",
             "nbsphinx",
             "seaborn>=0.8.1",
+            "ipykernel",
+            "nbconvert",
         ],
     },
     packages=find_packages(exclude=("tests", "docs")),
 )
 
-#'brainconn @ git+https://github.com/FIU-Neuro/brainconn#egg=brainconn-0.1.0'

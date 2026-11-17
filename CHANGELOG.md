@@ -5,6 +5,132 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-17
+
+### Changed
+
+- **Numerical results differ from 0.2.0: the correlation estimator changed.**
+  `wcorr` (and so `timecorr`, `isfc`, `wisfc`, `autofc`, `tc.features` and the
+  decoders) now computes a kernel-weighted Pearson correlation: for timepoint
+  `t` the kernel row `weights[t, :]` weights the covariance and variance sums
+  as well as the means,
+  `r = sum w d_a d_b / sqrt(sum |w| d_a**2 * sum |w| d_b**2)`, with deviations
+  `d` taken from the kernel-weighted mean. In 0.2.0 (and in Eq. 4 of Owen,
+  Chang & Manning, 2021) the kernel set only the mean, and the deviations were
+  summed over all timepoints with equal weight. There is no option to select
+  the 0.2.0 estimator. On block-structured simulated data (T=300, K=10,
+  Laplace kernel with scale 20, 10 seeds) the mean correlation between the
+  estimated and true correlation matrices is 0.86 with the new estimator and
+  0.42 with the 0.2.0 estimator.
+- A true delta kernel (`eye_weights`: one non-zero weight per row) gives
+  co-fluctuations: products of the globally z-scored series at each timepoint.
+  Their average over timepoints is the static correlation.
+- A kernel row with fewer than 3 non-zero weights gives an undefined
+  correlation; those timepoints are set to 0 and one `UserWarning` reports how
+  many there are. A kernel whose rows are all zero raises `ValueError`.
+- Kernel convention: row `t` of a weights matrix (`weights[t, :]`) is the
+  kernel used to estimate at timepoint `t`, everywhere in the package.
+- ISFC (`isfc`, `wisfc`): each subject-versus-others cross-correlation matrix
+  `C` is symmetrized by averaging the Fisher z-transforms of `C` and `C.T`,
+  which with `combine=corrmean_combine` gives Eq. 5 of the paper. 0.2.0 kept
+  only the upper triangle of the asymmetric matrix.
+- NaN samples carry no weight in correlations (each pair of features uses the
+  timepoints where both are observed), and NaN kernel weights count as 0.
+- `corrmean_combine`: the diagonal of averaged autocorrelations is 1 (it was
+  0); where +1 and -1 both occur in a Fisher z average they are excluded and
+  the remaining values are averaged.
+- Input formatting goes through pydata-wrangler: numpy arrays, pandas
+  DataFrames, polars DataFrames, and lists of them are accepted; inputs are
+  never modified; subjects with mismatched shapes and non-numeric columns
+  raise `ValueError`.
+- `reduce`: a list is reduced with one model fit jointly to all subjects;
+  new `ndims` argument; callable reducers; `random_state=0` is passed to the
+  model; a one-element list returns a one-element list; the model is never
+  asked for more components than the data have; dict `'params'` are passed to
+  hypertools as `'kwargs'`.
+- Decoders moved to the new module `timecorr.decoding` (same public names,
+  still importable from `timecorr.helpers`; `timepoint_decoder` and
+  `weighted_timepoint_decoder` also from `timecorr`). They compute
+  every order's features with the same two-path pipeline as `tc.features`.
+- `weighted_timepoint_decoder` and `weighted_timepoint_decoder_ec` fit the
+  level weights on two halves of the training group and apply them to the
+  held-out group (0.2.0 fit them on the matrices being scored). The weights
+  minimize a smooth cross-entropy surrogate of decoding accuracy (a softmax
+  over each row of the mixed Fisher z decoding matrix) with SLSQP; the paper
+  describes maximizing decoding accuracy directly, which is piecewise
+  constant in the weights, and in 0.2.0 the optimizer stayed at its starting
+  weights. Dimensionality reduction remains unsupervised and is fit jointly
+  on all subjects.
+- `timecorr(cfun=None)` returns the kernel-weighted mean of the samples using
+  the same kernel rows as the correlation path (including `include_timepoints`,
+  `include_zero` and `exclude_timepoints`) and accepts lists.
+- `simulate_data`: subjects share one template (0.2.0 drew an independent
+  template per subject); seeding uses a `numpy.random.Generator` and no longer
+  touches the global NumPy state or silences warnings globally;
+  `set_random_seed=0` is a real seed.
+- `plot_weights` draws on a given axis, returns it, and does not call
+  `plt.show()`.
+
+### Added
+
+- `tc.features(data, order=...)`: features of every order from 0 to `order`
+  through two paths per order (Fig. 10 of the paper). The analysis path applies
+  the analysis kernel to the previous order's delta features; the delta path
+  (`eye_weights`, `autofc`) gives the unblurred co-fluctuations passed to the
+  next order, so each order is blurred by the kernel once. Separate reducers
+  for the two paths (`rfun`, `delta_rfun`); `rfun=None` runs without
+  reduction, guarded by a memory estimate (`max_memory_gb`, default 4 GB) that
+  raises `MemoryError` before allocating.
+- `timecorr.higher_order.two_path_step` (one order of the pipeline) and
+  `timecorr.higher_order.estimate_memory_gb`.
+- One-sided kernels: `tc.one_sided`; `direction` (`'backward'`, `'forward'`)
+  and `include_zero` arguments on every `*_weights` function;
+  `include_timepoints='backward'` / `'forward'` and `include_zero` on
+  `timecorr`.
+- Simulation at a chosen correlation order: `simulate_data(order=n)` embeds
+  the template at exactly order `n` with a sign-parity cascade (`K` must be
+  `p * 2**(n-1)`), with `amplitude_noise` (standard deviation of the
+  log-amplitude of each block's product). New functions
+  `simulate_multi_order`, `carrier_reducer`, `carrier_columns`,
+  `nested_template` and `min_features`. For `order > 1`, `return_corrs=True`
+  returns a dict with keys `order`, `corrs` (the correlations the data carry),
+  `requested` and `blocks`.
+- New tutorial (`docs/tutorial/higher_order_tutorial.ipynb`) and gallery
+  examples for one-sided kernels and recovery of simulated structure by order.
+
+### Fixed
+
+- `include_timepoints='pre'` used future timepoints and `'post'` past ones;
+  both now mean what their names say (aliases of `'backward'` and
+  `'forward'`).
+- `wcorr` crashed for inputs with different numbers of features.
+- `vec2mat` failed on a 1 x V input; `z2r(inf)` returned 0 (now 1).
+- `mat2vec` and `vec2mat` are vectorized; `mat2vec` copies row by row, which
+  lowers its peak memory from about 3.1 to about 1.1 times the output size.
+- `weighted_timepoint_decoder` and `weighted_timepoint_decoder_ec` crashed
+  (pandas `join_axes`, level indexing) and printed debug output.
+- `timepoint_decoder`: weights `mu` were mixed in the wrong transform
+  direction and failed for array input; list input crashed; `nfolds=1` now
+  warns that the analysis is circular and runs.
+- `timecorr(cfun=None)` crashed on list input and ignored the kernel options.
+- `smooth` applied the kernel row mirrored, crashed for series shorter than
+  the window, and its default parameters broke non-Laplace kernels.
+- `random_corrmat` returned matrices that were not positive semidefinite;
+  block lengths came from a float; the `simulate_data` docstring described the
+  wrong return values.
+- `format_data` failed on read-only pandas 3 arrays.
+- `folding_levels` and `folding_levels_ec` failed for scalar settings and
+  `rfun=None`.
+
+### Dependencies and packaging
+
+- Python 3.10 or later; continuous integration on Python 3.10 to 3.13.
+- Added `pydata-wrangler`; `hypertools>=0.8`; `numpy`, `pandas` and
+  `matplotlib` are listed explicitly.
+- Removed `nose`, `sphinx` and `duecredit` from the install requirements.
+  Tests run with `pytest` (`pip install timecorr[test]` adds `pytest` and
+  `polars`); documentation dependencies are in the `docs` extra.
+
 ## [0.2.0] - 2025-07-09
 
 ### 🎉 Major Release - Dependency Removal & Codebase Modernization

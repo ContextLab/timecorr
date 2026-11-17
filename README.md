@@ -143,6 +143,8 @@ The tutorials are Jupyter notebooks in `docs/tutorial/`, also rendered on Read t
 - **Higher-order correlations** (`higher_order_tutorial.ipynb`): the two paths of Fig. 10, `tc.features`, one-sided kernels, simulation and recovery at a chosen order, and the limits (feature counts, memory, variance-based reduction).
 - **Applications** (`applications_tutorial.ipynb`): dynamic correlations in simulated neuroscience, finance, climate and social-network data.
 
+Each tutorial has an "Open in Colab" link at the top that opens the notebook in Google Colab, where its first code cell installs timecorr.
+
 The `examples/` folder holds short scripts, shown in the example gallery on Read the Docs.
 
 # Installation

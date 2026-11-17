@@ -4,7 +4,9 @@ Tutorials
 =========
 
 The tutorials are Jupyter notebooks in the ``docs/tutorial/`` folder of the
-repository. The pages below show them with the output of a full run.
+repository. The pages below show them with the output of a full run. Each
+tutorial has an "Open in Colab" link at the top that opens the notebook in
+Google Colab, where its first code cell installs timecorr.
 
 .. toctree::
    :maxdepth: 1

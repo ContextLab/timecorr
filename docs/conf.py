@@ -92,7 +92,17 @@ language = "en"
 # List of patterns, relative to source directory, that match files and
 # directories to ignore when looking for source files.
 # This patterns also effect to html_static_path and html_extra_path
-exclude_patterns = ["_build", "Thumbs.db", ".DS_Store"]
+exclude_patterns = [
+    "_build",
+    "Thumbs.db",
+    ".DS_Store",
+    # sphinx-gallery writes these next to each example page; only the .rst is a page
+    "auto_examples/*.ipynb",
+    "auto_examples/*.py",
+    "auto_examples/*.json",
+    "auto_examples/*.zip",
+    "auto_examples/*.md5",
+]
 
 # The name of the Pygments (syntax highlighting) style to use.
 pygments_style = "sphinx"

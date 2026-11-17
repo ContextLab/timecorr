@@ -390,6 +390,25 @@ def test_mat2vec_vec2mat_roundtrip():
     assert np.array_equal(m, m.transpose(1, 0, 2))
 
 
+def test_mat2vec_allocates_little_beyond_its_output():
+    # Unreduced higher-order runs vectorize (d, d, T) stacks of several GB; full
+    # size temporaries (a fancy-indexed copy of the upper triangle and a
+    # NaN-replaced copy of it) used to triple mat2vec's peak memory.
+    import tracemalloc
+
+    m = _rng(19).randn(150, 150, 200)
+    m[3, 7, 11] = np.nan
+    tracemalloc.start()
+    try:
+        before = tracemalloc.get_traced_memory()[0]
+        y = mat2vec(m)
+        peak = tracemalloc.get_traced_memory()[1] - before
+    finally:
+        tracemalloc.stop()
+    assert peak <= 1.25 * y.nbytes
+    assert np.array_equal(y, _mat2vec_loop(m), equal_nan=True)
+
+
 def test_vec2mat_single_row_2d():
     v = np.arange(6.0)[np.newaxis, :]  # K = 3, one timepoint
     m = vec2mat(v)

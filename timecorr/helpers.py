@@ -1462,11 +1462,15 @@ def mat2vec(m):
         raise ValueError("Input must be a 2 or 3 dimensional Numpy array")
 
     K = m.shape[0]
-    iu = np.triu_indices(K, 1)
-    y = np.zeros([m.shape[2], K + len(iu[0])])
+    y = np.empty([m.shape[2], K * (K + 1) // 2])
     y[:, :K] = np.diagonal(m, axis1=0, axis2=1)
-    upper = m[iu[0], iu[1], :].T
-    y[:, K:] = np.where(np.isnan(upper), 0, upper)
+    # copy the upper triangle row by row, so no full-size temporary is made
+    col = K
+    for i in range(K - 1):
+        y[:, col : col + K - i - 1] = m[i, i + 1 :, :].T
+        col += K - i - 1
+    upper = y[:, K:]
+    np.copyto(upper, 0.0, where=np.isnan(upper))
     return y
 
 

@@ -54,7 +54,7 @@ X = tc.features(subjects, order=3, weights_params={"var": 10})
 print(len(X), X[3][0].shape)  # 4 (100, 5): orders 0-3, each reduced (PCA) to 5 features
 ```
 
-`X[0]` is the data and `X[k]` holds the order-`k` features of each subject. At each order the analysis kernel is applied to the previous order's co-fluctuations (computed with a delta kernel), so every order is blurred by the kernel once. By default the features of each order are reduced with PCA, fit jointly across subjects, to as many features as the data have; `rfun=None` keeps every correlation (the number of features then grows from `K` to `K(K+1)/2` at each order, and `tc.features` raises `MemoryError` before allocating more than `max_memory_gb`, 4 GB by default, per step).
+`X[0]` is the data and `X[k]` holds the order-`k` features of each subject. At each order the analysis kernel is applied to the previous order's co-fluctuations (computed with a delta kernel), so every order is blurred by the kernel once. By default the features of each order are reduced with PCA, fit jointly across subjects, to as many features as the data have; `rfun=None` keeps every correlation (the number of features then grows from `K` to `K(K+1)/2` at each order, and `tc.features` raises `MemoryError` before a step whose estimated peak memory, for all subjects together, exceeds `max_memory_gb`, 4 GB by default).
 
 ## One-sided kernels
 

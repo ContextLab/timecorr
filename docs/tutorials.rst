@@ -37,8 +37,8 @@ Higher-order correlations
 Manning (2021) and ``tc.features``; one-sided kernels; simulating data whose
 structure exists only at a chosen order and recovering it; and the limits of the
 approach (the number of features an order needs, the memory of unreduced runs,
-and why variance-based reduction misses structure that exists only at order 3 or
-higher).
+and how much of the structure variance-based reduction keeps at orders 2 and 3,
+as measured there).
 
 Applications
 ------------

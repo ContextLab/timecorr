@@ -189,8 +189,8 @@ def test_carrier_reducer_recovery(order, seed):
 
 
 def test_order3_data_run_with_pca():
-    # PCA cannot keep structure that exists only at order 3 (the generator warns),
-    # but the pipeline has no way to know that and must still run.
+    # PCA did not retain structure that exists only at order 3 in the tutorial's
+    # measurement (the generator warns), but the pipeline must still run.
     data, _ = _simulate(order=3, K=16)
     X = tc.features(data, order=3, rfun="PCA", **KERNEL)
     assert len(X) == 4

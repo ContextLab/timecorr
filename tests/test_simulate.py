@@ -210,6 +210,11 @@ def test_order3_warns_once_about_variance_based_reduction():
     msg = str(record[0].message)
     assert "PCA" in msg and "carrier_reducer" in msg and "rfun=None" in msg
     assert "order >= 3" in msg
+    # states what was measured, and no more
+    assert "not distinguishable from its noise control" in msg
+    assert "-0.00 versus 0.02, p = 0.20" in msg
+    assert "orders above 3 were not measured" in msg
+    assert "cannot" not in msg and "none" not in msg
 
 
 def test_order2_truth_structure():

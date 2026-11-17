@@ -321,9 +321,11 @@ _SINGLE_ENTRY = (
 )
 _ORDER3 = (
     "The simulated structure exists only at order {order} (order >= 3). Variance-based "
-    "reduction (for example PCA) cannot retain structure that exists only at order >= 3; "
-    "analyze these data with delta_rfun=carrier_reducer(blocks) or without reduction "
-    "(rfun=None)."
+    "reduction (for example PCA) may not retain it: in the higher-order tutorial's "
+    "measurement at order 3 (20 seeds), PCA's event contrast was not distinguishable "
+    "from its noise control (-0.00 versus 0.02, p = 0.20); orders above 3 were not "
+    "measured. Analyze these data with delta_rfun=carrier_reducer(blocks) or without "
+    "reduction (rfun=None)."
 )
 
 
@@ -511,14 +513,16 @@ def simulate_data(
     -----
     UserWarning
         When the template has ``p = 2`` features (its correlation matrix has a
-        single entry), and when ``order >= 3``, because variance-based reduction
-        such as PCA cannot retain structure that exists only at order >= 3 (use
-        ``carrier_reducer`` or ``rfun=None``).  Measured in the higher-order
-        tutorial (lag-matched event contrast, 20 seeds, PCA on both paths):
-        structure embedded at order 2 is partly kept (0.21, against 0.08 for
-        noise and 0.47 with ``carrier_reducer``), so no warning is issued at
-        order 2; structure embedded at order 3 is not kept (0.00, against
-        0.02 for noise and 0.48 with ``carrier_reducer``).
+        single entry), and when ``order >= 3``, because variance-based
+        reduction such as PCA may not retain structure that exists only at
+        order >= 3 (use ``carrier_reducer`` or ``rfun=None``).  Measured in
+        the higher-order tutorial (lag-matched event contrast, 20 seeds, PCA
+        on both paths): structure embedded at order 2 is partly kept (0.21,
+        against 0.08 for noise and 0.47 with ``carrier_reducer``), so no
+        warning is issued at order 2; for structure embedded at order 3,
+        PCA's contrast was not distinguishable from its noise control (-0.00
+        versus 0.02, Welch p = 0.20; 0.48 with ``carrier_reducer``).  Orders
+        above 3 were not measured.
 
     Examples
     --------

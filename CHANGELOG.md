@@ -107,13 +107,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   log-amplitude of each block's product). New functions
   `simulate_multi_order`, `carrier_reducer`, `carrier_columns`,
   `nested_template` and `min_features`. For `order > 1`, `return_corrs=True`
-  returns a dict with keys `order`, `corrs` (the correlations the block products carry: the latent-sign correlation with off-diagonal entries times `exp(-amplitude_noise**2)`),
-  `requested` and `blocks`. For `order >= 3` a `UserWarning` says that
-  variance-based reduction cannot keep the structure. In the higher-order
-  tutorial's measurement (lag-matched event contrast, 20 seeds), PCA keeps part
-  of structure embedded at order 2 (0.21, against 0.08 for noise and 0.47 with
-  `carrier_reducer`) and none of structure embedded at order 3 (0.00, against
-  0.02 for noise and 0.48 with `carrier_reducer`).
+  returns a dict with keys `order`, `corrs` (the correlations the block
+  products carry: the latent-sign correlation with off-diagonal entries
+  multiplied by `exp(-amplitude_noise**2)`), `requested` and `blocks`. For
+  `order >= 3` a `UserWarning` says that variance-based reduction may not
+  retain the structure. In the higher-order tutorial's measurement
+  (lag-matched event contrast, 20 seeds), PCA keeps part of structure embedded
+  at order 2 (0.21, against 0.08 for noise and 0.47 with `carrier_reducer`);
+  for structure embedded at order 3, PCA's contrast was not distinguishable
+  from its noise control (-0.00 versus 0.02, Welch p = 0.20; 0.48 with
+  `carrier_reducer`). Orders above 3 were not measured.
 - New tutorial (`docs/tutorial/higher_order_tutorial.ipynb`) and gallery
   examples for one-sided kernels and recovery of simulated structure by order.
   The other three tutorials and the existing examples were updated to run on

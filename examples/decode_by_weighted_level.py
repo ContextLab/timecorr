@@ -36,12 +36,12 @@ laplace = {"name": "Laplace", "weights": tc.laplace_weights, "params": {"scale":
 # the group splits are random: seed the global NumPy random state to repeat them
 np.random.seed(0)
 
-# order 0 holds activations (mean_combine); orders 1 and 2 hold correlations,
-# averaged in Fisher z space (corrmean_combine)
+# corrmean_combine averages the groups' correlations (orders 1 and 2) in Fisher
+# z space; order-0 activations are always averaged with mean_combine
 results = tc.weighted_timepoint_decoder(
     data,
     level=2,
-    combine=[tc.mean_combine, tc.corrmean_combine, tc.corrmean_combine],
+    combine=tc.corrmean_combine,
     cfun=tc.isfc,
     rfun="eigenvector_centrality",
     weights_fun=laplace["weights"],

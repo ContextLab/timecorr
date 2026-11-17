@@ -111,6 +111,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lowers its peak memory from about 3.1 to about 1.1 times the output size.
 - `weighted_timepoint_decoder` and `weighted_timepoint_decoder_ec` crashed
   (pandas `join_axes`, level indexing) and printed debug output.
+- Decoders: with `combine=corrmean_combine`, order-0 activations were Fisher
+  z averaged, which gave NaN (and chance accuracy) in `timepoint_decoder` and
+  `weighted_timepoint_decoder`. Order 0 is now always averaged with
+  `mean_combine`; `combine` applies to orders 1 and higher.
 - `timepoint_decoder`: weights `mu` were mixed in the wrong transform
   direction and failed for array input; list input crashed; `nfolds=1` now
   warns that the analysis is circular and runs.

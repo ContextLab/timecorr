@@ -1,5 +1,6 @@
 """Tests for timecorr.simulate: template generators and the sign-parity cascade."""
 
+import inspect
 import itertools
 import re
 import warnings
@@ -571,8 +572,11 @@ def test_simulate_multi_order_bad_input():
 
 
 def _returns_names(doc):
-    section = doc.split("Returns\n    -------\n")[1].split("\n    Raises\n")[0]
-    return re.findall(r"^    (\w+) : ", section, flags=re.M)
+    # cleandoc gives the same text on every Python version (3.13 strips
+    # docstring indentation at compile time; earlier versions keep it).
+    doc = inspect.cleandoc(doc)
+    section = doc.split("Returns\n-------\n")[1].split("\nRaises\n")[0]
+    return re.findall(r"^(\w+) : ", section, flags=re.M)
 
 
 def test_simulate_data_docstring_returns_matches_output():

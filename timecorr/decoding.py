@@ -95,9 +95,16 @@ def _decoder_delta_chain(data, level, rfun=None, max_memory_gb=None):
     subjects = _subjects(data)
     rfun = _per_level(rfun, level + 1, "rfun")
     D = [subjects]
+    nan_warned = [False]  # one NaN-filling warning per chain
     for k in range(1, level):
         D.append(
-            _delta_path(D[-1], rfun=rfun[k], max_memory_gb=max_memory_gb, order=k)
+            _delta_path(
+                D[-1],
+                rfun=rfun[k],
+                max_memory_gb=max_memory_gb,
+                order=k,
+                nan_warned=nan_warned,
+            )
         )
     return D
 

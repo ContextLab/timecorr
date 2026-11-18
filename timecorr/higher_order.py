@@ -15,16 +15,20 @@ Temporal blur is therefore applied once, at the order being analyzed.
 
 import numbers
 
+import numpy as np
+
 from .helpers import (
     _check_ndims,
     _check_rfun,
     _is_model,
     _wcorr_block_rows,
+    _warn_user,
     autofc,
     eye_weights,
     format_data,
     gaussian_weights,
     isfc,
+    mat2vec,
     null_combine,
     reduce,
 )
@@ -236,14 +240,42 @@ def _analysis_path(
     return out
 
 
+_NAN_FILL_MESSAGE = (
+    "NaN samples: their co-fluctuations are set to 0 before the delta path's "
+    "{kind} reduction ({rfun!r}), so NaN handling is approximate from order 2 on "
+    "under that reducer (at order 1, NaN samples carry no weight).  Use "
+    "delta_rfun=None or a callable to keep them out of later orders."
+)
+
+
+def _nan_pairs(x):
+    """(T, d(d+1)/2) mask, in ``mat2vec`` layout, of pairs with a NaN sample in ``x``."""
+    missing = np.isnan(x).T  # (d, T)
+    pairs = missing[:, np.newaxis, :] | missing[np.newaxis, :, :]
+    return mat2vec(pairs.astype(np.float64)) > 0
+
+
 def _delta_path(
-    subjects, rfun="PCA", ndims=None, max_memory_gb=None, n_outputs=1, order=None
+    subjects,
+    rfun="PCA",
+    ndims=None,
+    max_memory_gb=None,
+    n_outputs=1,
+    order=None,
+    nan_warned=None,
 ):
     """
     Delta path of one order: per-subject co-fluctuations (``eye_weights``,
     ``autofc``), never combined, reduced jointly across subjects.  ``subjects`` is
     a list of (T, d) arrays; a list of the same length is returned.  The step
     is checked against ``max_memory_gb`` first (see ``_check_step_memory``).
+
+    A co-fluctuation involving a NaN sample is NaN (not 0), so the next
+    order's correlations leave it out pairwise.  Unreduced, and for a callable
+    reducer, the NaNs are kept.  Before a model-based reduction or a graph
+    measure they are set to 0 with one ``UserWarning``; ``nan_warned`` (a
+    one-element list shared across the steps of one call) keeps it to one
+    warning per call.
     """
     T, d = subjects[0].shape
     _check_step_memory(d, T, len(subjects), n_outputs, max_memory_gb, order)
@@ -256,6 +288,18 @@ def _delta_path(
             rfun=None,
         )
     )
+    missing = [_nan_pairs(x) if np.isnan(x).any() else None for x in subjects]
+    if any(m is not None for m in missing):
+        delta = [
+            c if m is None else np.where(m, np.nan, c) for c, m in zip(delta, missing)
+        ]
+        if rfun is not None and not callable(rfun):
+            if nan_warned is None or not nan_warned[0]:
+                kind = "model-based" if _is_model(rfun) else "graph-measure"
+                _warn_user(_NAN_FILL_MESSAGE.format(kind=kind, rfun=rfun))
+                if nan_warned is not None:
+                    nan_warned[0] = True
+            delta = [np.nan_to_num(c, nan=0.0) for c in delta]
     return _as_list(_reduce(delta, rfun, ndims))
 
 
@@ -321,7 +365,10 @@ def two_path_step(
         single array; a single array for array input.
     D_next : numpy.ndarray or list of numpy.ndarray
         Delta features: per-subject co-fluctuations (``eye_weights``,
-        ``autofc``), never combined across subjects, reduced jointly.  A list
+        ``autofc``), never combined across subjects, reduced jointly.  A
+        co-fluctuation involving a NaN sample is NaN (kept when ``delta_rfun``
+        is None or a callable; set to 0, with a ``UserWarning``, before a
+        model-based or graph-measure reduction).  A list
         for list input, an array for array input.
 
     Warns
@@ -383,7 +430,8 @@ def two_path_step(
 
 
 def _two_path_step(
-    subjects, delta_rfun=None, max_memory_gb=None, order=None, **analysis
+    subjects, delta_rfun=None, max_memory_gb=None, order=None, nan_warned=None,
+    **analysis
 ):
     """``two_path_step`` on formatted subjects; returns lists (X_next, D_next)."""
     if delta_rfun is None:
@@ -398,6 +446,7 @@ def _two_path_step(
         max_memory_gb=max_memory_gb,
         n_outputs=2,
         order=order,
+        nan_warned=nan_warned,
     )
     return X_next, D_next
 
@@ -437,9 +486,14 @@ def features(
     data : numpy.ndarray, pandas.DataFrame, polars.DataFrame, or list of these
         One timepoints-by-features matrix per subject.  A 1-D array or a
         pandas or polars Series is one feature (shape ``(T, 1)``); arrays
-        with more than two dimensions raise ``ValueError``.  NaN handling
-        (NaN samples carry no weight) applies to the input data at order 1;
-        ``X_0`` keeps the NaNs.
+        with more than two dimensions raise ``ValueError``.  NaN samples
+        carry no weight at order 1, and their co-fluctuations on the delta
+        path are NaN, so later orders leave them out pairwise as well when
+        the delta path is unreduced (``delta_rfun=None``) or reduced by a
+        callable (which receives the NaNs).  A model-based reducer or a graph
+        measure cannot take NaNs: before one, they are set to 0 and a
+        ``UserWarning`` says that NaN handling is approximate from order 2
+        on.  ``X_0`` (and ``D_0``) keep the NaNs.
     order : int
         Highest order to compute (non-negative integer).  Default: 1.
     weights_function, weights_params : function, dict or None
@@ -500,7 +554,11 @@ def features(
     -----
     UserWarning
         When some rows of the analysis kernel have fewer than 3 non-zero
-        weights: the correlations there are undefined and set to 0.
+        weights (the correlations there are undefined and set to 0), a low
+        effective sample size, or cancelled variances (see ``wcorr``).
+    UserWarning
+        Once per call, when NaN co-fluctuations are set to 0 before a
+        model-based or graph-measure delta reduction.
 
     Raises
     ------
@@ -567,6 +625,7 @@ def features(
 
     X = [subjects]
     D = [subjects]
+    nan_warned = [False]  # one NaN-filling warning per call
     for k in range(1, order + 1):
         analysis = dict(
             weights_function=weights_function,
@@ -587,7 +646,7 @@ def features(
             break
         x, delta = _two_path_step(
             D[-1], delta_rfun=delta_rfun, max_memory_gb=max_memory_gb, order=k,
-            **analysis
+            nan_warned=nan_warned, **analysis
         )
         X.append(x)
         D.append(delta)

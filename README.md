@@ -91,7 +91,7 @@ print(round(r, 2))  # 0.9
 
 - One dataset: a numpy array, pandas DataFrame or polars DataFrame of shape `(timepoints, features)`.
 - Several datasets (for example one per subject): a list of such matrices, all with the same shape.
-- Inputs are converted to float arrays and never modified. NaN samples carry no weight in correlations.
+- Inputs are converted to float arrays and never modified. NaN samples carry no weight in correlations. In `tc.features` this holds at every order when the delta path is unreduced (`delta_rfun=None`) or reduced by a callable; before a model-based reducer (such as the default PCA) or a graph measure, the co-fluctuations of NaN samples are set to 0 and a warning says that NaN handling is approximate from order 2 on.
 
 ## Kernels (`weights_function`, `weights_params`)
 

@@ -43,7 +43,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   which with `combine=corrmean_combine` gives Eq. 5 of the paper. 0.2.0 kept
   only the upper triangle of the asymmetric matrix.
 - NaN samples carry no weight in correlations (each pair of features uses the
-  timepoints where both are observed), and NaN kernel weights count as 0.
+  timepoints where both are observed), and NaN kernel weights count as 0. In
+  `tc.features` (and the decoders) a co-fluctuation involving a NaN sample is
+  NaN, so later orders also leave it out pairwise when the delta path is
+  unreduced or reduced by a callable; before a model-based or graph-measure
+  delta reduction the NaNs are set to 0 with one `UserWarning` per call
+  (NaN handling is then approximate from order 2 on).
 - `corrmean_combine`: the diagonal of averaged autocorrelations is 1 (it was
   0); where +1 and -1 both occur in a Fisher z average they are excluded and
   the remaining values are averaged.

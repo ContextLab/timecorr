@@ -529,3 +529,90 @@ def test_ndims_reaches_model_reducers_only():
     X = tc.features(make_data(), order=1, rfun="strength", ndims=2,
                     weights_params={"var": 10})
     assert X[1].shape == (T, K)
+
+
+# ------------------------------------------- NaN beyond order 1 (Ruling R-E)
+
+
+def _with_nans(seed=11, n_subjects=None):
+    data = make_data(seed=seed, n_subjects=n_subjects)
+    arrays = data if isinstance(data, list) else [data]
+    for i, x in enumerate(arrays):
+        x[5 + i, 1] = np.nan
+        x[20 + i, [0, 3]] = np.nan
+    return data
+
+
+def test_unreduced_delta_path_marks_co_fluctuations_of_nan_samples_as_nan():
+    data = _with_nans()
+    X, D = tc.features(data, order=2, rfun=None, weights_params={"var": 10},
+                       return_delta=True)
+    D1 = D[1]
+    nan_samples = np.isnan(data)
+    # mat2vec layout: diagonal first, then the upper triangle row by row
+    pairs = [(i, i) for i in range(K)] + [
+        (i, j) for i in range(K) for j in range(i + 1, K)
+    ]
+    for col, (i, j) in enumerate(pairs):
+        expected = nan_samples[:, i] | nan_samples[:, j]
+        assert np.array_equal(np.isnan(D1[:, col]), expected), (i, j)
+    # observed co-fluctuations are unchanged: the z-scored products
+    clean = tc.features(np.where(nan_samples, 0.0, data), order=1, rfun=None,
+                        return_delta=True)[1][1]
+    z = (data - np.nanmean(data, axis=0)) / np.nanstd(data, axis=0)
+    i, j = 0, 2
+    col = pairs.index((i, j))
+    ok = ~(nan_samples[:, i] | nan_samples[:, j])
+    np.testing.assert_allclose(D1[ok, col], (z[:, i] * z[:, j])[ok], atol=1e-12)
+    assert clean.shape == D1.shape
+    # the next order ignores those samples pairwise: X_2 is finite
+    assert np.all(np.isfinite(X[2]))
+
+
+def test_order_two_ignores_nan_co_fluctuations_pairwise():
+    # X_2 from data with NaN samples equals the analysis path applied to D_1
+    # with those co-fluctuations removed, not set to 0
+    data = _with_nans()
+    X, D = tc.features(data, order=2, rfun=None, weights_params={"var": 10},
+                       return_delta=True)
+    direct = tc.timecorr(D[1], weights_params={"var": 10})
+    np.testing.assert_allclose(X[2], direct, atol=1e-12)
+    zeroed = tc.timecorr(np.nan_to_num(D[1]), weights_params={"var": 10})
+    assert not np.allclose(X[2], zeroed)
+
+
+def test_callable_delta_reducer_receives_the_nan_co_fluctuations():
+    data = _with_nans()
+    seen = []
+
+    def keep(xs):
+        seen.append([np.isnan(x).sum() for x in xs])
+        return [x[:, :4] for x in xs]
+
+    with __import__("warnings").catch_warnings():
+        __import__("warnings").simplefilter("error")
+        X, D = tc.features(data, order=2, rfun=None, delta_rfun=keep,
+                           weights_params={"var": 10}, return_delta=True)
+    assert seen and seen[0][0] > 0
+    assert np.isnan(D[1]).any()
+    assert np.all(np.isfinite(X[2]))
+
+
+@pytest.mark.parametrize("rfun", ["PCA", "strength"])
+def test_model_or_graph_delta_reducer_fills_nan_with_one_warning(rfun):
+    data = _with_nans(n_subjects=S)
+    with pytest.warns(UserWarning, match="approximate from order 2") as rec:
+        X, D = tc.features(data, order=3, rfun=None, delta_rfun=rfun,
+                           weights_params={"var": 10}, return_delta=True)
+    assert len([r for r in rec if "approximate" in str(r.message)]) == 1
+    for d in D[1:]:
+        assert all(np.all(np.isfinite(x)) for x in d)
+
+
+def test_data_without_nan_do_not_warn_about_nan_handling():
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        tc.features(make_data(n_subjects=S), order=3, weights_params={"var": 10},
+                    return_delta=True)

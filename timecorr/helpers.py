@@ -502,7 +502,7 @@ def _kernel_row_problems(weights):
 
     ``undefined``: fewer than 3 non-zero weights (two samples always give
     r = +-1).  ``low``: the remaining rows whose effective sample size
-    ``(sum|w|)**2 / sum(w**2)`` is below 3.
+    ``(sum|w|)**2 / sum(w**2)`` is below 2.
     """
     w = np.abs(np.nan_to_num(np.asarray(weights, dtype=np.float64), nan=0.0))
     support = np.count_nonzero(w, axis=1)
@@ -510,7 +510,7 @@ def _kernel_row_problems(weights):
         return None
     undefined = support < 3
     ess = _safe_divide(w.sum(axis=1) ** 2, (w**2).sum(axis=1))
-    return undefined, ~undefined & (ess < 3)
+    return undefined, ~undefined & (ess < 2)
 
 
 def _estimator_message(weights, cancelled=None):
@@ -518,7 +518,7 @@ def _estimator_message(weights, cancelled=None):
     The one warning of a correlation call, or None.
 
     It names the kernel rows with fewer than 3 non-zero weights (undefined, set
-    to 0), the other rows whose effective sample size is below 3, and the
+    to 0), the other rows whose effective sample size is below 2, and the
     timepoints (``cancelled``, a boolean mask) where every correlation was set
     to 0 because the kernel-weighted variances there are zero.
     """
@@ -536,7 +536,7 @@ def _estimator_message(weights, cancelled=None):
         if low.any():
             parts.append(
                 f"{int(low.sum())} of {T} timepoints have an effective sample size "
-                "((sum |w|)**2 / sum w**2 over the kernel row) below 3; the kernel "
+                "((sum |w|)**2 / sum w**2 over the kernel row) below 2; the kernel "
                 "is too narrow to estimate correlations reliably there."
             )
     if cancelled is not None and np.any(cancelled):
@@ -910,9 +910,9 @@ def wcorr(a, b, weights):
     One ``UserWarning`` per call reports, when they occur, how many
     timepoints have fewer than 3 non-zero kernel weights; how many other
     timepoints have an effective sample size ``(sum |w|)**2 / sum w**2``
-    below 3 (a kernel too narrow for a reliable estimate: for example a
+    below 2 (a kernel too narrow for a reliable estimate: for example a
     Gaussian with ``var=0.05``, whose rows are one sample plus weights below
-    1e-4; a row of 3 unequal non-zero weights is also just below 3); and how
+    1e-4); and how
     many timepoints have zero kernel-weighted variance in every feature, so
     that all their correlations are 0.  A true delta kernel never warns.
 
@@ -1122,7 +1122,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     UserWarning
         One per call, when some kernel rows have fewer than 3 non-zero
         weights (their correlations are undefined and set to 0) or an
-        effective sample size below 3, or when every feature has zero
+        effective sample size below 2, or when every feature has zero
         kernel-weighted variance at some timepoints (their correlations are
         0); see ``wcorr``.  Never for a delta kernel.
 
@@ -1228,7 +1228,7 @@ def isfc(data, timepoint_weights):
     UserWarning
         One per call, when some kernel rows have fewer than 3 non-zero
         weights (their correlations are undefined and set to 0) or an
-        effective sample size below 3, or when every feature has zero
+        effective sample size below 2, or when every feature has zero
         kernel-weighted variance at some timepoints (their correlations are
         0); see ``wcorr``.  Never for a delta kernel.
 
@@ -1283,7 +1283,7 @@ def autofc(data, timepoint_weights):
     UserWarning
         One per call, when some kernel rows have fewer than 3 non-zero
         weights (their correlations are undefined and set to 0) or an
-        effective sample size below 3, or when every feature has zero
+        effective sample size below 2, or when every feature has zero
         kernel-weighted variance at some timepoints (their correlations are
         0); see ``wcorr``.  Never for a delta kernel.
 

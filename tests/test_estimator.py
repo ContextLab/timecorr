@@ -848,3 +848,47 @@ def test_tstat_combine_with_autofc_has_an_infinite_diagonal_and_no_warning():
     diag = [0, 1, 2]  # mat2vec puts the diagonal first
     assert np.all(ts[:, diag] == np.inf)
     assert np.all(np.isfinite(np.delete(ts, diag, axis=1)))
+
+
+# Ruling R-A (revised): the low-effective-sample-size threshold is 2
+
+
+def test_one_sided_kernel_warns_only_about_undefined_rows():
+    # row 2 of a backward Gaussian (var 100) has 3 unequal weights, effective
+    # sample size just under 3 but above 2: only the undefined-row clause
+    rng = _rng(60)
+    x = rng.randn(100, 4)
+    for direction in ("backward", "forward"):
+        with pytest.warns(UserWarning) as rec:
+            tc.timecorr(x, weights_params={"var": 100}, include_timepoints=direction)
+        msgs = [str(r.message) for r in _user_warnings(rec)]
+        assert msgs == [
+            "2 of 100 timepoints have fewer than 3 non-zero kernel weights; their "
+            "correlations are undefined and set to 0."
+        ]
+
+
+def test_exclude_timepoints_two_has_no_low_effective_sample_size_warning():
+    # |lag| <= 2 keeps 3 weights at the edges (effective sample size about
+    # 3) and no row has fewer than 3: nothing to warn about
+    rng = _rng(61)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        tc.timecorr(rng.randn(12, 4), exclude_timepoints=2)
+
+
+def test_effective_sample_size_threshold_is_two():
+    # rows of 3 non-zero weights: (1, 1, 1) has ESS 3, (1, 0.1, 0.1) has
+    # 1.44 / 1.02 = 1.41 < 2; only the second warns
+    rng = _rng(62)
+    T = 20
+    x = rng.randn(T, 3)
+    w = gaussian_weights(T, {"var": 10})
+    w[10, :] = 0
+    w[10, [9, 10, 11]] = 1.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        wcorr(x, x, w)
+    w[10, [9, 11]] = 0.1
+    with pytest.warns(UserWarning, match="1 of 20 timepoints have an effective sample size"):
+        wcorr(x, x, w)

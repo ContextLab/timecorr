@@ -29,10 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   correlation; those timepoints are set to 0 and one `UserWarning` per call
   (not per subject), attributed to the caller's line, reports how many there
   are. The same warning also reports the other timepoints whose kernel row
-  has an effective sample size `(sum |w|)**2 / sum w**2` below 3 (a kernel too
-  narrow for a reliable estimate, such as a Gaussian with `var=0.05`; a row of
-  3 unequal non-zero weights, such as the third row of a one-sided kernel, is
-  just below 3), and the timepoints where every feature has zero
+  has an effective sample size `(sum |w|)**2 / sum w**2` below 2 (a kernel too
+  narrow for a reliable estimate, such as a Gaussian with `var=0.05`), and the
+  timepoints where every feature has zero
   kernel-weighted variance, so that all correlations there are 0 (constant
   data, or a kernel so narrow that every variance cancels). A delta kernel
   never warns. A kernel whose rows are all zero raises `ValueError`.

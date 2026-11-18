@@ -102,9 +102,7 @@ used to estimate at timepoint ``t``. Every kernel function accepts
    w = tc.gaussian_weights(100, {"var": 10}, direction="backward", include_zero=False)
    backward = tc.timecorr(data, weights_params={"var": 10}, include_timepoints="backward")
    # UserWarning: 2 of 100 timepoints have fewer than 3 non-zero kernel weights;
-   # their correlations are undefined and set to 0. 1 of 100 timepoints have an
-   # effective sample size ((sum |w|)**2 / sum w**2 over the kernel row) below 3;
-   # the kernel is too narrow to estimate correlations reliably there.
+   # their correlations are undefined and set to 0.
 
 .. _default_kernel_params:
 

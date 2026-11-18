@@ -12,32 +12,22 @@ import matplotlib
 import numpy as np
 import pandas as pd
 import pytest
-from scipy.linalg import toeplitz
 
 matplotlib.use("Agg")  # Use non-interactive backend
 
-import timecorr as tc
 from timecorr.helpers import (
     _is_empty,
-    apply_by_row,
-    autofc,
     calculate_error,
-    corrmean_combine,
     decoder,
-    eye_weights,
     folding_levels,
     folding_levels_ec,
     gaussian_params,
     gaussian_weights,
     get_xval_assignments,
     iseven,
-    isfc,
     isodd,
-    laplace_params,
-    laplace_weights,
     mat2vec,
     mean_combine,
-    null_combine,
     optimize_weights,
     pca_decoder,
     r2z,
@@ -48,14 +38,12 @@ from timecorr.helpers import (
     sum_to_x,
     symmetric,
     timepoint_decoder,
-    tstat_combine,
     vec2mat,
     wcorr,
     weight_corrs,
     weighted_mean,
     weighted_timepoint_decoder,
     weighted_timepoint_decoder_ec,
-    wisfc,
     z2r,
 )
 from timecorr.simulate import *

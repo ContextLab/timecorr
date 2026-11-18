@@ -5,18 +5,15 @@ This module tests all uncovered functions and edge cases to ensure
 numerical accuracy and robustness.
 """
 
-import warnings
 
 # Configure matplotlib to use non-interactive backend for testing
 import matplotlib
 import numpy as np
 import pandas as pd
 import pytest
-from scipy.linalg import toeplitz
 
 matplotlib.use("Agg")  # Use non-interactive backend
 
-import timecorr as tc
 from timecorr.helpers import *
 from timecorr.simulate import *
 from timecorr.timecorr import timecorr
@@ -703,12 +700,8 @@ class TestTimecorrEdgeCases:
             result_post = timecorr(data, include_timepoints="post")
         assert isinstance(result_post, np.ndarray)
 
-        # Test exclude positive: the first and last rows keep 3 weights
-        # (|lag| <= 2), whose effective sample size is just below 3 (R-A)
-        with pytest.warns(
-            UserWarning, match="2 of 12 timepoints have an effective sample size"
-        ):
-            result_exclude_pos = timecorr(data, exclude_timepoints=2)
+        # Test exclude positive
+        result_exclude_pos = timecorr(data, exclude_timepoints=2)
         assert isinstance(result_exclude_pos, np.ndarray)
 
         # Test exclude negative

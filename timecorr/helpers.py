@@ -20,12 +20,29 @@ try:  # polars is optional
 except ImportError:  # pragma: no cover
     pl = None
 
+# Default parameters of the kernel functions below.  Each kernel function uses
+# its dictionary when ``params`` is omitted or None.  The ``#:`` comments are
+# the documentation that Sphinx shows for each dictionary.
+
+#: Default ``params`` of :func:`gaussian_weights`: ``var``, the variance of the
+#: Gaussian in squared samples.
 gaussian_params = {"var": 100}
+#: Default ``params`` of :func:`laplace_weights`: ``scale``, the scale of the
+#: Laplace density in samples.
 laplace_params = {"scale": 100}
+#: Default ``params`` of :func:`eye_weights` (the delta kernel has no parameters).
 eye_params = {}
+#: Default ``params`` of :func:`t_weights`: ``df``, the degrees-of-freedom
+#: parameter of the t-shaped kernel.
 t_params = {"df": 100}
+#: Default ``params`` of :func:`mexican_hat_weights`: ``sigma``, the width of
+#: the wavelet in samples.
 mexican_hat_params = {"sigma": 10}
+#: Default ``params`` of :func:`uniform_weights` (the uniform kernel has no
+#: parameters).
 uniform_params = {}
+#: Default ``params`` of :func:`boxcar_weights`: ``width``, the total width of
+#: the window in samples.
 boxcar_params = {"width": 10}
 
 
@@ -95,9 +112,12 @@ def gaussian_weights(T, params=gaussian_params, direction=None, include_zero=Tru
     ----------
     T : int
         Number of timepoints in the timeseries
-    params : dict, optional
-        Dictionary containing Gaussian parameters. Default: {'var': 100}
-        - 'var' : float, variance of the Gaussian kernel
+    params : dict or None, optional
+        Kernel parameters.  Default: ``gaussian_params`` (``{'var': 100}``);
+        None also uses ``gaussian_params``.
+
+        - ``var`` : float, the variance of the Gaussian in squared samples
+          (its standard deviation is ``sqrt(var)`` samples).
     direction : {None, 'backward', 'forward'}, optional
         If 'backward', only timepoints at or before each timepoint receive
         weight (``weights[t, tau] = 0`` for ``tau > t``); if 'forward', only
@@ -111,6 +131,11 @@ def gaussian_weights(T, params=gaussian_params, direction=None, include_zero=Tru
     numpy.ndarray
         T x T matrix of Gaussian weights, where weights[i,j] represents
         the weight given to timepoint j when computing correlations at timepoint i
+
+    Raises
+    ------
+    KeyError
+        If ``params`` lacks the ``var`` key.
 
     Examples
     --------
@@ -140,9 +165,12 @@ def laplace_weights(T, params=laplace_params, direction=None, include_zero=True)
     ----------
     T : int
         Number of timepoints in the timeseries
-    params : dict, optional
-        Dictionary containing Laplace parameters. Default: {'scale': 100}
-        - 'scale' : float, scale parameter of the Laplace distribution
+    params : dict or None, optional
+        Kernel parameters.  Default: ``laplace_params`` (``{'scale': 100}``);
+        None also uses ``laplace_params``.
+
+        - ``scale`` : float, the scale ``b`` of the Laplace density, in
+          samples: ``weights[t, tau] = exp(-|t - tau| / b) / (2 b)``.
     direction : {None, 'backward', 'forward'}, optional
         If 'backward', only timepoints at or before each timepoint receive
         weight (``weights[t, tau] = 0`` for ``tau > t``); if 'forward', only
@@ -156,6 +184,11 @@ def laplace_weights(T, params=laplace_params, direction=None, include_zero=True)
     numpy.ndarray
         T x T matrix of Laplace weights, where weights[i,j] represents
         the weight given to timepoint j when computing correlations at timepoint i
+
+    Raises
+    ------
+    KeyError
+        If ``params`` lacks the ``scale`` key.
 
     Examples
     --------
@@ -186,8 +219,10 @@ def eye_weights(T, params=eye_params, direction=None, include_zero=True):
     ----------
     T : int
         Number of timepoints in the timeseries
-    params : dict, optional
-        Empty dictionary (no parameters needed). Default: {}
+    params : dict or None, optional
+        Unused (the delta kernel has no parameters); accepted so that every
+        kernel function has the same signature.  Default: ``eye_params``
+        (``{}``, no keys).
     direction : {None, 'backward', 'forward'}, optional
         If 'backward', only timepoints at or before each timepoint receive
         weight (``weights[t, tau] = 0`` for ``tau > t``); if 'forward', only
@@ -227,8 +262,10 @@ def uniform_weights(T, params=uniform_params, direction=None, include_zero=True)
     ----------
     T : int
         Number of timepoints in the timeseries
-    params : dict, optional
-        Unused; accepted for a uniform interface.  Default: {}
+    params : dict or None, optional
+        Unused (the uniform kernel has no parameters); accepted so that every
+        kernel function has the same signature.  Default: ``uniform_params``
+        (``{}``, no keys).
     direction : {None, 'backward', 'forward'}, optional
         If 'backward', only timepoints at or before each timepoint receive
         weight (``weights[t, tau] = 0`` for ``tau > t``); if 'forward', only
@@ -260,18 +297,29 @@ def uniform_weights(T, params=uniform_params, direction=None, include_zero=True)
 
 def t_weights(T, params=t_params, direction=None, include_zero=True):
     """
-    Generate Student's t weighting function for dynamic correlations.
+    Generate a t-shaped weighting function for dynamic correlations.
 
-    Each timepoint receives weights according to a Student's t density centered
-    at that timepoint.
+    The weight given to timepoint ``tau`` when estimating at timepoint ``t`` is
+
+    ``weights[t, tau] = c * (1 + (t - tau)**2 / df) ** (-(df - 1) / 2)``,
+
+    where ``c = gamma((df + 1) / 2) / (sqrt(df * pi) * gamma(df / 2))`` is the
+    normalizing constant of Student's t density.  The exponent is
+    ``-(df - 1) / 2``, not the ``-(df + 1) / 2`` of Student's t density, so
+    the kernel has heavier tails than that density with the same ``df`` (for
+    ``df=1`` every weight equals ``c``, a uniform kernel).  As ``df`` grows the
+    kernel approaches ``c * exp(-(t - tau)**2 / 2)``.
 
     Parameters
     ----------
     T : int
         Number of timepoints in the timeseries
-    params : dict, optional
-        Dictionary containing t parameters. Default: {'df': 100}
-        - 'df' : float, degrees of freedom of the t distribution
+    params : dict or None, optional
+        Kernel parameters.  Default: ``t_params`` (``{'df': 100}``); None also
+        uses ``t_params``.
+
+        - ``df`` : float, the degrees-of-freedom parameter in the formula
+          above (distances in samples).  Smaller values give heavier tails.
     direction : {None, 'backward', 'forward'}, optional
         If 'backward', only timepoints at or before each timepoint receive
         weight (``weights[t, tau] = 0`` for ``tau > t``); if 'forward', only
@@ -285,6 +333,11 @@ def t_weights(T, params=t_params, direction=None, include_zero=True):
     numpy.ndarray
         T x T matrix of t weights, where weights[i,j] is the weight given to
         timepoint j when computing correlations at timepoint i
+
+    Raises
+    ------
+    KeyError
+        If ``params`` lacks the ``df`` key.
 
     Examples
     --------
@@ -321,9 +374,13 @@ def mexican_hat_weights(
     ----------
     T : int
         Number of timepoints in the timeseries
-    params : dict, optional
-        Dictionary containing Mexican Hat parameters. Default: {'sigma': 10}
-        - 'sigma' : float, scale parameter of the Mexican Hat wavelet
+    params : dict or None, optional
+        Kernel parameters.  Default: ``mexican_hat_params``
+        (``{'sigma': 10}``); None also uses ``mexican_hat_params``.
+
+        - ``sigma`` : float, the width of the wavelet in samples.  Weights
+          are positive within ``sigma`` samples of ``t``, zero at exactly
+          ``sigma`` samples, and negative beyond.
     direction : {None, 'backward', 'forward'}, optional
         If 'backward', only timepoints at or before each timepoint receive
         weight (``weights[t, tau] = 0`` for ``tau > t``); if 'forward', only
@@ -337,6 +394,11 @@ def mexican_hat_weights(
     numpy.ndarray
         T x T matrix of Mexican Hat weights, where weights[i,j] represents
         the weight given to timepoint j when computing correlations at timepoint i
+
+    Raises
+    ------
+    KeyError
+        If ``params`` lacks the ``sigma`` key.
 
     Examples
     --------
@@ -362,16 +424,19 @@ def boxcar_weights(T, params=boxcar_params, direction=None, include_zero=True):
     """
     Generate a boxcar (moving window) weighting function for dynamic correlations.
 
-    Timepoints within ``width / 2`` samples of each timepoint receive weight 1;
-    all others receive weight 0.
+    Timepoints fewer than ``width / 2`` samples from each timepoint receive
+    weight 1; all others receive weight 0.
 
     Parameters
     ----------
     T : int
         Number of timepoints in the timeseries
-    params : dict, optional
-        Dictionary containing boxcar parameters. Default: {'width': 10}
-        - 'width' : float, total width of the window (in samples)
+    params : dict or None, optional
+        Kernel parameters.  Default: ``boxcar_params`` (``{'width': 10}``);
+        None also uses ``boxcar_params``.
+
+        - ``width`` : float, the total width of the window in samples:
+          ``weights[t, tau]`` is 1 where ``|t - tau| < width / 2``.
     direction : {None, 'backward', 'forward'}, optional
         If 'backward', only timepoints at or before each timepoint receive
         weight (``weights[t, tau] = 0`` for ``tau > t``); if 'forward', only
@@ -385,6 +450,11 @@ def boxcar_weights(T, params=boxcar_params, direction=None, include_zero=True):
     numpy.ndarray
         T x T matrix of zeros and ones, where weights[i,j] is the weight given
         to timepoint j when computing correlations at timepoint i
+
+    Raises
+    ------
+    KeyError
+        If ``params`` lacks the ``width`` key.
 
     Examples
     --------
@@ -945,6 +1015,20 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     list of numpy.ndarray or numpy.ndarray
         One (T, K * (K + 1) / 2) array of vectorized correlation matrices per
         subject (see ``mat2vec``); a single array if ``data`` is an array.
+        Row ``t`` is estimated with the kernel ``timepoint_weights[t, :]``.
+
+    Warns
+    -----
+    UserWarning
+        When some kernel rows have fewer than 3 non-zero weights (and the
+        kernel is not a delta kernel): the correlations at those timepoints
+        are undefined and set to 0 (see ``wcorr``).  One warning per call.
+
+    Raises
+    ------
+    ValueError
+        If the subjects differ in shape, the kernel does not have T columns,
+        or every row of the kernel is zero.
 
     Examples
     --------
@@ -1029,10 +1113,25 @@ def isfc(data, timepoint_weights):
 
     Returns
     -------
-    list of numpy.ndarray
+    list of numpy.ndarray or numpy.ndarray
         List of vectorized correlation matrices (one (T, K * (K + 1) / 2)
-        array per subject), each showing correlations between that subject and
-        the average of all others
+        array per subject, see ``mat2vec``), each showing correlations between
+        that subject and the average of all others; a single array if
+        ``data`` is an array.  Row ``t`` is estimated with the kernel
+        ``timepoint_weights[t, :]``.
+
+    Warns
+    -----
+    UserWarning
+        When some kernel rows have fewer than 3 non-zero weights (and the
+        kernel is not a delta kernel): the correlations at those timepoints
+        are undefined and set to 0 (see ``wcorr``).  One warning per call.
+
+    Raises
+    ------
+    ValueError
+        If the subjects differ in shape, the kernel does not have T columns,
+        or every row of the kernel is zero.
 
     Examples
     --------
@@ -1068,9 +1167,24 @@ def autofc(data, timepoint_weights):
 
     Returns
     -------
-    list of numpy.ndarray
+    list of numpy.ndarray or numpy.ndarray
         List of vectorized correlation matrices (one (T, K * (K + 1) / 2)
-        array per subject), each showing within-subject correlations
+        array per subject, see ``mat2vec``), each showing within-subject
+        correlations; a single array if ``data`` is an array.  Row ``t`` is
+        estimated with the kernel ``timepoint_weights[t, :]``.
+
+    Warns
+    -----
+    UserWarning
+        When some kernel rows have fewer than 3 non-zero weights (and the
+        kernel is not a delta kernel): the correlations at those timepoints
+        are undefined and set to 0 (see ``wcorr``).  One warning per call.
+
+    Raises
+    ------
+    ValueError
+        If the subjects differ in shape, the kernel does not have T columns,
+        or every row of the kernel is zero.
 
     Examples
     --------
@@ -1090,14 +1204,33 @@ def autofc(data, timepoint_weights):
 
 def apply_by_row(corrs, f):
     """
-    apply the function f to the correlation matrix specified in each row, and return a
-    matrix of the concatenated results
+    Apply a function to the correlation matrix in each row of ``corrs``.
 
-    :param corrs: a matrix of vectorized correlation matrices (output of mat2vec), or a list
-                  of such matrices
-    :param f: a function to apply to each vectorized correlation matrix
-    :return: a matrix of function outputs (for each row of the given matrices), or a list of
-            such matrices
+    Internal helper of ``reduce`` (graph measures).  Each row is converted to
+    a K x K matrix with ``vec2mat`` before ``f`` is applied.
+
+    Parameters
+    ----------
+    corrs : numpy.ndarray or list of numpy.ndarray
+        A (T, K * (K + 1) / 2) matrix of vectorized correlation matrices
+        (output of ``mat2vec``), or a list of such matrices.
+    f : callable
+        Function applied to each K x K matrix.
+
+    Returns
+    -------
+    numpy.ndarray or list of numpy.ndarray
+        The outputs of ``f`` stacked along a new first axis (one row per
+        timepoint), or a list of such arrays for list input.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from timecorr.helpers import apply_by_row, mat2vec
+    >>> corrs = np.stack([mat2vec(np.eye(3)), mat2vec(np.ones((3, 3)))])
+    >>> print(apply_by_row(corrs, lambda m: m.sum(axis=1)))
+    [[1. 1. 1.]
+     [3. 3. 3.]]
     """
 
     if type(corrs) is list:
@@ -1131,9 +1264,9 @@ def corrmean_combine(corrs):
 
     Returns
     -------
-    numpy.ndarray
-        The element-wise mean; an array or one-element list is returned
-        unchanged.
+    numpy.ndarray or list of numpy.ndarray
+        The element-wise mean, the shape of one input matrix.  An array or a
+        one-element list is returned unchanged (the list stays a list).
 
     Examples
     --------
@@ -1210,6 +1343,13 @@ def tstat_combine(corrs, return_pvals=False):
     ps : numpy.ndarray
         Only with ``return_pvals=True``: the two-sided p-values (all NaN for an
         array input).
+
+    Warns
+    -----
+    RuntimeWarning
+        From ``scipy.stats.ttest_1samp`` when a t statistic is undefined: with a
+        one-element list (every statistic is NaN) or where all matrices hold
+        the same value.
 
     Examples
     --------
@@ -1297,17 +1437,28 @@ def reduce(corrs, rfun=None, ndims=None):
         - A callable ``f(list of numpy.ndarray) -> list of numpy.ndarray``.  A
           single array is passed as a one-element list and the first element of
           the result is returned.
+
+        Default: None (no reduction).
     ndims : int, optional
         Number of output columns for model-based reduction.  Default: None, which
         returns K columns for inputs with K(K+1)/2 features.  The model is never
         asked for more components than the data can supply (the number of
         features and of samples); any shortfall is filled with zero columns so
-        the output has exactly the requested width.
+        the output has exactly the requested width.  Not used by graph measures
+        (which return K columns) or callables.
 
     Returns
     -------
     numpy.ndarray or list of numpy.ndarray
-        The reduced (or original) matrices, in the same container type as ``corrs``.
+        The reduced (or original) matrices, in the same container type as
+        ``corrs``: (T, ndims) for model-based reduction, (T, K) for a graph
+        measure, whatever the callable returns otherwise.
+
+    Raises
+    ------
+    ValueError
+        If a dict ``rfun`` gives a key in both ``'params'`` and ``'kwargs'`` with
+        different values.
 
     Examples
     --------
@@ -1491,7 +1642,14 @@ def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=None):
     Returns
     -------
     numpy.ndarray or list of numpy.ndarray
-        The smoothed data, the same shape (and container) as ``w``.
+        The smoothed data, the same shape (and container) as ``w``.  The output
+        has the dtype of ``w``, so an integer array gives truncated integer
+        values; pass floats.
+
+    Raises
+    ------
+    AssertionError
+        If ``windowsize`` is not an ``int``.
 
     Examples
     --------
@@ -1545,6 +1703,36 @@ def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=None):
 
 
 def weighted_mean(x, axis=None, weights=None, tol=1e-5):
+    """
+    Weighted mean of ``x`` along one axis (internal helper).
+
+    NaN weights count as 0.  Weights with magnitude at most ``tol`` are
+    dropped and the rest are normalized to sum to 1.  If the weights sum to 0,
+    the plain mean is returned.  The caller's weights are not modified.
+
+    Parameters
+    ----------
+    x : numpy.ndarray
+        Values to average.
+    axis : int, optional
+        Axis to average over.  Default: the last axis.
+    weights : array-like, optional
+        One weight per entry along ``axis``.  Default: equal weights.
+    tol : float, optional
+        Weights with ``|w| <= tol`` are ignored.  Default: 1e-5.
+
+    Returns
+    -------
+    numpy.ndarray
+        ``x`` averaged over ``axis``.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from timecorr.helpers import weighted_mean
+    >>> print(weighted_mean(np.array([[1.0, 3.0]]), weights=[1, 3]))
+    [2.5]
+    """
     if axis is None:
         axis = len(x.shape) - 1
     if weights is None:
@@ -1570,6 +1758,17 @@ def weighted_mean(x, axis=None, weights=None, tol=1e-5):
 
 
 def rmdiag(m):
+    """
+    Return a copy of the square matrix ``m`` with its diagonal set to 0 (internal helper).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from timecorr.helpers import rmdiag
+    >>> print(rmdiag(np.ones((2, 2))))
+    [[0. 1.]
+     [1. 0.]]
+    """
     return m - np.diag(np.diag(m))
 
 
@@ -1631,10 +1830,53 @@ def z2r(z):
 
 
 def isodd(x):
+    """
+    Test whether numbers are odd.
+
+    Parameters
+    ----------
+    x : int, float or array-like
+        Number(s) to test.
+
+    Returns
+    -------
+    bool or numpy.ndarray of bool
+        ``numpy.remainder(x, 2) == 1``, elementwise.  Negative odd integers
+        give True; non-integers give False.
+
+    Examples
+    --------
+    >>> import timecorr as tc
+    >>> bool(tc.isodd(3)), bool(tc.isodd(4))
+    (True, False)
+    >>> tc.isodd([-3, 0, 1.5]).tolist()
+    [True, False, False]
+    """
     return np.remainder(x, 2) == 1
 
 
 def iseven(x):
+    """
+    Test whether numbers are even.
+
+    Parameters
+    ----------
+    x : int, float or array-like
+        Number(s) to test.
+
+    Returns
+    -------
+    bool or numpy.ndarray of bool
+        ``numpy.remainder(x, 2) == 0``, elementwise.  Non-integers give False.
+
+    Examples
+    --------
+    >>> import timecorr as tc
+    >>> bool(tc.iseven(4)), bool(tc.iseven(3))
+    (True, False)
+    >>> tc.iseven([-2, 1, 2.5]).tolist()
+    [True, False, False]
+    """
     return np.remainder(x, 2) == 0
 
 
@@ -1744,6 +1986,18 @@ def vec2mat(v):
 
 
 def symmetric(m):
+    """
+    Whether the square matrix ``m`` equals its transpose (internal helper).
+
+    Entries are compared with ``numpy.isclose`` (default tolerances).
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from timecorr.helpers import symmetric
+    >>> bool(symmetric(np.array([[1.0, 2.0], [2.0, 1.0]]))), bool(symmetric(np.triu(np.ones((2, 2)))))
+    (True, False)
+    """
     return np.isclose(m, m.T).all()
 
 
@@ -1772,10 +2026,14 @@ def plot_weights(
         Line color.  Default: "k".
     ax : matplotlib.axes.Axes, optional
         Axes to draw on.  Default: the current axes.
-    xlab, ylab, title : str or None
-        Axis labels and title (None leaves them unset).
+    xlab : str or None
+        X-axis label (None leaves it unset).  Default: "Time (samples)".
+    ylab : str or None
+        Y-axis label (None leaves it unset).  Default: "Weights".
+    title : str or None
+        Axes title (None leaves it unset).  Default: None.
     outfile : str, optional
-        If given, the figure is saved to this path.
+        If given, the figure is saved to this path.  Default: None.
 
     Returns
     -------

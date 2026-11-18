@@ -129,8 +129,10 @@ def timecorr(
     numpy.ndarray or list of numpy.ndarray
         One row per timepoint, each a vectorized correlation matrix (see
         ``mat2vec``: the K diagonal entries, then the K(K-1)/2 entries above
-        the diagonal), or the reduced features when ``rfun`` is given, or the
-        smoothed data when ``cfun`` is None.  A list (one entry per subject)
+        the diagonal), so each array has shape (T, K * (K + 1) / 2); or the
+        reduced features when ``rfun`` is given ((T, K) for model-based
+        reduction and graph measures); or the smoothed (T, K) data when
+        ``cfun`` is None.  A list (one entry per subject)
         when ``combine`` returns one; a single array otherwise.
 
     Warns
@@ -139,6 +141,9 @@ def timecorr(
         When some kernel rows have fewer than 3 non-zero weights (for example
         the first timepoints of a backward kernel): the correlations there are
         undefined and set to 0.
+    UserWarning
+        With ``cfun=None``, when some timepoints have no weighted, observed
+        sample: the smoothed values there are undefined and set to 0.
 
     Raises
     ------

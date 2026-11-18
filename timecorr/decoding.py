@@ -189,7 +189,9 @@ def timepoint_decoder(
     cfun : function or list of functions
         Analysis-path correlation function, or one per order (entry 0 unused).
         Default: ``isfc``.
-    weights_fun, weights_params : analysis kernel and its parameters.
+    weights_fun, weights_params : function, dict
+        Analysis kernel and its parameters; row ``t`` of the kernel
+        (``weights[t, :]``) is the kernel used at timepoint ``t``.
         Default: ``laplace_weights`` with ``laplace_params``.
     combine : function or list of functions
         Combines each group's per-subject features at orders ``k >= 1``, or
@@ -210,12 +212,19 @@ def timepoint_decoder(
         (mean absolute decoding error as a fraction of the number of
         timepoints), ``level`` and ``folds``.
 
+    Warns
+    -----
+    UserWarning
+        With ``nfolds=1``: the analysis is circular.
+
     Raises
     ------
     ValueError
         If ``nfolds`` is below 1 or above the number of subjects, if ``level``
-        is not a non-negative integer (or list of them), or if ``mu`` has the
-        wrong length or does not sum to one.
+        is not a non-negative integer (or list of them), if ``mu`` has the
+        wrong length or does not sum to one, if the subjects differ in shape,
+        or if a per-order list (``cfun``, ``combine``, ``rfun``) does not have
+        one entry per order.
 
     Examples
     --------
@@ -346,12 +355,18 @@ def weighted_timepoint_decoder(
         ``level_<k>``, the weight given to order ``k`` (NaN for orders not yet
         mixed in).
 
+    Warns
+    -----
+    UserWarning
+        With ``nfolds=1``: the analysis is circular.
+
     Raises
     ------
     ValueError
         If the training group of a fold has fewer than two subjects (it cannot
-        be split), if ``nfolds`` exceeds the number of subjects, or if
-        ``optimize_levels`` names an order above ``level``.
+        be split), if ``nfolds`` exceeds the number of subjects, if ``level``
+        is not a non-negative integer (or list of them), or if
+        ``optimize_levels`` is empty or names an order outside 0 to ``level``.
 
     Examples
     --------
@@ -484,12 +499,20 @@ def folding_levels(
         ``level`` 0 or 1), one (T, d) array per subject.
     level : int
         Order computed.  Default: 0.
-    cfun, combine, rfun : function (or None) or a list indexed by level
-        Analysis-path correlation function (default ``isfc``), within-group
-        combine (default ``mean_combine``) and reducer (default None).
-    weights_fun, weights_params : analysis kernel and parameters.
-        Default: ``laplace_weights`` with ``laplace_params``; with another
-        ``weights_fun`` and no ``weights_params``, that kernel's defaults.
+    cfun : function, None, or a list indexed by level
+        Analysis-path correlation function (used for ``level >= 1``).
+        Default (None): ``isfc``.
+    weights_fun, weights_params : function, dict or None
+        Analysis kernel and its parameters; row ``t`` of the kernel
+        (``weights[t, :]``) is the kernel used at timepoint ``t``.
+        Default (None, None): ``laplace_weights`` with ``laplace_params``;
+        with another ``weights_fun`` and no ``weights_params``, that kernel's
+        defaults.
+    combine : function, None, or a list indexed by level
+        Within-group combine for ``level >= 1``.  Default (None):
+        ``mean_combine``.
+    rfun : None, str, dict, callable, or a list indexed by level
+        Reducer (see ``helpers.reduce``).  Default: None (no reduction).
 
     Returns
     -------
@@ -504,6 +527,12 @@ def folding_levels(
     in_raw, out_raw : list of numpy.ndarray
         Level 0: the inputs.  Level ``k >= 1``: the delta path (per-subject
         co-fluctuations), all subjects reduced jointly.
+
+    Raises
+    ------
+    ValueError
+        If a list-valued ``cfun``, ``combine`` or ``rfun`` does not have
+        ``level + 1`` entries, or the subjects differ in shape.
 
     Examples
     --------
@@ -603,6 +632,11 @@ def weighted_timepoint_decoder_ec(
         array), has fewer than ``level`` orders, or the subject counts differ
         across orders; and as in ``weighted_timepoint_decoder``.
 
+    Warns
+    -----
+    UserWarning
+        With ``nfolds=1``: the analysis is circular.
+
     Examples
     --------
     >>> import numpy as np
@@ -667,12 +701,20 @@ def folding_levels_ec(
         subject.
     level : int
         Level computed; selects the entry of list-valued settings.  Default: 0.
-    cfun, combine, rfun : function (or None), or a list indexed by level
-        Correlation function (used for ``level >= 1``), within-group combine
-        (default ``mean_combine``) and reducer (default None), each applied to
-        each group separately.
-    weights_fun, weights_params : kernel function and its parameters
-        Passed to ``timecorr``.  ``weights_fun`` is required.
+    cfun : function, or a list indexed by level
+        Correlation function, used for ``level >= 1``.  Default: None, which
+        smooths each group's inputs instead of correlating them (``timecorr``
+        with ``cfun=None``).
+    weights_fun, weights_params : function, dict or None
+        Kernel function and its parameters, passed to ``timecorr``; row ``t``
+        of the kernel (``weights[t, :]``) is the kernel used at timepoint
+        ``t``.  ``weights_fun`` is required (its default, None, raises
+        ``TypeError``); ``weights_params=None`` uses the kernel's defaults.
+    combine : function, None, or a list indexed by level
+        Within-group combine for ``level >= 1``.  Default (None):
+        ``mean_combine``.
+    rfun : None, str, dict, callable, or a list indexed by level
+        Reducer applied to each group separately.  Default: None.
 
     Returns
     -------
@@ -796,13 +838,16 @@ def pca_decoder(
         Number of groups.  Default: 2.
     dims : int
         Largest number of components.  Default: 10.
-    cfun, combine, rfun
+    cfun : function
+        Accepted for compatibility and not used.  Default: ``isfc``.
+    weights_fun, weights_params : function, dict
+        The smoothing kernel and its parameters; row ``t`` of the kernel
+        (``weights[t, :]``) is the kernel used at timepoint ``t``.  Default:
+        ``laplace_weights`` with ``laplace_params``.
+    combine, rfun
         Accepted for compatibility and not used: the features are always the
         smoothed components, combined with ``mean_combine``, without further
-        reduction.
-    weights_fun, weights_params : kernel function and its parameters
-        The smoothing kernel.  Default: ``laplace_weights`` with
-        ``laplace_params``.
+        reduction.  Defaults: ``mean_combine`` and None.
 
     Returns
     -------
@@ -810,6 +855,13 @@ def pca_decoder(
         One row per fold and number of components, with columns ``rank``,
         ``accuracy`` and ``error`` (as in ``timepoint_decoder``), ``dims`` and
         ``folds``.
+
+    Raises
+    ------
+    AssertionError
+        If the subjects differ in their number of timepoints or features.
+    ValueError
+        If ``nfolds`` is below 1 or above the number of subjects.
 
     Examples
     --------
@@ -887,6 +939,17 @@ def pca_decoder(
 
 
 def reduce_wrapper(data, dims=10, level=0, rfun=None):
+    """
+    Jointly reduce two groups' smoothed and raw features (internal helper).
+
+    ``data`` is the 4-tuple ``(in_smooth, out_smooth, in_raw, out_raw)``
+    returned by ``folding_levels``.  At ``level`` 0 it is returned unchanged;
+    otherwise the two smoothed arrays are reduced together, and the raw
+    per-subject arrays together, with ``rfun[level]`` (see
+    ``helpers.reduce``).  ``dims`` is not used.  Returns the 4-tuple
+    ``(in_smooth, out_smooth, in_raw, out_raw)``; for ``level >= 1`` the raw
+    entries are the first two reduced subjects.
+    """
 
     if not level == 0:
 
@@ -997,12 +1060,34 @@ def optimize_weights(corrs, opt_init=None):
 
 
 def sum_to_x(n, x):
+    """
+    ``n`` random non-negative numbers that sum to ``x`` (internal helper).
+
+    The numbers are the gaps between ``n - 1`` uniform draws on ``[0, x]``
+    (sorted, with 0 and ``x`` added), drawn from the global NumPy random state.
+    Used by ``optimize_weights`` with ``opt_init="random"``.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from timecorr.decoding import sum_to_x
+    >>> np.random.seed(0)
+    >>> w = sum_to_x(4, 1.0)
+    >>> w.shape, bool(np.isclose(w.sum(), 1.0)), bool((w >= 0).all())
+    ((4,), True, True)
+    """
     values = [0.0, x] + list(np.random.uniform(low=0.0, high=x, size=n - 1))
     values.sort()
     return np.asarray([values[i + 1] - values[i] for i in range(n)])
 
 
 def calculate_error(mu, corrs, metric="error", sign=1):
+    """
+    One ``decoder`` metric of decoding matrices mixed with weights ``mu`` (internal helper).
+
+    Returns ``sign * decoder(weight_corrs(corrs, mu))[metric].values``, a
+    one-element array; ``metric`` is "rank", "accuracy" or "error".
+    """
 
     results = decoder(weight_corrs(corrs, mu))
     return sign * results[metric].values
@@ -1023,6 +1108,11 @@ def weight_corrs(corrs, mu):
     -------
     numpy.ndarray
         ``z2r(sum_i mu_i * r2z(corrs_i))``, shape (T, T).
+
+    Raises
+    ------
+    AssertionError
+        If ``mu`` does not have one weight per level.
 
     Examples
     --------

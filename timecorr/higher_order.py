@@ -234,16 +234,33 @@ def two_path_step(
     data : numpy.ndarray, pandas.DataFrame, polars.DataFrame, or list of these
         The previous order's delta features ``D_{k-1}`` (the raw data for
         ``k = 1``), one timepoints-by-features matrix per subject.
-    weights_function, weights_params, cfun, combine, include_timepoints, include_zero
-        Analysis-path settings, passed to ``timecorr``.  ``include_timepoints``
-        and ``include_zero`` shape the analysis kernel only, not the delta path.
+    weights_function : function
+        Analysis kernel, called as ``weights_function(T, weights_params)``; row
+        ``t`` of the kernel (``weights[t, :]``) is the kernel used at timepoint
+        ``t``.  Default: ``gaussian_weights``.
+    weights_params : dict or None
+        Parameters of the analysis kernel.  Default: None (the kernel's
+        defaults, for example ``gaussian_params``).
+    cfun : function
+        Analysis-path correlation function (``isfc``, ``wisfc``, ``autofc``).
+        Default: ``isfc``.
     rfun : None, str, dict, or callable
         Reducer for the analysis path (see ``helpers.reduce``).  Default: "PCA".
     delta_rfun : None, str, dict, or callable
         Reducer for the delta path.  Default (None): the same as ``rfun``.
     ndims : int, optional
         Output width for model-based reduction on both paths (see
-        ``helpers.reduce``).
+        ``helpers.reduce``).  Default (None): ``K`` columns for ``K(K+1)/2``
+        inputs.
+    combine : function
+        Applied to the analysis path only (see ``timecorr``).  Default:
+        ``null_combine``.
+    include_timepoints : str
+        "all", "backward"/"pre", or "forward"/"post" (see ``timecorr``).
+        Shapes the analysis kernel only, not the delta path.  Default: "all".
+    include_zero : bool
+        Whether the estimated timepoint contributes to its own estimate.
+        Shapes the analysis kernel only, not the delta path.  Default: True.
 
     Returns
     -------
@@ -255,6 +272,19 @@ def two_path_step(
         Delta features: per-subject co-fluctuations (``eye_weights``,
         ``autofc``), never combined across subjects, reduced jointly.  A list
         for list input, an array for array input.
+
+    Warns
+    -----
+    UserWarning
+        When some rows of the analysis kernel have fewer than 3 non-zero
+        weights (for example the first timepoints of a backward kernel): the
+        correlations there are undefined and set to 0.
+
+    Raises
+    ------
+    ValueError
+        As in ``timecorr`` (subjects of different shapes, non-numeric columns,
+        an unknown ``include_timepoints``, or an all-zero kernel).
 
     Examples
     --------
@@ -331,8 +361,11 @@ def features(
         ``X_0`` keeps the NaNs.
     order : int
         Highest order to compute (non-negative integer).  Default: 1.
-    weights_function, weights_params : analysis kernel and its parameters
-        (see ``timecorr``).  Default: ``gaussian_weights`` with its defaults.
+    weights_function, weights_params : function, dict or None
+        Analysis kernel and its parameters (see ``timecorr``); row ``t`` of the
+        kernel (``weights[t, :]``) is the kernel used at timepoint ``t``.
+        Default: ``gaussian_weights`` with ``weights_params=None`` (its
+        defaults, ``gaussian_params``).
     cfun : function
         Analysis-path correlation function (``isfc``, ``wisfc``, ``autofc``).
         Default: ``isfc``.
@@ -351,7 +384,7 @@ def features(
         ``null_combine``.
     include_timepoints : str
         "all", "backward"/"pre", or "forward"/"post".  Shapes the analysis
-        kernel only, not the delta path.
+        kernel only, not the delta path.  Default: "all".
     include_zero : bool
         Whether the estimated timepoint contributes to its own estimate.
         Shapes the analysis kernel only, not the delta path.  Default: True.
@@ -380,13 +413,22 @@ def features(
         Only with ``return_delta=True``: ``[D_0, ..., D_order]``, with the same
         container types (never combined across subjects).
 
+    Warns
+    -----
+    UserWarning
+        When some rows of the analysis kernel have fewer than 3 non-zero
+        weights: the correlations there are undefined and set to 0.
+
     Raises
     ------
     ValueError
-        If ``order`` is not a non-negative integer.
+        If ``order`` is not a non-negative integer, and as in ``timecorr``
+        (subjects of different shapes, non-numeric columns, an unknown
+        ``include_timepoints``).
     MemoryError
-        Before any allocation, if a correlation step's estimate exceeds
-        ``max_memory_gb``.  The message gives the estimate and the largest
+        Before a correlation step allocates its arrays, if that step's
+        estimate exceeds ``max_memory_gb`` (with unreduced delta features,
+        every order is checked before anything is computed).  The message gives the estimate and the largest
         number of features that would fit.
 
     Examples

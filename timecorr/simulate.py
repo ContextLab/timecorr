@@ -72,6 +72,11 @@ def random_corrmat(K, rng=None):
     numpy.ndarray
         A K x K correlation matrix.
 
+    Raises
+    ------
+    ValueError
+        If ``K`` is not a positive integer.
+
     Examples
     --------
     >>> import numpy as np
@@ -152,6 +157,7 @@ def ramping_dataset(K, T, B=5, rng=None):
         Number of timepoints.
     B : int
         Unused; accepted so that all dataset functions share one signature.
+        Default: 5.
     rng : numpy.random.Generator, optional
         Source of random numbers.  Default: a new unseeded generator.
 
@@ -162,6 +168,11 @@ def ramping_dataset(K, T, B=5, rng=None):
     corrs : numpy.ndarray
         A (T, K(K+1)/2) array: each timepoint's correlation matrix in ``mat2vec``
         layout.
+
+    Raises
+    ------
+    ValueError
+        If ``K`` is not a positive integer.
 
     Examples
     --------
@@ -186,6 +197,7 @@ def random_dataset(K, T, B=5, rng=None):
         Number of timepoints.
     B : int
         Unused; accepted so that all dataset functions share one signature.
+        Default: 5.
     rng : numpy.random.Generator, optional
         Source of random numbers.  Default: a new unseeded generator.
 
@@ -195,6 +207,11 @@ def random_dataset(K, T, B=5, rng=None):
         A (T, K) array with mean 0.
     corrs : numpy.ndarray
         A (T, K(K+1)/2) array in ``mat2vec`` layout.
+
+    Raises
+    ------
+    ValueError
+        If ``K`` is not a positive integer.
 
     Examples
     --------
@@ -219,6 +236,7 @@ def constant_dataset(K, T, B=5, rng=None):
         Number of timepoints.
     B : int
         Unused; accepted so that all dataset functions share one signature.
+        Default: 5.
     rng : numpy.random.Generator, optional
         Source of random numbers.  Default: a new unseeded generator.
 
@@ -228,6 +246,11 @@ def constant_dataset(K, T, B=5, rng=None):
         A (T, K) array with mean 0.1.
     corrs : numpy.ndarray
         A (T, K(K+1)/2) array in ``mat2vec`` layout (identical rows).
+
+    Raises
+    ------
+    ValueError
+        If ``K`` is not a positive integer.
 
     Examples
     --------
@@ -262,6 +285,11 @@ def block_dataset(K, T, B=5, rng=None):
     corrs : numpy.ndarray
         A (T, K(K+1)/2) array in ``mat2vec`` layout.
 
+    Raises
+    ------
+    ValueError
+        If ``K`` or ``B`` is not a positive integer.
+
     Examples
     --------
     >>> import numpy as np
@@ -289,6 +317,12 @@ def min_features(order, p=3):
     -------
     int
         ``p * 2**(order - 1)``.
+
+    Raises
+    ------
+    ValueError
+        If ``order`` is not a positive integer or ``p`` is not an integer of at
+        least 2.
 
     Examples
     --------
@@ -858,6 +892,13 @@ def carrier_reducer(blocks, K=None):
         ``f(list of (T, w) arrays) -> list of arrays``, the form accepted by
         ``rfun`` and ``delta_rfun``.  It raises ``ValueError`` naming the
         expected widths when ``w`` matches none of them.
+
+    Raises
+    ------
+    ValueError
+        If ``blocks`` is not a 2-D array of distinct non-negative integers with
+        a power-of-2 number of columns, or ``K`` is not a positive integer
+        larger than every index in ``blocks``.
 
     Examples
     --------

@@ -6,7 +6,7 @@ API Reference
 =============
 
 Every function listed here has a page with its parameters, return values and a
-runnable example. Unless a section names another module, the functions are
+runnable example; every dictionary has a page with its value. Unless a section names another module, the functions are
 available as ``timecorr.<name>`` (for example ``tc.timecorr`` after
 ``import timecorr as tc``).
 
@@ -104,6 +104,69 @@ used to estimate at timepoint ``t``. Every kernel function accepts
    # UserWarning: 2 of 100 timepoints have fewer than 3 non-zero kernel weights;
    # their correlations are undefined and set to 0.
 
+.. _default_kernel_params:
+
+Default kernel parameters
+-------------------------
+
+Each kernel function uses its default dictionary when ``params`` is omitted,
+and ``timecorr`` and ``features`` use it when ``weights_params`` is None.
+Distances ``|t - tau|`` are in samples.
+
+.. list-table::
+   :header-rows: 1
+   :widths: auto
+
+   * - Name
+     - Value
+     - Kernel and meaning of each key
+   * - :data:`gaussian_params`
+     - ``{"var": 100}``
+     - :func:`gaussian_weights`.  ``var``: variance of the Gaussian, in
+       squared samples (its standard deviation is ``sqrt(var)`` samples).
+   * - :data:`laplace_params`
+     - ``{"scale": 100}``
+     - :func:`laplace_weights`.  ``scale``: scale ``b`` of the Laplace
+       density, in samples; the weight is ``exp(-|t - tau| / b) / (2 b)``.
+   * - :data:`eye_params`
+     - ``{}``
+     - :func:`eye_weights`.  No keys: the delta kernel has no parameters.
+   * - :data:`t_params`
+     - ``{"df": 100}``
+     - :func:`t_weights`.  ``df``: degrees-of-freedom parameter of the
+       t-shaped kernel; smaller values give heavier tails (see
+       :func:`t_weights` for the formula).
+   * - :data:`mexican_hat_params`
+     - ``{"sigma": 10}``
+     - :func:`mexican_hat_weights`.  ``sigma``: width of the wavelet, in
+       samples; weights are positive within ``sigma`` samples of ``t`` and
+       negative beyond.
+   * - :data:`uniform_params`
+     - ``{}``
+     - :func:`uniform_weights`.  No keys: the uniform kernel has no
+       parameters.
+   * - :data:`boxcar_params`
+     - ``{"width": 10}``
+     - :func:`boxcar_weights`.  ``width``: total width of the window, in
+       samples; the weight is 1 where ``|t - tau| < width / 2`` and 0
+       elsewhere.
+
+.. autosummary::
+   :toctree: generated/
+   :nosignatures:
+
+   gaussian_params
+   laplace_params
+   eye_params
+   t_params
+   mexican_hat_params
+   uniform_params
+   boxcar_params
+
+The dictionaries are shared module-level objects: modifying one changes the
+default for every later call in the session.  Passing a new dictionary (for
+example ``weights_params={"var": 10}``) changes only that call.
+
 Combining subjects
 ------------------
 
@@ -192,6 +255,8 @@ Utilities
    mat2vec
    vec2mat
    format_data
+   iseven
+   isodd
 
 .. currentmodule:: timecorr.helpers
 

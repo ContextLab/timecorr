@@ -164,6 +164,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Importing timecorr changed matplotlib's global font sizes (to 18-24
   points); it no longer changes any matplotlib setting.
 
+### Documentation
+
+- Every public name now has an API page, including the default kernel
+  parameter dictionaries (`gaussian_params`, `laplace_params`, `eye_params`,
+  `t_params`, `mexican_hat_params`, `uniform_params`, `boxcar_params`), which
+  are listed in a table of their keys, default values and meanings, and
+  `iseven` and `isodd`. Each kernel function's docstring names its default
+  dictionary and keys. The `t_weights` docstring now gives the kernel's
+  formula, whose exponent is `-(df - 1) / 2` rather than the `-(df + 1) / 2`
+  of Student's t density. `tests/test_api_docs.py` checks that every
+  user-facing function has Parameters, Returns and Examples sections, that
+  every user-facing name is listed on the API page, and that the parameter
+  table matches the code.
+
 ### Dependencies and packaging
 
 - Python 3.10 or later; continuous integration on Python 3.10 to 3.13.

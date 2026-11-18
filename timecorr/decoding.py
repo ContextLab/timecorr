@@ -947,8 +947,15 @@ def reduce_wrapper(data, dims=10, level=0, rfun=None):
     otherwise the two smoothed arrays are reduced together, and the raw
     per-subject arrays together, with ``rfun[level]`` (see
     ``helpers.reduce``).  ``dims`` is not used.  Returns the 4-tuple
-    ``(in_smooth, out_smooth, in_raw, out_raw)``; for ``level >= 1`` the raw
-    entries are the first two reduced subjects.
+    ``(in_smooth, out_smooth, in_raw, out_raw)``.
+
+    For ``level >= 1`` the raw entries are pooled as
+    ``list(in_raw) + list(out_raw)``, reduced jointly, and the first two
+    elements of the result are returned: with per-subject lists (what
+    ``folding_levels`` returns) these are the first two subjects of
+    ``in_raw`` (or of the pooled list), not the two groups.  When it was
+    written, the raw entries were one array per group, so the first two
+    elements were the two groups.  Nothing in the package calls it.
     """
 
     if not level == 0:

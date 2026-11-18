@@ -259,7 +259,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `matplotlib` are listed explicitly.
 - Removed `nose`, `sphinx` and `duecredit` from the install requirements.
   Tests run with `pytest` (`pip install timecorr[test]` adds `pytest` and
-  `polars`); documentation dependencies are in the `docs` extra.
+  `polars`); documentation dependencies are in the `docs` extra (Read the
+  Docs installs that extra; the duplicate `docs/doc_requirements.txt` was
+  removed).
 
 ## [0.2.0] - 2025-07-09
 

@@ -326,3 +326,15 @@ def test_umap_runs_without_the_compatibility_layout_future_warning():
         again = reduce(a, rfun={"model": "UMAP", "kwargs": {"n_neighbors": 5}}, ndims=2)
     assert out.shape == (30, 2) and again.shape == (30, 2)
     assert np.all(np.isfinite(out)) and np.all(np.isfinite(again))
+
+
+@pytest.mark.parametrize(
+    "rfun", ["PCA", "IncrementalPCA", "TruncatedSVD", "FactorAnalysis", "KernelPCA",
+             "SparsePCA", "UMAP"]
+)
+def test_reduce_is_deterministic_for_each_model(rfun):
+    # random_state=0 is passed to every model: the same input gives the same output
+    a = seeded_vectorized_corrs(T=40, K=6)
+    first = reduce(a, rfun=rfun, ndims=3)
+    second = reduce(a, rfun=rfun, ndims=3)
+    np.testing.assert_array_equal(first, second)

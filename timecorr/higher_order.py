@@ -28,7 +28,6 @@ from .helpers import (
     format_data,
     gaussian_weights,
     isfc,
-    mat2vec,
     null_combine,
     reduce,
 )
@@ -249,10 +248,16 @@ _NAN_FILL_MESSAGE = (
 
 
 def _nan_pairs(x):
-    """(T, d(d+1)/2) mask, in ``mat2vec`` layout, of pairs with a NaN sample in ``x``."""
-    missing = np.isnan(x).T  # (d, T)
-    pairs = missing[:, np.newaxis, :] | missing[np.newaxis, :, :]
-    return mat2vec(pairs.astype(np.float64)) > 0
+    """
+    (T, d(d+1)/2) mask of the feature pairs with a NaN sample in ``x``, in
+    ``mat2vec`` layout (the diagonal, then the upper triangle row by row).
+    """
+    d = x.shape[1]
+    iu = np.triu_indices(d, 1)
+    rows = np.concatenate([np.arange(d), iu[0]])
+    cols = np.concatenate([np.arange(d), iu[1]])
+    missing = np.isnan(x)
+    return missing[:, rows] | missing[:, cols]
 
 
 def _delta_path(

@@ -90,6 +90,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   constant in the weights, and in 0.2.0 the optimizer stayed at its starting
   weights. Dimensionality reduction remains unsupervised and is fit jointly
   on all subjects.
+- Decoders and `smooth` name the kernel arguments as `timecorr` and
+  `tc.features` do: `weights_function` in `timepoint_decoder`,
+  `weighted_timepoint_decoder`, `weighted_timepoint_decoder_ec`,
+  `folding_levels`, `folding_levels_ec` and `pca_decoder`, and
+  `weights_function` / `weights_params` in `smooth`. The 0.2.0 names
+  (`weights_fun`; `kernel_fun`, `kernel_params`) are still accepted as
+  aliases, positional order is unchanged, and passing a name together with
+  its alias raises `TypeError`. A decoder `level` is an `order` in
+  `tc.features`.
+- The decoders (`timepoint_decoder`, `weighted_timepoint_decoder`,
+  `weighted_timepoint_decoder_ec`, `folding_levels`) and
+  `two_path_step` take `max_memory_gb` (default 4.0) and raise the same
+  `MemoryError` as `tc.features` before an unreduced correlation step whose
+  estimated peak memory exceeds it; the check now lives in the pipeline's
+  shared path functions.
+- `weight_corrs` clips correlations to +-(1 - 1e-7) before the Fisher z
+  transform, as `optimize_weights` does (an exact 1 with weight 0 gave NaN, then
+  0, with a `RuntimeWarning`).
+- `pca_decoder` raises `ValueError` (not `AssertionError`) for subjects of
+  different shapes; its `cfun`, `combine` and `rfun` arguments are accepted
+  and ignored, as documented. `folding_levels_ec` without a kernel function
+  raises `ValueError` (it raised `TypeError: 'NoneType' object is not
+  callable`). `get_xval_assignments` rejects a non-integer `nfolds` (2.5 was
+  truncated to 2).
+- `decoding.reduce_wrapper` (internal, unused) reduces the raw features of
+  both groups into one space and returns them in the structure they were
+  given; it returned the first two subjects instead of the two groups.
 - `timecorr(cfun=None)` returns the kernel-weighted mean of the samples using
   the same kernel rows as the correlation path (including `include_timepoints`,
   `include_zero` and `exclude_timepoints`) and accepts lists.
@@ -172,7 +199,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `mean_combine`; `combine` applies to orders 1 and higher.
 - `timepoint_decoder`: weights `mu` were mixed in the wrong transform
   direction and failed for array input; list input crashed; `nfolds=1` now
-  warns that the analysis is circular and runs.
+  warns that a single fold would be circular and runs with `nfolds=2` (two
+  groups, each decoded against the other).
 - `timecorr(cfun=None)` crashed on list input and ignored the kernel options.
 - `smooth` applied the kernel row mirrored, crashed for series shorter than
   the window, and its default parameters broke non-Laplace kernels.

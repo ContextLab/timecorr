@@ -130,6 +130,29 @@ def _largest_k(order, T, max_memory_gb, n_subjects=1, return_delta=False):
     return lo
 
 
+def _check_step_memory(d, T, n_subjects, n_outputs, max_memory_gb, order=None):
+    """
+    Raise MemoryError before an unreduced correlation step on ``n_subjects``
+    (T, d) inputs whose estimate (``_step_gb``) exceeds ``max_memory_gb``.
+    ``max_memory_gb=None`` checks nothing.  Shared by ``features``, the path
+    functions and the decoders, so all refuse the same steps.
+    """
+    if max_memory_gb is None:
+        return
+    S = int(n_subjects)
+    step = _step_gb(d, T, S, n_outputs)
+    if step > max_memory_gb:
+        fit = _largest_k(1, T, max_memory_gb, S, n_outputs > 1)
+        where = "" if order is None else f" at order {order}"
+        raise MemoryError(
+            f"The correlation step{where} needs about {step:.3g} GB "
+            f"({d} input features, T={T}, {S} subject{'s' if S > 1 else ''}), "
+            f"more than max_memory_gb={max_memory_gb}. The largest number of "
+            f"input features that fits one step is K={fit}. Reduce to fewer "
+            "features (ndims, rfun, delta_rfun) or raise max_memory_gb."
+        )
+
+
 def _as_list(x):
     return x if isinstance(x, list) else [x]
 
@@ -150,6 +173,9 @@ def _analysis_path(
     include_timepoints="all",
     include_zero=True,
     groups=None,
+    max_memory_gb=None,
+    n_outputs=1,
+    order=None,
 ):
     """
     Analysis path of one order: ``reduce(combine(timecorr(subjects, kernel, cfun)))``.
@@ -160,7 +186,13 @@ def _analysis_path(
     ``combine`` see only one group's subjects at a time, the combined results of
     all groups are reduced jointly (one model, one shared space), and a list with
     one entry per group is returned.
+
+    Before computing, the step is checked against ``max_memory_gb`` (see
+    ``_check_step_memory``; ``n_outputs=2`` when the delta path of the same
+    order follows and its results are held together).
     """
+    T, d = subjects[0].shape
+    _check_step_memory(d, T, len(subjects), n_outputs, max_memory_gb, order)
 
     def analyze(members):
         return combine(
@@ -204,12 +236,17 @@ def _analysis_path(
     return out
 
 
-def _delta_path(subjects, rfun="PCA", ndims=None):
+def _delta_path(
+    subjects, rfun="PCA", ndims=None, max_memory_gb=None, n_outputs=1, order=None
+):
     """
     Delta path of one order: per-subject co-fluctuations (``eye_weights``,
     ``autofc``), never combined, reduced jointly across subjects.  ``subjects`` is
-    a list of (T, d) arrays; a list of the same length is returned.
+    a list of (T, d) arrays; a list of the same length is returned.  The step
+    is checked against ``max_memory_gb`` first (see ``_check_step_memory``).
     """
+    T, d = subjects[0].shape
+    _check_step_memory(d, T, len(subjects), n_outputs, max_memory_gb, order)
     delta = _as_list(
         timecorr(
             subjects,
@@ -233,6 +270,7 @@ def two_path_step(
     combine=null_combine,
     include_timepoints="all",
     include_zero=True,
+    max_memory_gb=4.0,
 ):
     """
     Compute one order of the two-path pipeline from the previous delta features.
@@ -270,6 +308,10 @@ def two_path_step(
     include_zero : bool
         Whether the estimated timepoint contributes to its own estimate.
         Shapes the analysis kernel only, not the delta path.  Default: True.
+    max_memory_gb : float or None
+        Upper limit, in gigabytes, on the estimated peak memory of the step
+        for all subjects together (see ``features`` and
+        ``estimate_memory_gb``); None checks nothing.  Default: 4.0.
 
     Returns
     -------
@@ -287,10 +329,14 @@ def two_path_step(
     UserWarning
         When some rows of the analysis kernel have fewer than 3 non-zero
         weights (for example the first timepoints of a backward kernel): the
-        correlations there are undefined and set to 0.
+        correlations there are undefined and set to 0.  Also for a low
+        effective sample size or cancelled variances (see ``wcorr``).
 
     Raises
     ------
+    MemoryError
+        Before the step allocates its arrays, if its estimate exceeds
+        ``max_memory_gb``.
     ValueError
         If ``rfun`` or ``delta_rfun`` is an unknown model or graph measure
         name or a dict without a ``'model'``, if ``ndims`` is not a positive
@@ -314,28 +360,45 @@ def two_path_step(
     _check_rfun(rfun, "rfun")
     _check_rfun(delta_rfun, "delta_rfun")
     ndims = _check_ndims(ndims)
-    if delta_rfun is None:
-        delta_rfun = rfun
     single = not isinstance(data, (list, tuple))
     subjects = format_data(data, fill_nan=False)
-
-    X_next = _analysis_path(
+    X_next, D_next = _two_path_step(
         subjects,
         weights_function=weights_function,
         weights_params=weights_params,
         cfun=cfun,
         rfun=rfun,
+        delta_rfun=delta_rfun,
         ndims=ndims,
         combine=combine,
         include_timepoints=include_timepoints,
         include_zero=include_zero,
+        max_memory_gb=max_memory_gb,
     )
-    D_next = _delta_path(subjects, rfun=delta_rfun, ndims=ndims)
-
     if single:
         if isinstance(X_next, list):
             X_next = X_next[0]
         D_next = D_next[0]
+    return X_next, D_next
+
+
+def _two_path_step(
+    subjects, delta_rfun=None, max_memory_gb=None, order=None, **analysis
+):
+    """``two_path_step`` on formatted subjects; returns lists (X_next, D_next)."""
+    if delta_rfun is None:
+        delta_rfun = analysis.get("rfun", "PCA")
+    X_next = _analysis_path(
+        subjects, max_memory_gb=max_memory_gb, n_outputs=2, order=order, **analysis
+    )
+    D_next = _delta_path(
+        subjects,
+        rfun=delta_rfun,
+        ndims=analysis.get("ndims"),
+        max_memory_gb=max_memory_gb,
+        n_outputs=2,
+        order=order,
+    )
     return X_next, D_next
 
 
@@ -505,18 +568,6 @@ def features(
     X = [subjects]
     D = [subjects]
     for k in range(1, order + 1):
-        d = D[-1][0].shape[1]
-        both_paths = k < order or return_delta
-        step = _step_gb(d, T, S, 2 if both_paths else 1)
-        if step > max_memory_gb:
-            fit = _largest_k(1, T, max_memory_gb, S, both_paths)
-            raise MemoryError(
-                f"The correlation step at order {k} needs about {step:.3g} GB "
-                f"({d} input features, T={T}, {S} subject{'s' if S > 1 else ''}), "
-                f"more than max_memory_gb={max_memory_gb}. The largest number of "
-                f"input features that fits one step is K={fit}. Reduce to fewer "
-                "features (ndims, rfun, delta_rfun) or raise max_memory_gb."
-            )
         analysis = dict(
             weights_function=weights_function,
             weights_params=weights_params,
@@ -530,9 +581,14 @@ def features(
         if k == order and not return_delta:
             # the last order's delta features feed nothing and are not returned:
             # skip them (unreduced, they are as large as X_order)
-            X.append(_analysis_path(D[-1], **analysis))
+            X.append(
+                _analysis_path(D[-1], max_memory_gb=max_memory_gb, order=k, **analysis)
+            )
             break
-        x, delta = two_path_step(D[-1], delta_rfun=delta_rfun, **analysis)
+        x, delta = _two_path_step(
+            D[-1], delta_rfun=delta_rfun, max_memory_gb=max_memory_gb, order=k,
+            **analysis
+        )
         X.append(x)
         D.append(delta)
 

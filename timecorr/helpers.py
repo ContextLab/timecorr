@@ -21,6 +21,12 @@ try:  # polars is optional
 except ImportError:  # pragma: no cover
     pl = None
 
+try:  # hypertools' registry of reducer names (read to validate names up front)
+    from hypertools.reduce.common import AUTOENCODER_NAMES as _HYP_AUTOENCODERS
+    from hypertools.reduce.common import REDUCERS as _HYP_REDUCERS
+except ImportError:  # pragma: no cover - other hypertools layouts
+    _HYP_AUTOENCODERS, _HYP_REDUCERS = (), {}
+
 # Default parameters of the kernel functions below.  Each kernel function uses
 # its dictionary when ``params`` is omitted or None.  The ``#:`` comments are
 # the documentation that Sphinx shows for each dictionary.
@@ -540,6 +546,15 @@ def _estimator_message(weights, cancelled=None):
             "or the kernel is too narrow); their correlations are set to 0."
         )
     return " ".join(parts) if parts else None
+
+
+def _weights_alias(name, value, alias, alias_value):
+    """``value``, or ``alias_value`` when only the alias was given; both raise TypeError."""
+    if alias_value is None:
+        return value
+    if value is not None:
+        raise TypeError(f"Pass {name} or its alias {alias}, not both.")
+    return alias_value
 
 
 def _is_polars(x):
@@ -1529,12 +1544,7 @@ _DOCUMENTED_MODELS = (
 
 def _model_names():
     """Model names ``reduce`` accepts: the documented ones and hypertools' registry."""
-    names = set(_DOCUMENTED_MODELS)
-    try:
-        from hypertools.reduce.common import AUTOENCODER_NAMES, REDUCERS
-    except ImportError:  # pragma: no cover - other hypertools layouts
-        return names
-    return names | set(REDUCERS) | set(AUTOENCODER_NAMES)
+    return set(_DOCUMENTED_MODELS) | set(_HYP_REDUCERS) | set(_HYP_AUTOENCODERS)
 
 
 def _check_rfun(rfun, name="rfun"):
@@ -1849,11 +1859,19 @@ def reduce(corrs, rfun=None, ndims=None):
     return red_corrs
 
 
-def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=None):
+def smooth(
+    w,
+    windowsize=10,
+    weights_function=None,
+    weights_params=None,
+    kernel_fun=None,
+    kernel_params=None,
+):
     """
     Smooth each column of a timeseries with a kernel truncated to a window.
 
-    The kernel is the middle row of ``kernel_fun(windowsize, params=kernel_params)``
+    The kernel is the middle row of
+    ``weights_function(windowsize, params=weights_params)``
     (the average of the two middle rows for an even ``windowsize``), normalized
     to sum to one.  Row ``t`` of a kernel matrix weights the samples used at
     ``t``, so a one-sided (e.g. backward) kernel smooths with past samples only.
@@ -1864,12 +1882,17 @@ def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=None):
         A timepoints-by-features matrix, or a list of them.
     windowsize : int
         Width of the kernel window in samples.  Default: 10.
-    kernel_fun : function
-        Kernel function, called as ``kernel_fun(windowsize, params=kernel_params)``.
-        Default: ``laplace_weights``.
-    kernel_params : dict, optional
-        Parameters for ``kernel_fun``.  Default: None (the kernel function's
-        own defaults).
+    weights_function : function, optional
+        Kernel function, called as
+        ``weights_function(windowsize, params=weights_params)``.  Default
+        (None): ``laplace_weights``.
+    weights_params : dict, optional
+        Parameters for ``weights_function``.  Default: None (the kernel
+        function's own defaults).
+    kernel_fun, kernel_params : optional
+        Aliases of ``weights_function`` and ``weights_params`` (their names in
+        timecorr 0.2.0).  Passing a name and its alias raises ``TypeError``.
+        Default: None.
 
     Returns
     -------
@@ -1882,6 +1905,8 @@ def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=None):
     ------
     AssertionError
         If ``windowsize`` is not an ``int``.
+    TypeError
+        If a name and its alias are both given.
 
     Examples
     --------
@@ -1889,25 +1914,32 @@ def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=None):
     >>> from timecorr.helpers import smooth, laplace_weights
     >>> w = np.zeros((9, 1))
     >>> w[4, 0] = 1.0
-    >>> out = smooth(w, windowsize=3, kernel_fun=laplace_weights, kernel_params={"scale": 1})
+    >>> out = smooth(w, windowsize=3, weights_function=laplace_weights,
+    ...              weights_params={"scale": 1})
     >>> out.shape, bool(np.isclose(out.sum(), 1.0))
     ((9, 1), True)
     """
+    weights_function = _weights_alias(
+        "weights_function", weights_function, "kernel_fun", kernel_fun
+    )
+    weights_params = _weights_alias(
+        "weights_params", weights_params, "kernel_params", kernel_params
+    )
+    if weights_function is None:
+        weights_function = laplace_weights
     if type(w) is list:
-        return list(
-            map(
-                lambda x: smooth(
-                    x,
-                    windowsize=windowsize,
-                    kernel_fun=kernel_fun,
-                    kernel_params=kernel_params,
-                ),
-                w,
+        return [
+            smooth(
+                x,
+                windowsize=windowsize,
+                weights_function=weights_function,
+                weights_params=weights_params,
             )
-        )
+            for x in w
+        ]
 
     assert type(windowsize) == int, "smoothing kernel must have integer width"
-    k = kernel_fun(windowsize, params=kernel_params)
+    k = weights_function(windowsize, params=weights_params)
     if iseven(windowsize):
         kernel = np.divide(
             k[int(np.floor(windowsize / 2) - 1), :]

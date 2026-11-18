@@ -5,6 +5,7 @@ pattern came from, across groups of subjects (Owen, Chang & Manning, 2021,
 "Temporal decoding").
 """
 
+import numbers
 import warnings
 
 import hypertools as hyp
@@ -14,6 +15,7 @@ import scipy.spatial.distance as sd
 from scipy.optimize import minimize
 
 from .helpers import (
+    _weights_alias,
     format_data,
     isfc,
     laplace_params,
@@ -24,6 +26,9 @@ from .helpers import (
     z2r,
 )
 from .higher_order import _analysis_path, _delta_path
+from .timecorr import timecorr
+
+_DEFAULT_MEMORY_GB = 4.0
 
 
 def _subjects(data):
@@ -53,11 +58,14 @@ def _parse_levels(level):
     return levels, levels[-1]
 
 
-def _per_level(setting, n, name):
-    """One entry per level 0..n-1: broadcast a single setting, or check a list."""
+def _per_level(setting, n, name, exact=True):
+    """
+    One entry per level 0..n-1: broadcast a single setting, or check a list
+    (exactly ``n`` entries, or at least ``n`` with ``exact=False``).
+    """
     if isinstance(setting, (list, tuple, np.ndarray)):
         setting = list(setting)
-        if len(setting) != n:
+        if len(setting) < n or (exact and len(setting) != n):
             raise ValueError(
                 f"{name} must be a single value or have one entry per level "
                 f"(0 to {n - 1}, {n} entries); got {len(setting)}."
@@ -66,20 +74,31 @@ def _per_level(setting, n, name):
     return [setting] * n
 
 
-def _decoder_delta_chain(data, level, rfun=None):
+def _decoder_kernel(weights_function, weights_fun):
+    """The decoders' analysis kernel: ``weights_function`` or its alias, default Laplace."""
+    weights_function = _weights_alias(
+        "weights_function", weights_function, "weights_fun", weights_fun
+    )
+    return laplace_weights if weights_function is None else weights_function
+
+
+def _decoder_delta_chain(data, level, rfun=None, max_memory_gb=None):
     """
     Delta features ``[D_0, ..., D_{level-1}]`` for every subject.
 
     ``D_0`` is the data; ``D_k`` is the delta path of the shared pipeline
     (``higher_order._delta_path``: per-subject co-fluctuations, reduced jointly
     across all subjects with ``rfun[k]``).  The analysis features at order
-    ``level`` need ``D_{level-1}``, so ``D_level`` is not computed.
+    ``level`` need ``D_{level-1}``, so ``D_level`` is not computed.  Each
+    step is checked against ``max_memory_gb`` before it runs.
     """
     subjects = _subjects(data)
     rfun = _per_level(rfun, level + 1, "rfun")
     D = [subjects]
     for k in range(1, level):
-        D.append(_delta_path(D[-1], rfun=rfun[k]))
+        D.append(
+            _delta_path(D[-1], rfun=rfun[k], max_memory_gb=max_memory_gb, order=k)
+        )
     return D
 
 
@@ -88,11 +107,13 @@ def _decoder_features(
     groups,
     level,
     cfun=isfc,
-    weights_fun=laplace_weights,
+    weights_function=None,
     weights_params=laplace_params,
     combine=mean_combine,
     rfun=None,
     D=None,
+    max_memory_gb=None,
+    weights_fun=None,
 ):
     """
     Features of every order from 0 to ``level`` for each group of subjects.
@@ -108,15 +129,17 @@ def _decoder_features(
       share one space (``higher_order._analysis_path``).
 
     ``D`` (from ``_decoder_delta_chain``) may be passed to reuse the delta
-    chain across folds.
+    chain across folds.  Each analysis step is checked against
+    ``max_memory_gb`` before it runs.
     """
+    weights_function = _decoder_kernel(weights_function, weights_fun)
     subjects = _subjects(data)
     n = level + 1
     cfun = _per_level(cfun, n, "cfun")
     combine = _per_level(combine, n, "combine")
     rfun = _per_level(rfun, n, "rfun")
     if D is None:
-        D = _decoder_delta_chain(subjects, level, rfun)
+        D = _decoder_delta_chain(subjects, level, rfun, max_memory_gb)
     groups = [[int(j) for j in g] for g in groups]
 
     # order 0 is activations, not correlations: always a plain mean
@@ -125,12 +148,14 @@ def _decoder_features(
         feats.append(
             _analysis_path(
                 D[k - 1],
-                weights_function=weights_fun,
+                weights_function=weights_function,
                 weights_params=weights_params,
                 cfun=cfun[k],
                 rfun=rfun[k],
                 combine=combine[k],
                 groups=groups,
+                max_memory_gb=max_memory_gb,
+                order=k,
             )
         )
     return feats
@@ -152,10 +177,12 @@ def timepoint_decoder(
     nfolds=2,
     level=0,
     cfun=isfc,
-    weights_fun=laplace_weights,
+    weights_function=None,
     weights_params=laplace_params,
     combine=mean_combine,
     rfun=None,
+    weights_fun=None,
+    max_memory_gb=_DEFAULT_MEMORY_GB,
 ):
     """
     Decode timepoints across groups of subjects from features at each order.
@@ -181,18 +208,20 @@ def timepoint_decoder(
         returned (labeled with the highest level).  Default: None.
     nfolds : int
         Number of groups (at most the number of subjects).  ``nfolds=1`` warns
-        that the analysis is circular and splits the subjects into two groups,
-        as ``weighted_timepoint_decoder`` does.  Default: 2.
+        that a single fold would be circular and uses ``nfolds=2`` instead
+        (two groups, each decoded against the other).  Default: 2.
     level : int or list of int
-        Order(s) to report.  Every order from 0 to the highest is computed.
+        Order(s) to report (a decoder "level" is an ``order`` in
+        ``features``).  Every order from 0 to the highest is computed.
         Default: 0.
     cfun : function or list of functions
         Analysis-path correlation function, or one per order (entry 0 unused).
         Default: ``isfc``.
-    weights_fun, weights_params : function, dict
-        Analysis kernel and its parameters; row ``t`` of the kernel
-        (``weights[t, :]``) is the kernel used at timepoint ``t``.
-        Default: ``laplace_weights`` with ``laplace_params``.
+    weights_function : function, optional
+        Analysis kernel; row ``t`` of the kernel (``weights[t, :]``) is the
+        kernel used at timepoint ``t``.  Default (None): ``laplace_weights``.
+    weights_params : dict
+        Parameters of the analysis kernel.  Default: ``laplace_params``.
     combine : function or list of functions
         Combines each group's per-subject features at orders ``k >= 1``, or
         one per order.  Order 0 (activations, not correlations) is always
@@ -202,6 +231,15 @@ def timepoint_decoder(
     rfun : None, str, dict, callable, or a list of these
         Reducer for orders ``k >= 1`` on both paths (see ``helpers.reduce``), or
         one per order (entry 0 unused).  Default: None (no reduction).
+    weights_fun : function, optional
+        Alias of ``weights_function`` (its name in timecorr 0.2.0).  Passing
+        both raises ``TypeError``.  Default: None.
+    max_memory_gb : float or None
+        Upper limit, in gigabytes, on the estimated peak memory of any one
+        correlation step for all subjects together, as in ``features``: a
+        step whose estimate is larger raises ``MemoryError`` before it
+        allocates (unreduced features grow from ``d`` to ``d(d+1)/2`` per
+        order).  None checks nothing.  Default: 4.0.
 
     Returns
     -------
@@ -215,10 +253,15 @@ def timepoint_decoder(
     Warns
     -----
     UserWarning
-        With ``nfolds=1``: the analysis is circular.
+        With ``nfolds=1``: a single fold would be circular, so two are used.
 
     Raises
     ------
+    TypeError
+        If both ``weights_function`` and ``weights_fun`` are given.
+    MemoryError
+        Before a correlation step whose estimated peak memory exceeds
+        ``max_memory_gb``.
     ValueError
         If ``nfolds`` is below 1 or above the number of subjects, if ``level``
         is not a non-negative integer (or list of them), if ``mu`` has the
@@ -242,6 +285,7 @@ def timepoint_decoder(
     >>> bool(results.loc[results["level"] == 0, "accuracy"].mean() > 3 / 30)  # chance: 1/30
     True
     """
+    weights_function = _decoder_kernel(weights_function, weights_fun)
     subjects = _subjects(data)
     report, top = _parse_levels(level)
     n = top + 1
@@ -257,7 +301,10 @@ def timepoint_decoder(
         report = [top]
 
     if nfolds == 1:
-        warnings.warn("When nfolds is set to one, the analysis will be circular.")
+        warnings.warn(
+            "When nfolds is set to one, the analysis would be circular; using "
+            "nfolds=2 instead."
+        )
         nfolds = 2
     if not 2 <= nfolds <= len(subjects):
         raise ValueError(
@@ -267,12 +314,13 @@ def timepoint_decoder(
 
     settings = dict(
         cfun=cfun,
-        weights_fun=weights_fun,
+        weights_function=weights_function,
         weights_params=weights_params,
         combine=combine,
         rfun=rfun,
+        max_memory_gb=max_memory_gb,
     )
-    D = _decoder_delta_chain(subjects, top, rfun)
+    D = _decoder_delta_chain(subjects, top, rfun, max_memory_gb)
     group_assignments = get_xval_assignments(len(subjects), nfolds)
 
     rows = []
@@ -298,11 +346,13 @@ def weighted_timepoint_decoder(
     level=0,
     optimize_levels=None,
     cfun=isfc,
-    weights_fun=laplace_weights,
+    weights_function=None,
     weights_params=laplace_params,
     combine=mean_combine,
     rfun=None,
     opt_init=None,
+    weights_fun=None,
+    max_memory_gb=_DEFAULT_MEMORY_GB,
 ):
     """
     Decode timepoints from a weighted mix of the orders' decoding matrices.
@@ -335,16 +385,20 @@ def weighted_timepoint_decoder(
         are split in two, and the weights are fit on the same test-versus-
         training matrices they are evaluated on (circular).  Default: 2.
     level : int or list of int
-        Every order from 0 to the highest given is computed.  Default: 0.
+        Every order from 0 to the highest given is computed (a decoder
+        "level" is an ``order`` in ``features``).  Default: 0.
     optimize_levels : list of int, optional
         Orders to mix, added one at a time: a result is reported after each
         addition (e.g. ``[0, 1, 2]`` reports orders {0}, {0, 1}, {0, 1, 2}).
         Default: every order from 0 to the highest level.
-    cfun, weights_fun, weights_params, combine, rfun
+    cfun, weights_function, weights_params, combine, rfun
         As in ``timepoint_decoder``.
     opt_init : None, "random", or "last"
         Starting weights for the optimizer: equal (None), random, or equal with
         the last set to one.  Default: None.
+    weights_fun, max_memory_gb
+        As in ``timepoint_decoder`` (``weights_fun`` is an alias of
+        ``weights_function``; ``max_memory_gb`` defaults to 4.0).
 
     Returns
     -------
@@ -362,6 +416,11 @@ def weighted_timepoint_decoder(
 
     Raises
     ------
+    TypeError
+        If both ``weights_function`` and ``weights_fun`` are given.
+    MemoryError
+        Before a correlation step whose estimated peak memory exceeds
+        ``max_memory_gb``.
     ValueError
         If the training group of a fold has fewer than two subjects (it cannot
         be split), if ``nfolds`` exceeds the number of subjects, if ``level``
@@ -383,6 +442,7 @@ def weighted_timepoint_decoder(
     >>> np.allclose(mu.sum(axis=1), 1)
     True
     """
+    weights_function = _decoder_kernel(weights_function, weights_fun)
     subjects = _subjects(data)
     _, top = _parse_levels(level)
     nfolds, circular = _check_folds(nfolds, len(subjects))
@@ -390,12 +450,13 @@ def weighted_timepoint_decoder(
 
     settings = dict(
         cfun=cfun,
-        weights_fun=weights_fun,
+        weights_function=weights_function,
         weights_params=weights_params,
         combine=combine,
         rfun=rfun,
+        max_memory_gb=max_memory_gb,
     )
-    D = _decoder_delta_chain(subjects, top, rfun)
+    D = _decoder_delta_chain(subjects, top, rfun, max_memory_gb)
     return _weighted_decode(
         subjects, D, nfolds, circular, top, optimize_levels, opt_init, settings
     )
@@ -484,10 +545,12 @@ def folding_levels(
     outfold_data,
     level=0,
     cfun=None,
-    weights_fun=None,
+    weights_function=None,
     weights_params=None,
     combine=None,
     rfun=None,
+    weights_fun=None,
+    max_memory_gb=_DEFAULT_MEMORY_GB,
 ):
     """
     One order of decoder features for an in-fold and an out-of-fold group.
@@ -498,21 +561,28 @@ def folding_levels(
         Each group's previous delta features ``D_{level-1}`` (its data for
         ``level`` 0 or 1), one (T, d) array per subject.
     level : int
-        Order computed.  Default: 0.
+        Order computed (an ``order`` in ``features``).  Default: 0.
     cfun : function, None, or a list indexed by level
         Analysis-path correlation function (used for ``level >= 1``).
         Default (None): ``isfc``.
-    weights_fun, weights_params : function, dict or None
+    weights_function, weights_params : function, dict or None
         Analysis kernel and its parameters; row ``t`` of the kernel
         (``weights[t, :]``) is the kernel used at timepoint ``t``.
         Default (None, None): ``laplace_weights`` with ``laplace_params``;
-        with another ``weights_fun`` and no ``weights_params``, that kernel's
-        defaults.
+        with another ``weights_function`` and no ``weights_params``, that
+        kernel's defaults.
     combine : function, None, or a list indexed by level
         Within-group combine for ``level >= 1``.  Default (None):
         ``mean_combine``.
     rfun : None, str, dict, callable, or a list indexed by level
         Reducer (see ``helpers.reduce``).  Default: None (no reduction).
+    weights_fun : function, optional
+        Alias of ``weights_function`` (its name in timecorr 0.2.0).  Passing
+        both raises ``TypeError``.  Default: None.
+    max_memory_gb : float or None
+        Upper limit, in gigabytes, on the estimated peak memory of the
+        correlation step (see ``features``); None checks nothing.  Default:
+        4.0.
 
     Returns
     -------
@@ -533,6 +603,11 @@ def folding_levels(
     ValueError
         If a list-valued ``cfun``, ``combine`` or ``rfun`` does not have
         ``level + 1`` entries, or the subjects differ in shape.
+    TypeError
+        If both ``weights_function`` and ``weights_fun`` are given.
+    MemoryError
+        Before a correlation step whose estimated peak memory exceeds
+        ``max_memory_gb``.
 
     Examples
     --------
@@ -545,14 +620,15 @@ def folding_levels(
     >>> in_s.shape, out_s.shape, len(in_r), in_r[0].shape
     ((20, 6), (20, 6), 2, (20, 6))
     """
-    from .timecorr import timecorr
-
+    weights_function = _weights_alias(
+        "weights_function", weights_function, "weights_fun", weights_fun
+    )
     n = level + 1
     cfun = _per_level(isfc if cfun is None else cfun, n, "cfun")
     combine = _per_level(mean_combine if combine is None else combine, n, "combine")
     rfun = _per_level(rfun, n, "rfun")
-    if weights_fun is None:
-        weights_fun = laplace_weights
+    if weights_function is None:
+        weights_function = laplace_weights
         if weights_params is None:
             weights_params = laplace_params
 
@@ -564,7 +640,7 @@ def folding_levels(
                     cfun=None,
                     rfun=rfun[0],
                     combine=mean_combine,
-                    weights_function=weights_fun,
+                    weights_function=weights_function,
                     weights_params=weights_params,
                 )
             )
@@ -577,14 +653,20 @@ def folding_levels(
     groups = [list(range(n_in)), list(range(n_in, len(subjects)))]
     in_smooth, out_smooth = _analysis_path(
         subjects,
-        weights_function=weights_fun,
+        weights_function=weights_function,
         weights_params=weights_params,
         cfun=cfun[level],
         rfun=rfun[level],
         combine=combine[level],
         groups=groups,
+        max_memory_gb=max_memory_gb,
+        n_outputs=2,
+        order=level,
     )
-    raw = _delta_path(subjects, rfun=rfun[level])
+    raw = _delta_path(
+        subjects, rfun=rfun[level], max_memory_gb=max_memory_gb, n_outputs=2,
+        order=level,
+    )
     return in_smooth, out_smooth, raw[:n_in], raw[n_in:]
 
 
@@ -594,11 +676,13 @@ def weighted_timepoint_decoder_ec(
     level=0,
     optimize_levels=None,
     cfun=isfc,
-    weights_fun=laplace_weights,
+    weights_function=None,
     weights_params=laplace_params,
     combine=mean_combine,
     rfun=None,
     opt_init=None,
+    weights_fun=None,
+    max_memory_gb=_DEFAULT_MEMORY_GB,
 ):
     """
     ``weighted_timepoint_decoder`` with externally computed lower-order features.
@@ -617,7 +701,7 @@ def weighted_timepoint_decoder_ec(
     data : sequence
         Indexed by order: ``data[k]`` is a list (or 3D array) with one (T, d_k)
         array per subject, for ``k = 0, ..., max(level - 1, 0)``.
-    nfolds, level, optimize_levels, cfun, weights_fun, weights_params, combine, rfun, opt_init
+    nfolds, level, optimize_levels, cfun, weights_function, weights_params, combine, rfun, opt_init, weights_fun, max_memory_gb
         As in ``weighted_timepoint_decoder``.
 
     Returns
@@ -650,6 +734,7 @@ def weighted_timepoint_decoder_ec(
     >>> results["level"].tolist()
     [0, 1, 0, 1]
     """
+    weights_function = _decoder_kernel(weights_function, weights_fun)
     if np.ndim(data[0][0]) != 2:
         raise ValueError(
             "data must be indexed by level: data[0] holds one (T, K) array per "
@@ -668,10 +753,11 @@ def weighted_timepoint_decoder_ec(
     optimize_levels = _check_optimize_levels(optimize_levels, top)
     settings = dict(
         cfun=cfun,
-        weights_fun=weights_fun,
+        weights_function=weights_function,
         weights_params=weights_params,
         combine=combine,
         rfun=rfun,
+        max_memory_gb=max_memory_gb,
     )
     return _weighted_decode(
         subjects, D, nfolds, circular, top, optimize_levels, opt_init, settings
@@ -683,10 +769,11 @@ def folding_levels_ec(
     outfold_data,
     level=0,
     cfun=None,
-    weights_fun=None,
+    weights_function=None,
     weights_params=None,
     combine=None,
     rfun=None,
+    weights_fun=None,
 ):
     """
     One level of decoder features for two groups, from precomputed inputs.
@@ -700,21 +787,26 @@ def folding_levels_ec(
         Each group's input features for this level, one (T, d) array per
         subject.
     level : int
-        Level computed; selects the entry of list-valued settings.  Default: 0.
+        Level computed (an ``order`` in ``features``); selects the entry of
+        list-valued settings.  Default: 0.
     cfun : function, or a list indexed by level
         Correlation function, used for ``level >= 1``.  Default: None, which
         smooths each group's inputs instead of correlating them (``timecorr``
         with ``cfun=None``).
-    weights_fun, weights_params : function, dict or None
+    weights_function, weights_params : function, dict or None
         Kernel function and its parameters, passed to ``timecorr``; row ``t``
         of the kernel (``weights[t, :]``) is the kernel used at timepoint
-        ``t``.  ``weights_fun`` is required (its default, None, raises
-        ``TypeError``); ``weights_params=None`` uses the kernel's defaults.
+        ``t``.  ``weights_function`` (or its alias ``weights_fun``) is
+        required: without it ``ValueError`` is raised.
+        ``weights_params=None`` uses the kernel's defaults.
     combine : function, None, or a list indexed by level
         Within-group combine for ``level >= 1``.  Default (None):
         ``mean_combine``.
     rfun : None, str, dict, callable, or a list indexed by level
         Reducer applied to each group separately.  Default: None.
+    weights_fun : function, optional
+        Alias of ``weights_function`` (its name in timecorr 0.2.0).  Passing
+        both raises ``TypeError``.  Default: None.
 
     Returns
     -------
@@ -726,6 +818,14 @@ def folding_levels_ec(
     in_raw, out_raw : list of numpy.ndarray
         The inputs, unchanged.
 
+    Raises
+    ------
+    ValueError
+        If no kernel function is given, or a list-valued setting has fewer
+        than ``level + 1`` entries.
+    TypeError
+        If both ``weights_function`` and ``weights_fun`` are given.
+
     Examples
     --------
     >>> import numpy as np
@@ -735,75 +835,46 @@ def folding_levels_ec(
     >>> a = [rng.randn(20, 3) for _ in range(2)]
     >>> b = [rng.randn(20, 3) for _ in range(2)]
     >>> out = folding_levels_ec(a, b, level=1, cfun=tc.isfc,
-    ...                         weights_fun=tc.laplace_weights,
+    ...                         weights_function=tc.laplace_weights,
     ...                         weights_params={"scale": 5})
     >>> out[0].shape, out[1].shape
     ((20, 6), (20, 6))
     """
-    from .timecorr import timecorr
-
-    # settings may be single values or lists indexed by level (callers pass
-    # the lists for every level)
-    def by_level(setting):
-        if isinstance(setting, (list, tuple, np.ndarray)):
-            return list(setting)
-        return [setting] * (level + 1)
-
-    cfun = by_level(cfun)
-    combine = by_level(mean_combine if combine is None else combine)
-    rfun = by_level(rfun)
-
-    if level == 0:
-
-        in_fold_smooth = np.asarray(
-            timecorr(
-                [x for x in infold_data],
-                cfun=None,
-                rfun=rfun[level],
-                combine=mean_combine,
-                weights_function=weights_fun,
-                weights_params=weights_params,
-            )
+    weights_function = _weights_alias(
+        "weights_function", weights_function, "weights_fun", weights_fun
+    )
+    if weights_function is None:
+        raise ValueError(
+            "folding_levels_ec needs a kernel function: pass weights_function "
+            "(for example timecorr.laplace_weights)."
         )
-        out_fold_smooth = np.asarray(
+    # settings may be single values or lists indexed by level (callers may
+    # pass the lists for every level, so longer lists are accepted)
+    n = level + 1
+    cfun = _per_level(cfun, n, "cfun", exact=False)
+    combine = _per_level(
+        mean_combine if combine is None else combine, n, "combine", exact=False
+    )
+    rfun = _per_level(rfun, n, "rfun", exact=False)
+
+    def group_features(group):
+        return np.asarray(
             timecorr(
-                [x for x in outfold_data],
-                cfun=None,
+                list(group),
+                cfun=None if level == 0 else cfun[level],
                 rfun=rfun[level],
-                combine=mean_combine,
-                weights_function=weights_fun,
+                combine=mean_combine if level == 0 else combine[level],
+                weights_function=weights_function,
                 weights_params=weights_params,
             )
         )
 
-        in_fold_raw = infold_data
-        out_fold_raw = outfold_data
-    else:
-
-        in_fold_smooth = np.asarray(
-            timecorr(
-                list(infold_data),
-                cfun=cfun[level],
-                rfun=rfun[level],
-                combine=combine[level],
-                weights_function=weights_fun,
-                weights_params=weights_params,
-            )
-        )
-        out_fold_smooth = np.asarray(
-            timecorr(
-                list(outfold_data),
-                cfun=cfun[level],
-                rfun=rfun[level],
-                combine=combine[level],
-                weights_function=weights_fun,
-                weights_params=weights_params,
-            )
-        )
-        in_fold_raw = infold_data
-        out_fold_raw = outfold_data
-
-    return in_fold_smooth, out_fold_smooth, in_fold_raw, out_fold_raw
+    return (
+        group_features(infold_data),
+        group_features(outfold_data),
+        infold_data,
+        outfold_data,
+    )
 
 
 def pca_decoder(
@@ -811,10 +882,11 @@ def pca_decoder(
     nfolds=2,
     dims=10,
     cfun=isfc,
-    weights_fun=laplace_weights,
+    weights_function=None,
     weights_params=laplace_params,
     combine=mean_combine,
     rfun=None,
+    weights_fun=None,
 ):
     """
     Decode timepoints from the first ``d`` principal components, for each ``d``.
@@ -839,15 +911,22 @@ def pca_decoder(
     dims : int
         Largest number of components.  Default: 10.
     cfun : function
-        Accepted for compatibility and not used.  Default: ``isfc``.
-    weights_fun, weights_params : function, dict
-        The smoothing kernel and its parameters; row ``t`` of the kernel
-        (``weights[t, :]``) is the kernel used at timepoint ``t``.  Default:
-        ``laplace_weights`` with ``laplace_params``.
+        Ignored (accepted so that timecorr 0.2.0 calls keep working).
+        Default: ``isfc``.
+    weights_function : function, optional
+        The smoothing kernel; row ``t`` of the kernel (``weights[t, :]``) is
+        the kernel used at timepoint ``t``.  Default (None):
+        ``laplace_weights``.
+    weights_params : dict
+        Parameters of the smoothing kernel.  Default: ``laplace_params``.
     combine, rfun
-        Accepted for compatibility and not used: the features are always the
-        smoothed components, combined with ``mean_combine``, without further
-        reduction.  Defaults: ``mean_combine`` and None.
+        Ignored (accepted so that timecorr 0.2.0 calls keep working): the
+        features are always the smoothed components, combined with
+        ``mean_combine``, without further reduction.  Defaults:
+        ``mean_combine`` and None.
+    weights_fun : function, optional
+        Alias of ``weights_function`` (its name in timecorr 0.2.0).  Passing
+        both raises ``TypeError``.  Default: None.
 
     Returns
     -------
@@ -858,10 +937,11 @@ def pca_decoder(
 
     Raises
     ------
-    AssertionError
-        If the subjects differ in their number of timepoints or features.
     ValueError
-        If ``nfolds`` is below 1 or above the number of subjects.
+        If the subjects differ in their number of timepoints or features, or
+        ``nfolds`` is below 1 or above the number of subjects.
+    TypeError
+        If both ``weights_function`` and ``weights_fun`` are given.
 
     Examples
     --------
@@ -879,13 +959,11 @@ def pca_decoder(
     >>> results["dims"].tolist(), results["folds"].tolist()
     ([1, 2, 3, 1, 2, 3], [0, 0, 0, 1, 1, 1])
     """
-
-    assert (
-        len(np.unique(list(map(lambda x: x.shape[0], data)))) == 1
-    ), "all data matrices must have the same number of timepoints"
-    assert (
-        len(np.unique(list(map(lambda x: x.shape[1], data)))) == 1
-    ), "all data matrices must have the same number of features"
+    weights_function = _decoder_kernel(weights_function, weights_fun)
+    if len({np.shape(x)[0] for x in data}) != 1:
+        raise ValueError("all data matrices must have the same number of timepoints")
+    if len({np.shape(x)[1] for x in data}) != 1:
+        raise ValueError("all data matrices must have the same number of features")
 
     # never request more components than the data has features or samples; the
     # loop below slices the first d columns, so d > n_components is harmless
@@ -912,7 +990,7 @@ def pca_decoder(
                 cfun=isfc,
                 rfun=[None],
                 combine=[mean_combine],
-                weights_fun=weights_fun,
+                weights_function=weights_function,
                 weights_params=weights_params,
             )
 
@@ -942,39 +1020,35 @@ def reduce_wrapper(data, dims=10, level=0, rfun=None):
     """
     Jointly reduce two groups' smoothed and raw features (internal helper).
 
-    ``data`` is the 4-tuple ``(in_smooth, out_smooth, in_raw, out_raw)``
-    returned by ``folding_levels``.  At ``level`` 0 it is returned unchanged;
-    otherwise the two smoothed arrays are reduced together, and the raw
-    per-subject arrays together, with ``rfun[level]`` (see
-    ``helpers.reduce``).  ``dims`` is not used.  Returns the 4-tuple
-    ``(in_smooth, out_smooth, in_raw, out_raw)``.
-
-    For ``level >= 1`` the raw entries are pooled as
-    ``list(in_raw) + list(out_raw)``, reduced jointly, and the first two
-    elements of the result are returned: with per-subject lists (what
-    ``folding_levels`` returns) these are the first two subjects of
-    ``in_raw`` (or of the pooled list), not the two groups.  When it was
-    written, the raw entries were one array per group, so the first two
-    elements were the two groups.  Nothing in the package calls it.
+    ``data`` is the 4-tuple ``(in_smooth, out_smooth, in_raw, out_raw)``, as
+    returned by ``folding_levels``.  At ``level`` 0 it is returned unchanged.
+    Otherwise the two smoothed arrays are reduced together into one space,
+    and the raw entries of both groups together into another, with
+    ``rfun[level]`` (see ``helpers.reduce``); each entry is returned in the
+    structure it was given: an array stays an array, and a list of
+    per-subject arrays (what ``folding_levels`` returns) stays a list of the
+    same length.  ``dims`` is not used.  Returns the 4-tuple
+    ``(in_smooth, out_smooth, in_raw, out_raw)``.  Nothing in the package
+    calls it.
     """
-
-    if not level == 0:
-
-        all_smooth = list(data[0][np.newaxis, :, :]) + list(data[1][np.newaxis, :, :])
-        all_raw = list(data[2]) + list(data[3])
-        all_smooth_reduced = reduce(all_smooth, rfun=rfun[level])
-        all_raw_reduced = reduce(all_raw, rfun=rfun[level])
-
-        return (
-            all_smooth_reduced[0],
-            all_smooth_reduced[1],
-            all_raw_reduced[0],
-            all_raw_reduced[1],
-        )
-
-    else:
-
+    if level == 0:
         return data[0], data[1], data[2], data[3]
+
+    def pieces(x):
+        return list(x) if isinstance(x, (list, tuple)) else [x]
+
+    def restore(original, reduced):
+        return list(reduced) if isinstance(original, (list, tuple)) else reduced[0]
+
+    smooth_in, smooth_out = reduce([data[0], data[1]], rfun=rfun[level])
+    raw_in, raw_out = pieces(data[2]), pieces(data[3])
+    raw = reduce(raw_in + raw_out, rfun=rfun[level])
+    return (
+        smooth_in,
+        smooth_out,
+        restore(data[2], raw[: len(raw_in)]),
+        restore(data[3], raw[len(raw_in) :]),
+    )
 
 
 _MAX_ABS_R = 1 - 1e-7  # keeps Fisher z finite for |r| = 1
@@ -1114,7 +1188,10 @@ def weight_corrs(corrs, mu):
     Returns
     -------
     numpy.ndarray
-        ``z2r(sum_i mu_i * r2z(corrs_i))``, shape (T, T).
+        ``z2r(sum_i mu_i * r2z(corrs_i))``, shape (T, T).  As in
+        ``optimize_weights``, correlations are first clipped to
+        +-(1 - 1e-7) so that every Fisher z is finite (an exact 1 with weight
+        0 contributes 0, not NaN).
 
     Raises
     ------
@@ -1133,7 +1210,8 @@ def weight_corrs(corrs, mu):
     weighted_corrs = 0
 
     for i in np.arange(np.shape(corrs)[0]):
-        weighted_corrs += mu[i] * r2z(corrs[i])
+        clipped = np.clip(np.asarray(corrs[i], dtype=float), -_MAX_ABS_R, _MAX_ABS_R)
+        weighted_corrs += mu[i] * r2z(clipped)
 
     return z2r(weighted_corrs)
 
@@ -1184,7 +1262,6 @@ def decoder(corrs):
     return next_results_pd
 
 
-
 def get_xval_assignments(ndata, nfolds):
     """
     Random assignment of ``ndata`` items to ``nfolds`` groups of near-equal size.
@@ -1208,7 +1285,8 @@ def get_xval_assignments(ndata, nfolds):
     Raises
     ------
     ValueError
-        If ``nfolds`` is less than 1 or more than ``ndata``.
+        If ``nfolds`` is not an integer, or is less than 1 or more than
+        ``ndata``.
 
     Examples
     --------
@@ -1221,6 +1299,8 @@ def get_xval_assignments(ndata, nfolds):
     [2, 2, 1, 1, 1]
     """
     ndata = int(ndata)
+    if not isinstance(nfolds, numbers.Integral) or isinstance(nfolds, bool):
+        raise ValueError(f"nfolds must be an integer; got {nfolds!r}.")
     nfolds = int(nfolds)
     if not 1 <= nfolds <= ndata:
         raise ValueError(

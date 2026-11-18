@@ -256,7 +256,10 @@ class TestFullCoverageHelpers:
         joint = reduce([smooth_in, smooth_out], rfun="PCA")
         assert len(result) == 4
         assert np.allclose(result[0], joint[0]) and np.allclose(result[1], joint[1])
-        assert result[2].shape == (self.T, self.K)
+        # Ruling R-R: each group's raw entries come back in the structure they
+        # were given (here a list of two (T, K(K+1)/2) arrays), reduced to K
+        assert isinstance(result[2], list) and len(result[2]) == 2
+        assert all(r.shape == (self.T, self.K) for r in result[2])
 
     def test_optimization_functions(self):
         """Test optimization-related functions."""
@@ -281,8 +284,12 @@ class TestFullCoverageHelpers:
 
         weighted = weight_corrs(corrs, mu)
         assert isinstance(weighted, np.ndarray) and weighted.shape == (10, 15)
-        # Fisher-z weighted mean of the inputs
-        assert np.allclose(weighted, z2r(sum(m * r2z(c) for m, c in zip(mu, corrs))))
+        # Fisher-z weighted mean of the inputs, clipped to +-(1 - 1e-7) first as
+        # in optimize_weights (Ruling R-C)
+        clip = 1 - 1e-7
+        assert np.allclose(
+            weighted, z2r(sum(m * r2z(np.clip(c, -clip, clip)) for m, c in zip(mu, corrs)))
+        )
 
         corr_matrix = np.eye(10)
         decoder_result = decoder(corr_matrix)

@@ -529,3 +529,194 @@ def test_empty_optimize_levels_raises_clear_error(which):
     with pytest.raises(ValueError, match="optimize_levels must name at least one level"):
         _run_weighted(which, data, nfolds=2, level=1, optimize_levels=[],
                       weights_params={"scale": 5})
+
+
+# ------------------------------------- all-issues wave (R-C, R-D, R-F, R-G,
+# ------------------------------------- R-J, R-L, R-P, R-R)
+
+_DECODERS = {
+    "timepoint_decoder": lambda data, **kw: tc.timepoint_decoder(data, **kw),
+    "weighted_timepoint_decoder": lambda data, **kw: weighted_timepoint_decoder(
+        data, **kw
+    ),
+    "weighted_timepoint_decoder_ec": lambda data, **kw: weighted_timepoint_decoder_ec(
+        [data], **kw
+    ),
+}
+
+
+def test_weight_corrs_clips_exact_correlations():
+    # R-C (M5): an exact 1 with weight 0 gave 0 * inf = NaN (then 0) and a
+    # RuntimeWarning; it is clipped like optimize_weights
+    corrs = np.array([np.eye(3), 0.5 * np.eye(3)])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        mixed = weight_corrs(corrs, [0.0, 1.0])
+    assert np.all(np.isfinite(mixed))
+    np.testing.assert_allclose(np.diag(mixed), 0.5, rtol=0, atol=1e-12)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        full = weight_corrs(corrs, [1.0, 0.0])
+    assert np.all(np.diag(full) > 0.9999) and np.all(np.diag(full) < 1)
+
+
+@pytest.mark.parametrize("name", sorted(_DECODERS))
+def test_decoders_refuse_unreduced_steps_that_exceed_max_memory_gb(name):
+    # R-D (M6): K=30, T=20, unreduced: order 1 needs ~1e-3 GB, order 2 (465
+    # input features) ~0.04 GB; with max_memory_gb=0.01 the order-2 step is
+    # refused before it allocates, as features does
+    data = shared_ramping_data(S=4, T=20, K=30)
+    np.random.seed(0)
+    if name == "weighted_timepoint_decoder_ec":
+        # its order-1 input features are given: 465 columns, as unreduced D_1
+        rng = np.random.RandomState(1)
+        d1 = [rng.randn(20, 465) for _ in data]
+        with pytest.raises(MemoryError, match="order 2"):
+            weighted_timepoint_decoder_ec([data, d1], nfolds=2, level=2, rfun=None,
+                                          max_memory_gb=0.01)
+        return
+    with pytest.raises(MemoryError, match="order 2"):
+        _DECODERS[name](data, nfolds=2, level=2, rfun=None, max_memory_gb=0.01)
+
+
+def test_folding_levels_refuses_steps_that_exceed_max_memory_gb():
+    data = shared_ramping_data(S=4, T=20, K=30)
+    with pytest.raises(MemoryError, match="order 1"):
+        folding_levels(data[:2], data[2:], level=1, max_memory_gb=1e-5)
+
+
+def test_decoders_default_memory_limit_refuses_huge_unreduced_steps():
+    # order 3 of K=30 unreduced: 108,345 input features, about 4.7e3 GB for
+    # the (d, d, T) array alone: refused by the default max_memory_gb=4
+    data = shared_ramping_data(S=4, T=20, K=30)
+    np.random.seed(0)
+    with pytest.raises(MemoryError, match="order 3"):
+        tc.timepoint_decoder(data, nfolds=2, level=3, rfun=None)
+
+
+@pytest.mark.parametrize("name", sorted(_DECODERS))
+def test_decoders_accept_weights_function_and_the_weights_fun_alias(name):
+    # R-F (M9): weights_function is the documented name; weights_fun is an alias
+    data = shared_ramping_data(S=4, T=20, K=4)
+    kw = dict(nfolds=2, level=1, weights_params={"var": 10})
+    np.random.seed(3)
+    a = _DECODERS[name](data, weights_function=gaussian_weights, **kw)
+    np.random.seed(3)
+    b = _DECODERS[name](data, weights_fun=gaussian_weights, **kw)
+    pd.testing.assert_frame_equal(a.reset_index(drop=True), b.reset_index(drop=True))
+    with pytest.raises(TypeError, match="weights_fun, not both"):
+        _DECODERS[name](
+            data, weights_function=gaussian_weights, weights_fun=gaussian_weights, **kw
+        )
+
+
+def test_decoder_positional_order_is_unchanged():
+    # 0.2.0 positional order (the kernel is the sixth argument of
+    # timepoint_decoder, the fifth of the folding functions)
+    params = list(inspect.signature(tc.timepoint_decoder).parameters)
+    assert params[:9] == ["data", "mu", "nfolds", "level", "cfun",
+                          "weights_function", "weights_params", "combine", "rfun"]
+    for fun in (folding_levels, tc.helpers.folding_levels_ec):
+        params = list(inspect.signature(fun).parameters)
+        assert params[:8] == ["infold_data", "outfold_data", "level", "cfun",
+                              "weights_function", "weights_params", "combine", "rfun"]
+    params = list(inspect.signature(tc.helpers.pca_decoder).parameters)
+    assert params[:8] == ["data", "nfolds", "dims", "cfun", "weights_function",
+                          "weights_params", "combine", "rfun"]
+
+
+@pytest.mark.parametrize("fun", [folding_levels, tc.helpers.folding_levels_ec])
+def test_folding_functions_accept_weights_function(fun):
+    data = _shared_signal_data()
+    kw = {"weights_params": {"scale": 5}}
+    a = fun(data[:3], data[3:], 1, tc.isfc, laplace_weights, **kw)
+    b = fun(data[:3], data[3:], level=1, cfun=tc.isfc, weights_fun=laplace_weights, **kw)
+    np.testing.assert_array_equal(a[0], b[0])
+    with pytest.raises(TypeError, match="weights_fun, not both"):
+        fun(data[:3], data[3:], level=1, cfun=tc.isfc, weights_function=laplace_weights,
+            weights_fun=laplace_weights, **kw)
+
+
+def test_pca_decoder_accepts_weights_function_and_validates_with_value_error():
+    data = [np.random.RandomState(s).randn(20, 5) for s in range(4)]
+    np.random.seed(0)
+    a = tc.helpers.pca_decoder(data, nfolds=2, dims=2, weights_function=laplace_weights,
+                               weights_params={"scale": 2})
+    np.random.seed(0)
+    b = tc.helpers.pca_decoder(data, nfolds=2, dims=2, weights_fun=laplace_weights,
+                               weights_params={"scale": 2})
+    pd.testing.assert_frame_equal(a.reset_index(drop=True), b.reset_index(drop=True))
+    # R-G (M10): shape mismatches are a ValueError, not an AssertionError
+    with pytest.raises(ValueError, match="timepoints"):
+        tc.helpers.pca_decoder([data[0], data[1][:10]], nfolds=2, dims=2)
+    with pytest.raises(ValueError, match="features"):
+        tc.helpers.pca_decoder([data[0], data[1][:, :3]], nfolds=2, dims=2)
+
+
+def test_folding_levels_ec_without_a_weights_function_raises_value_error():
+    # R-J (M13): it raised "TypeError: 'NoneType' object is not callable"
+    data = _shared_signal_data()
+    with pytest.raises(ValueError, match="weights_function"):
+        tc.helpers.folding_levels_ec(data[:3], data[3:], level=1, cfun=tc.isfc)
+
+
+def test_timepoint_decoder_one_fold_warning_says_what_happens():
+    # R-L (M18): the split into two groups is not circular; say so
+    data = shared_ramping_data(S=4, T=20, K=4)
+    np.random.seed(0)
+    with pytest.warns(UserWarning, match="would be circular; using nfolds=2 instead"):
+        tc.timepoint_decoder(data, nfolds=1, level=0)
+
+
+@pytest.mark.parametrize("nfolds", [2.5, "2", True])
+def test_get_xval_assignments_rejects_non_integer_fold_counts(nfolds):
+    # R-P: 2.5 was truncated to 2
+    with pytest.raises(ValueError, match="nfolds"):
+        get_xval_assignments(5, nfolds)
+
+
+def test_get_xval_assignments_accepts_numpy_integers():
+    np.random.seed(0)
+    assert np.bincount(get_xval_assignments(5, np.int64(2)).astype(int)).tolist() == [3, 2]
+
+
+def test_reduce_wrapper_reduces_both_groups_jointly_and_keeps_their_structure():
+    # R-R: the raw entries of both groups (one array per subject) are reduced
+    # into one space and returned as the groups they came in
+    from timecorr.decoding import reduce_wrapper
+
+    rng = np.random.RandomState(7)
+    raw_in = [rng.randn(20, 10) for _ in range(2)]
+    raw_out = [rng.randn(20, 10) for _ in range(3)]
+    smooth_in, smooth_out = rng.randn(20, 10), rng.randn(20, 10)
+    out = reduce_wrapper((smooth_in, smooth_out, raw_in, raw_out), level=1,
+                         rfun=[None, "PCA"])
+    joint = tc.reduce(raw_in + raw_out, rfun="PCA")
+    assert isinstance(out[2], list) and len(out[2]) == 2
+    assert isinstance(out[3], list) and len(out[3]) == 3
+    for got, ref in zip(out[2] + out[3], joint):
+        np.testing.assert_allclose(got, ref)
+    joint_smooth = tc.reduce([smooth_in, smooth_out], rfun="PCA")
+    np.testing.assert_allclose(out[0], joint_smooth[0])
+    np.testing.assert_allclose(out[1], joint_smooth[1])
+    # one array per group (the layout reduce_wrapper was written for)
+    grouped = reduce_wrapper((smooth_in, smooth_out, raw_in[0], raw_out[0]), level=1,
+                             rfun=[None, "PCA"])
+    pair = tc.reduce([raw_in[0], raw_out[0]], rfun="PCA")
+    np.testing.assert_allclose(grouped[2], pair[0])
+    np.testing.assert_allclose(grouped[3], pair[1])
+
+
+def test_smooth_accepts_weights_function_and_the_kernel_aliases():
+    # R-F (M9): smooth's kernel arguments are named as everywhere else
+    x = np.random.RandomState(8).randn(30, 2)
+    a = tc.smooth(x, 5, gaussian_weights, {"var": 4})
+    b = tc.smooth(x, windowsize=5, weights_function=gaussian_weights,
+                  weights_params={"var": 4})
+    c = tc.smooth(x, windowsize=5, kernel_fun=gaussian_weights, kernel_params={"var": 4})
+    np.testing.assert_array_equal(a, b)
+    np.testing.assert_array_equal(a, c)
+    with pytest.raises(TypeError, match="kernel_fun, not both"):
+        tc.smooth(x, 5, weights_function=gaussian_weights, kernel_fun=gaussian_weights)
+    with pytest.raises(TypeError, match="kernel_params, not both"):
+        tc.smooth(x, 5, weights_params={"var": 4}, kernel_params={"var": 4})

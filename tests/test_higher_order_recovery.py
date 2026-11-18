@@ -110,7 +110,6 @@ def _assert_lower_orders_at_control(X, n, seed):
     for k in range(1, n):
         observed = _mean_abs_offdiag(X[k])
         control = _noise_control(_width(X[k]), seed=1000 * (seed + 1) + k)
-        print(f"  order {k}: mean |r| {observed:.4f}, control {control:.4f}")
         assert abs(observed - control) <= CONTROL_TOLERANCE, (k, observed, control)
 
 
@@ -124,8 +123,7 @@ def test_unreduced_order1_recovery(seed):
     )
     X = tc.features(data, order=1, rfun=None, **KERNEL)
     r = _recovery(X[1], np.arange(4), corrs)
-    print(f"unreduced order 1, p=4, seed {seed}: recovery r {r:.4f}")
-    assert r >= RECOVERY
+    assert r >= RECOVERY, (seed, r)
 
 
 @pytest.mark.parametrize("seed", SEEDS)
@@ -134,8 +132,7 @@ def test_unreduced_order2_recovery(seed):
     X = tc.features(data, order=2, rfun=None, **KERNEL)
     cols = tc.carrier_columns(truth["blocks"], 1, 8).ravel()
     r = _recovery(X[2], cols, truth["corrs"])
-    print(f"unreduced order 2, p=4, seed {seed}: recovery r {r:.4f}")
-    assert r >= RECOVERY
+    assert r >= RECOVERY, (seed, r)
     _assert_lower_orders_at_control(X, 2, seed)
 
 
@@ -156,13 +153,11 @@ def test_unreduced_order3_recovery():
     finally:
         tracemalloc.stop()
     # the run's live memory stays close to the guard's estimate for its largest step
-    print(f"unreduced order 3: traced peak {peak_gb:.2f} GB, estimate {step_gb:.2f} GB")
-    assert peak_gb <= 1.1 * step_gb
+    assert peak_gb <= 1.1 * step_gb, (peak_gb, step_gb)
 
     cols = tc.carrier_columns(truth["blocks"], 2, 8).ravel()
     r = _recovery(X[3], cols, truth["corrs"])
-    print(f"unreduced order 3, p=2, seed {SEED}: recovery r {r:.4f}")
-    assert r >= RECOVERY
+    assert r >= RECOVERY, (SEED, r)
     _assert_lower_orders_at_control(X, 3, SEED)
 
 
@@ -183,8 +178,7 @@ def test_carrier_reducer_recovery(order, seed):
     )
     assert X[order].shape == (T, p * (p + 1) // 2)
     r = _recovery(X[order], np.arange(p), truth["corrs"])
-    print(f"carrier reducer, order {order}, p={p}, seed {seed}: recovery r {r:.4f}")
-    assert r >= RECOVERY
+    assert r >= RECOVERY, (order, p, seed, r)
     _assert_lower_orders_at_control(X, order, seed)
 
 
@@ -221,5 +215,4 @@ def test_simulate_multi_order_recovery():
         # orders the delta features entering order n are this group's p carriers
         cols = truth["blocks"][:, 0] if n == 1 else np.arange(p)
         r = _recovery(X[n], cols, truth["corrs"])
-        print(f"multi-order [1, 2, 3], order-{n} group: recovery r {r:.4f}")
-        assert r >= MULTI_ORDER_RECOVERY
+        assert r >= MULTI_ORDER_RECOVERY, (n, r)

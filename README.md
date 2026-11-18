@@ -2,7 +2,7 @@
 
 The timecorr toolbox computes and explores the correlational structure of timeseries data. It estimates how correlations between features change from moment to moment (**dynamic correlations**), and it computes **higher-order** dynamic correlations: correlations between the moment-by-moment co-fluctuations of lower-order features.
 
-The toolbox accompanies Owen, Chang & Manning (2021), *Nature Communications* 12, 5728 ([doi:10.1038/s41467-021-25876-x](https://doi.org/10.1038/s41467-021-25876-x)). Version 0.3.0 changed the correlation estimator, so its numbers differ from version 0.2.0 and from Eq. 4 of the paper; see [CHANGELOG.md](CHANGELOG.md). Tutorials, examples and the API reference are on [Read the Docs](https://timecorr.readthedocs.io/en/latest/).
+The toolbox accompanies Owen, Chang & Manning (2021), *Nature Communications* 12, 5728 ([doi:10.1038/s41467-021-25876-x](https://doi.org/10.1038/s41467-021-25876-x)). Version 0.3.0 changed the correlation estimator, so its numbers differ from version 0.2.0 and from Eq. 4 of the paper; see [CHANGELOG.md](https://github.com/ContextLab/timecorr/blob/master/CHANGELOG.md). Tutorials, examples and the API reference are on [Read the Docs](https://timecorr.readthedocs.io/en/latest/).
 
 ## Features
 
@@ -83,7 +83,7 @@ r = np.corrcoef(X[2][:, off_diagonal].ravel(), truth["corrs"][:, off_diagonal].r
 print(round(r, 2))  # 0.9
 ```
 
-`tc.carrier_reducer` keeps, at each order, only the features that carry the simulated structure, so the estimate at order 2 is the 4 x 4 correlation matrix among the block products. See the [higher-order tutorial](docs/tutorial/higher_order_tutorial.ipynb) for recovery at each order and for the limits of variance-based reduction.
+`tc.carrier_reducer` keeps, at each order, only the features that carry the simulated structure, so the estimate at order 2 is the 4 x 4 correlation matrix among the block products. See the [higher-order tutorial](https://github.com/ContextLab/timecorr/blob/master/docs/tutorial/higher_order_tutorial.ipynb) for recovery at each order and for the limits of variance-based reduction.
 
 # Usage
 

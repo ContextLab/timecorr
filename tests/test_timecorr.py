@@ -31,12 +31,15 @@ laplace = {"name": "Laplace", "weights": tc.laplace_weights, "params": {"scale":
 
 
 def test_reduce_shape():
-    dyna_corrs_reduced_1 = timecorr(
-        sim_1,
-        rfun="PCA",
-        weights_function=laplace["weights"],
-        weights_params=laplace["params"],
-    )
+    # one subject, T=30 samples, K=50 columns requested: 20 are zero padding,
+    # which is reported (Ruling R-U)
+    with pytest.warns(UserWarning, match="padded with 20 zero columns"):
+        dyna_corrs_reduced_1 = timecorr(
+            sim_1,
+            rfun="PCA",
+            weights_function=laplace["weights"],
+            weights_params=laplace["params"],
+        )
 
     dyna_corrs_reduced_3 = timecorr(
         sim_3,

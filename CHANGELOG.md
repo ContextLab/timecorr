@@ -70,7 +70,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   model; a one-element list returns a one-element list; the model is never
   asked for more components than the data have; dict `'params'` are passed to
   hypertools as `'kwargs'`, merged with any `'kwargs'` the dict also gives (a
-  key given in both with different values raises `ValueError`).
+  key given in both with different values raises `ValueError`). `ndims` must
+  be a positive integer, and giving it with a graph measure or a callable
+  (which set their own width) raises `ValueError`. When the data supply fewer
+  components than requested, the zero columns added to reach `ndims` are
+  reported in a `UserWarning`. For UMAP, `n_jobs=1` and (where the installed
+  UMAP has it) `compatibility_layout=True` are passed unless given, which
+  keeps UMAP's current layout and silences its `FutureWarning`.
 - Decoders moved to the new module `timecorr.decoding` (same public names,
   still importable from `timecorr.helpers`; `timepoint_decoder` and
   `weighted_timepoint_decoder` also from `timecorr`). They compute
@@ -104,7 +110,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for the two paths (`rfun`, `delta_rfun`); `rfun=None` runs without
   reduction, guarded by an estimate of each step's peak memory for all
   subjects together (`max_memory_gb`, default 4 GB) that raises `MemoryError`
-  before allocating. The estimate counts the `(d, d, T)` correlation array,
+  before allocating. `rfun` and `delta_rfun` are validated before anything is
+  computed (also a `delta_rfun` that a run would not call), and `ndims` is
+  passed only to model-based reducers. The estimate counts the `(d, d, T)` correlation array,
   every subject's results, the `T x T` kernels and the block temporaries; it
   does not count reducers or `combine` functions other than `null_combine`.
 - `timecorr.higher_order.two_path_step` (one order of the pipeline) and

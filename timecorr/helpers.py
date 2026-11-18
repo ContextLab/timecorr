@@ -1,7 +1,7 @@
 # coding: utf-8
-from __future__ import division
-
+import inspect
 import math
+import numbers
 import os
 import sys
 import warnings
@@ -11,6 +11,7 @@ import hypertools as hyp
 import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
+from scipy import linalg
 from scipy.linalg import toeplitz
 from scipy.special import gamma
 from scipy.stats import ttest_1samp as ttest
@@ -1513,6 +1514,108 @@ def null_combine(corrs):
     return corrs
 
 
+# Graph measures accepted (as strings) by ``reduce``.
+_GRAPH_MEASURES = ("eigenvector_centrality", "pagerank_centrality", "strength")
+
+# Model names documented for ``reduce``; hypertools' own registry, when it can be
+# read, adds the others it supports.
+_DOCUMENTED_MODELS = (
+    "PCA", "IncrementalPCA", "SparsePCA", "MiniBatchSparsePCA", "KernelPCA",
+    "FastICA", "FactorAnalysis", "TruncatedSVD", "DictionaryLearning",
+    "MiniBatchDictionaryLearning", "TSNE", "Isomap", "SpectralEmbedding",
+    "LocallyLinearEmbedding", "MDS", "UMAP",
+)
+
+
+def _model_names():
+    """Model names ``reduce`` accepts: the documented ones and hypertools' registry."""
+    names = set(_DOCUMENTED_MODELS)
+    try:
+        from hypertools.reduce.common import AUTOENCODER_NAMES, REDUCERS
+    except ImportError:  # pragma: no cover - other hypertools layouts
+        return names
+    return names | set(REDUCERS) | set(AUTOENCODER_NAMES)
+
+
+def _check_rfun(rfun, name="rfun"):
+    """
+    Raise for a reducer ``reduce`` cannot use: None, a callable, a graph measure
+    or model name (string), or a dict whose ``'model'`` is a model name or a
+    model class or instance.
+    """
+    if rfun is None or callable(rfun):
+        return
+    if isinstance(rfun, str):
+        if rfun in _GRAPH_MEASURES or rfun in _model_names():
+            return
+        raise ValueError(
+            f"{name}={rfun!r} is neither a graph measure {_GRAPH_MEASURES} nor a "
+            f"model name known to hypertools ({', '.join(sorted(_model_names()))})."
+        )
+    if isinstance(rfun, dict):
+        if "model" not in rfun:
+            raise ValueError(
+                f"A dict {name} needs a 'model' key (for example "
+                "{'model': 'PCA', 'kwargs': {...}}); got keys "
+                f"{sorted(rfun)}."
+            )
+        if isinstance(rfun["model"], str):
+            _check_rfun(rfun["model"], name=f"{name}['model']")
+            if rfun["model"] in _GRAPH_MEASURES:
+                raise ValueError(
+                    f"{name}['model'] must be a model; graph measures are given "
+                    "as plain strings."
+                )
+        return
+    raise TypeError(
+        f"{name} must be None, a string, a dict or a callable; got "
+        f"{type(rfun).__name__}."
+    )
+
+
+def _is_model(rfun):
+    """True for a model-based reducer (a model name or dict), whose width is ``ndims``."""
+    if isinstance(rfun, dict):
+        return True
+    return isinstance(rfun, str) and rfun not in _GRAPH_MEASURES
+
+
+def _check_ndims(ndims):
+    if ndims is None:
+        return None
+    if (
+        not isinstance(ndims, numbers.Integral)
+        or isinstance(ndims, bool)
+        or ndims < 1
+    ):
+        raise ValueError(f"ndims must be a positive integer or None; got {ndims!r}.")
+    return int(ndims)
+
+
+def _umap_defaults(rfun):
+    """
+    For UMAP, the model arguments timecorr sets unless the caller gives them:
+    ``compatibility_layout=True`` (keeps UMAP's current layout and silences its
+    FutureWarning, where the installed UMAP has the option) and ``n_jobs=1``
+    (what UMAP uses anyway with a ``random_state``; silences its warning).
+    """
+    model = rfun["model"] if isinstance(rfun, dict) else rfun
+    if model != "UMAP":
+        return rfun
+    with warnings.catch_warnings():
+        # umap-learn warns at import about its optional tensorflow extra
+        # (ParametricUMAP); hypertools filters the same message
+        warnings.filterwarnings("ignore", message="Tensorflow not installed")
+        from umap import UMAP
+
+    defaults = {"n_jobs": 1}
+    if "compatibility_layout" in inspect.signature(UMAP.__init__).parameters:
+        defaults["compatibility_layout"] = True
+    if isinstance(rfun, str):
+        return {"model": "UMAP", "kwargs": defaults}
+    return {**rfun, "kwargs": {**defaults, **(rfun.get("kwargs") or {})}}
+
+
 def reduce(corrs, rfun=None, ndims=None):
     """
     Reduce vectorized correlation matrices back to a (timepoints by features) matrix.
@@ -1534,7 +1637,10 @@ def reduce(corrs, rfun=None, ndims=None):
           and ``'kwargs'`` are both passed to the model; a key given in both
           with different values raises ``ValueError``).  When
           ``corrs`` is a list, one model is fit jointly to all subjects.
-          ``random_state=0`` is passed to the model.
+          ``random_state=0`` is passed to the model.  For UMAP, timecorr also
+          passes ``n_jobs=1`` (what UMAP uses with a ``random_state``) and,
+          where the installed UMAP has it, ``compatibility_layout=True`` (its
+          current layout pipeline), unless the dict's ``'kwargs'`` give them.
         - One of the graph measures ``'eigenvector_centrality'``,
           ``'pagerank_centrality'``, or ``'strength'`` (strings only), computed
           per node for each timepoint.  A delta-kernel co-fluctuation matrix
@@ -1547,12 +1653,14 @@ def reduce(corrs, rfun=None, ndims=None):
 
         Default: None (no reduction).
     ndims : int, optional
-        Number of output columns for model-based reduction.  Default: None, which
-        returns K columns for inputs with K(K+1)/2 features.  The model is never
-        asked for more components than the data can supply (the number of
-        features and of samples); any shortfall is filled with zero columns so
-        the output has exactly the requested width.  Not used by graph measures
-        (which return K columns) or callables.
+        Number of output columns for model-based reduction (a positive
+        integer).  Default: None, which returns K columns for inputs with
+        K(K+1)/2 features.  The model is never asked for more components than
+        the data can supply (the number of features and of samples); any
+        shortfall is filled with zero columns so the output has exactly the
+        requested width, and a ``UserWarning`` says how many columns were
+        padded.  Graph measures (which return K columns) and callables define
+        their own width: giving ``ndims`` with them raises ``ValueError``.
 
     Returns
     -------
@@ -1565,7 +1673,14 @@ def reduce(corrs, rfun=None, ndims=None):
     ------
     ValueError
         If a dict ``rfun`` gives a key in both ``'params'`` and ``'kwargs'`` with
-        different values.
+        different values, if ``ndims`` is not a positive integer, or if
+        ``ndims`` is given with a graph measure or a callable.
+
+    Warns
+    -----
+    UserWarning
+        When the output is padded with zero columns (``ndims`` larger than the
+        number of features or samples).
 
     Examples
     --------
@@ -1593,13 +1708,11 @@ def reduce(corrs, rfun=None, ndims=None):
         numpy.ndarray
             Eigenvector centrality
         """
-        from scipy.linalg import eigh
-
         # Ensure matrix is symmetric
         W = (W + W.T) / 2
 
         # Compute eigenvalues and eigenvectors
-        eigenvalues, eigenvectors = eigh(W)
+        eigenvalues, eigenvectors = linalg.eigh(W)
 
         # Get the eigenvector corresponding to the largest eigenvalue
         max_idx = np.argmax(eigenvalues)
@@ -1626,8 +1739,6 @@ def reduce(corrs, rfun=None, ndims=None):
         numpy.ndarray
             PageRank centrality values
         """
-        from scipy import linalg
-
         N = len(W)
         if falff is None:
             norm_falff = np.ones((N,)) / N
@@ -1667,8 +1778,16 @@ def reduce(corrs, rfun=None, ndims=None):
         "strength": strengths_und,
     }
 
+    ndims = _check_ndims(ndims)
     if rfun is None:
         return corrs
+
+    if ndims is not None and not _is_model(rfun):
+        raise ValueError(
+            f"ndims={ndims} applies to model-based reduction only; the graph "
+            "measure or callable rfun defines its own output width.  Leave ndims "
+            "as None."
+        )
 
     if callable(rfun):
         if isinstance(corrs, list):
@@ -1706,6 +1825,7 @@ def reduce(corrs, rfun=None, ndims=None):
             "kwargs": {**kwargs, **params},
         }
 
+    rfun = _umap_defaults(rfun)
     red_corrs = hyp.reduce(corrs, reduce=rfun, ndims=n_fit, random_state=0)
     if isinstance(corrs, list) and not isinstance(red_corrs, list):
         # hypertools returns a bare array for a one-element list
@@ -1714,6 +1834,11 @@ def reduce(corrs, rfun=None, ndims=None):
     if n_fit < ndims:
         # Pad with zeros to match the requested output width
         pad = ndims - n_fit
+        _warn_user(
+            f"reduce: the data supply at most {n_fit} components ({n_features} "
+            f"features, {n_samples} samples) but {ndims} were requested; the "
+            f"output is padded with {pad} zero column{'s' if pad > 1 else ''}."
+        )
         if isinstance(red_corrs, list):
             red_corrs = [
                 np.hstack((arr, np.zeros((arr.shape[0], pad)))) for arr in red_corrs

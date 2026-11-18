@@ -16,6 +16,9 @@ Temporal blur is therefore applied once, at the order being analyzed.
 import numbers
 
 from .helpers import (
+    _check_ndims,
+    _check_rfun,
+    _is_model,
     _wcorr_block_rows,
     autofc,
     eye_weights,
@@ -131,6 +134,11 @@ def _as_list(x):
     return x if isinstance(x, list) else [x]
 
 
+def _reduce(x, rfun, ndims):
+    """``reduce``, passing ``ndims`` only to model-based reducers (it sets their width)."""
+    return reduce(x, rfun=rfun, ndims=ndims if _is_model(rfun) else None)
+
+
 def _analysis_path(
     subjects,
     weights_function=gaussian_weights,
@@ -171,7 +179,7 @@ def _analysis_path(
         )
 
     if groups is None:
-        return reduce(analyze(subjects), rfun=rfun, ndims=ndims)
+        return _reduce(analyze(subjects), rfun, ndims)
 
     combined = [analyze([subjects[j] for j in g]) for g in groups]
     # flatten every group's output into one list so a single reduction model is
@@ -184,7 +192,7 @@ def _analysis_path(
         else:
             pieces.append(c)
             sizes.append(None)
-    reduced = _as_list(reduce(pieces, rfun=rfun, ndims=ndims))
+    reduced = _as_list(_reduce(pieces, rfun, ndims))
     out, start = [], 0
     for n in sizes:
         if n is None:
@@ -211,7 +219,7 @@ def _delta_path(subjects, rfun="PCA", ndims=None):
             rfun=None,
         )
     )
-    return _as_list(reduce(delta, rfun=rfun, ndims=ndims))
+    return _as_list(_reduce(delta, rfun, ndims))
 
 
 def two_path_step(
@@ -249,9 +257,10 @@ def two_path_step(
     delta_rfun : None, str, dict, or callable
         Reducer for the delta path.  Default (None): the same as ``rfun``.
     ndims : int, optional
-        Output width for model-based reduction on both paths (see
-        ``helpers.reduce``).  Default (None): ``K`` columns for ``K(K+1)/2``
-        inputs.
+        Output width of model-based reduction (a model name or dict) on
+        either path (see ``helpers.reduce``); it is not passed to a graph
+        measure or a callable, which set their own width.  Default (None):
+        ``K`` columns for ``K(K+1)/2`` inputs.
     combine : function
         Applied to the analysis path only (see ``timecorr``).  Default:
         ``null_combine``.
@@ -283,8 +292,14 @@ def two_path_step(
     Raises
     ------
     ValueError
-        As in ``timecorr`` (subjects of different shapes, non-numeric columns,
-        an unknown ``include_timepoints``, or an all-zero kernel).
+        If ``rfun`` or ``delta_rfun`` is an unknown model or graph measure
+        name or a dict without a ``'model'``, if ``ndims`` is not a positive
+        integer, and as in ``timecorr`` (subjects of different shapes,
+        non-numeric columns, an unknown ``include_timepoints``, or an all-zero
+        kernel).
+    TypeError
+        If ``rfun`` or ``delta_rfun`` is not None, a string, a dict or a
+        callable.
 
     Examples
     --------
@@ -296,6 +311,9 @@ def two_path_step(
     >>> len(X1), X1[0].shape, len(D1), D1[0].shape
     (3, (40, 4), 3, (40, 4))
     """
+    _check_rfun(rfun, "rfun")
+    _check_rfun(delta_rfun, "delta_rfun")
+    ndims = _check_ndims(ndims)
     if delta_rfun is None:
         delta_rfun = rfun
     single = not isinstance(data, (list, tuple))
@@ -377,8 +395,10 @@ def features(
         delta path eigenvector centrality equals ``|z| / ||z||`` and the graph
         measures carry no network structure.
     ndims : int, optional
-        Output width of model-based reductions on both paths.  Default (None):
-        ``K`` columns for ``K(K+1)/2`` inputs.
+        Output width of model-based reduction (a model name or dict) on
+        either path; it is not passed to a graph measure or a callable, which
+        set their own width.  Default (None): ``K`` columns for ``K(K+1)/2``
+        inputs.
     combine : function
         Applied to the analysis path only (see ``timecorr``).  Default:
         ``null_combine``.
@@ -422,14 +442,20 @@ def features(
     Raises
     ------
     ValueError
-        If ``order`` is not a non-negative integer, and as in ``timecorr``
-        (subjects of different shapes, non-numeric columns, an unknown
-        ``include_timepoints``).
+        If ``order`` is not a non-negative integer; if ``rfun`` or
+        ``delta_rfun`` is an unknown model or graph measure name or a dict
+        without a ``'model'`` (both are checked before anything is computed,
+        even when ``delta_rfun`` would not be called); if ``ndims`` is not a
+        positive integer; and as in ``timecorr`` (subjects of different
+        shapes, non-numeric columns, an unknown ``include_timepoints``).
+    TypeError
+        If ``rfun`` or ``delta_rfun`` is not None, a string, a dict or a
+        callable.
     MemoryError
         Before a correlation step allocates its arrays, if that step's
         estimate exceeds ``max_memory_gb`` (with unreduced delta features,
-        every order is checked before anything is computed).  The message gives the estimate and the largest
-        number of features that would fit.
+        every order is checked before anything is computed).  The message
+        gives the estimate and the largest number of features that would fit.
 
     Examples
     --------
@@ -451,6 +477,10 @@ def features(
     ):
         raise ValueError(f"order must be a non-negative integer; got {order!r}.")
     order = int(order)
+    # every reducer is checked here, including ones a short run never calls
+    _check_rfun(rfun, "rfun")
+    _check_rfun(delta_rfun, "delta_rfun")
+    ndims = _check_ndims(ndims)
 
     single = not isinstance(data, (list, tuple))
     subjects = format_data(data, fill_nan=False)

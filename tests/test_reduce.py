@@ -194,11 +194,17 @@ def test_pca_decoder_with_more_dims_than_features_emits_no_warning():
 
 
 def test_reduce_requests_no_more_dimensions_than_exist():
-    # K=6 features but only 4 timepoints: must not trigger the hypertools warning
+    # K=6 features but only 4 timepoints: must not trigger the hypertools
+    # warning; the only warning is timecorr's own padding notice (Ruling R-U)
     a = seeded_vectorized_corrs(T=4, K=6)
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
         out = reduce(a, rfun="PCA")
+    assert [(r.category, str(r.message)) for r in rec] == [(
+        UserWarning,
+        "reduce: the data supply at most 4 components (21 features, 4 samples) "
+        "but 6 were requested; the output is padded with 2 zero columns.",
+    )]
     assert out.shape == (4, 6)
 
 
@@ -240,7 +246,8 @@ def test_one_element_list_returns_one_element_list(rfun):
 
 def test_one_element_list_padded_output_stays_list():
     V = seeded_vectorized_corrs(T=4, K=5, seed=4)
-    out = reduce([V], rfun="PCA", ndims=6)
+    with pytest.warns(UserWarning, match="2 zero columns"):  # R-U
+        out = reduce([V], rfun="PCA", ndims=6)
     assert isinstance(out, list) and len(out) == 1
     assert out[0].shape == (4, 6)
 
@@ -275,3 +282,47 @@ def test_smooth_integer_input_matches_float_input():
     assert np.issubdtype(out.dtype, np.floating)
     assert np.allclose(out, smooth(x.astype(float), windowsize=3), rtol=0, atol=1e-12)
     assert not np.allclose(out, np.trunc(out))
+
+
+# --- all-issues wave: ndims (R-I), zero-padding warning (R-U), UMAP (R-T)
+
+
+@pytest.mark.parametrize("rfun", ["strength", "eigenvector_centrality", lambda xs: xs])
+def test_ndims_with_a_graph_measure_or_callable_raises(rfun):
+    # graph measures and callables define their own output width
+    a = seeded_vectorized_corrs(T=10, K=4)
+    with pytest.raises(ValueError, match="ndims"):
+        reduce(a, rfun=rfun, ndims=2)
+    reduce(a, rfun=rfun)  # without ndims they run
+
+
+@pytest.mark.parametrize("ndims", [0, -1, 2.5, True, "3"])
+def test_ndims_must_be_a_positive_integer(ndims):
+    a = seeded_vectorized_corrs(T=10, K=4)
+    with pytest.raises(ValueError, match="ndims must be a positive integer"):
+        reduce(a, rfun="PCA", ndims=ndims)
+
+
+def test_ndims_accepts_numpy_integers():
+    a = seeded_vectorized_corrs(T=10, K=4)
+    assert reduce(a, rfun="PCA", ndims=np.int64(3)).shape == (10, 3)
+
+
+def test_zero_padding_warns_with_the_number_of_padded_columns():
+    # 4 samples cannot give 6 components: 4 are fit, 2 zero columns are added
+    a = seeded_vectorized_corrs(T=4, K=5)
+    with pytest.warns(UserWarning, match="2 zero columns") as rec:
+        out = reduce(a, rfun="PCA", ndims=6)
+    assert len([r for r in rec if issubclass(r.category, UserWarning)]) == 1
+    assert out.shape == (4, 6)
+    assert np.all(out[:, 4:] == 0) and np.all(np.any(out[:, :4] != 0, axis=0))
+
+
+def test_umap_runs_without_the_compatibility_layout_future_warning():
+    a = seeded_vectorized_corrs(T=30, K=5)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = reduce(a, rfun="UMAP", ndims=2)
+        again = reduce(a, rfun={"model": "UMAP", "kwargs": {"n_neighbors": 5}}, ndims=2)
+    assert out.shape == (30, 2) and again.shape == (30, 2)
+    assert np.all(np.isfinite(out)) and np.all(np.isfinite(again))

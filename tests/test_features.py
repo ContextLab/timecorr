@@ -489,3 +489,43 @@ def test_kernel_options_reach_the_analysis_path_only(option):
     for k in (1, 2):
         assert_list_equal(D[k], ref_D[k])  # delta path unchanged
         assert all(not np.array_equal(x, r) for x, r in zip(X[k], ref_X[k]))
+
+
+# ------------------------------------- reducer validation and ndims routing
+
+
+@pytest.mark.parametrize(
+    "kwargs, error",
+    [
+        ({"delta_rfun": "bogus"}, ValueError),
+        ({"rfun": "not_a_model"}, ValueError),
+        ({"rfun": 3}, TypeError),
+        ({"delta_rfun": {"params": {"whiten": True}}}, ValueError),
+        ({"delta_rfun": {"model": "nonsense"}}, ValueError),
+    ],
+)
+def test_reducers_are_validated_up_front(kwargs, error):
+    # R-Q: a bad delta_rfun fails even when the last delta step is skipped
+    with pytest.raises(error, match="rfun"):
+        tc.features(make_data(), order=1, **kwargs)
+
+
+@pytest.mark.parametrize(
+    "rfun", [None, "PCA", "strength", {"model": "PCA"}, lambda xs: xs]
+)
+def test_valid_reducers_pass_validation(rfun):
+    X = tc.features(make_data(), order=1, rfun=rfun, weights_params={"var": 10})
+    assert X[1].shape[0] == T
+
+
+def test_ndims_reaches_model_reducers_only():
+    # R-I: with ndims, a callable delta reducer and a graph measure still run;
+    # ndims sets the width of the model-based (PCA) reduction only
+    keep = lambda xs: [x[:, :3] for x in xs]  # noqa: E731
+    X, D = tc.features(make_data(), order=2, rfun="PCA", delta_rfun=keep, ndims=2,
+                       weights_params={"var": 10}, return_delta=True)
+    assert X[1].shape == (T, 2) and X[2].shape == (T, 2)
+    assert D[1].shape == (T, 3) and D[2].shape == (T, 3)
+    X = tc.features(make_data(), order=1, rfun="strength", ndims=2,
+                    weights_params={"var": 10})
+    assert X[1].shape == (T, K)

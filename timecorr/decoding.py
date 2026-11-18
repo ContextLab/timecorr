@@ -307,6 +307,7 @@ def timepoint_decoder(
             raise ValueError("mu must be non-negative and sum to one.")
         report = [top]
 
+    nfolds = _as_fold_count(nfolds)
     if nfolds == 1:
         warnings.warn(
             "When nfolds is set to one, the analysis would be circular; using "
@@ -469,8 +470,20 @@ def weighted_timepoint_decoder(
     )
 
 
+def _as_fold_count(nfolds):
+    """Return ``nfolds`` as an int; integer-valued numbers (2.0) are accepted,
+    anything else (2.5, "2", True) raises ``ValueError``."""
+    if isinstance(nfolds, bool) or not (
+        isinstance(nfolds, numbers.Integral)
+        or (isinstance(nfolds, numbers.Real) and float(nfolds).is_integer())
+    ):
+        raise ValueError(f"nfolds must be an integer; got {nfolds!r}.")
+    return int(nfolds)
+
+
 def _check_folds(nfolds, n_subjects):
     """Return (nfolds, circular); nfolds=1 warns and becomes 2."""
+    nfolds = _as_fold_count(nfolds)
     circular = nfolds == 1
     if circular:
         warnings.warn("When nfolds is set to one, the analysis will be circular.")
@@ -977,6 +990,7 @@ def pca_decoder(
     n_components = min(dims, data[0].shape[1], sum(x.shape[0] for x in data))
     pca_data = np.asarray(hyp.reduce(list(data), ndims=n_components, random_state=0))
 
+    nfolds = _as_fold_count(nfolds)
     group_assignments = get_xval_assignments(len(pca_data), nfolds)
     results_pd = pd.DataFrame()
 
@@ -1292,8 +1306,9 @@ def get_xval_assignments(ndata, nfolds):
     Raises
     ------
     ValueError
-        If ``nfolds`` is not an integer, or is less than 1 or more than
-        ``ndata``.
+        If ``nfolds`` is not an integer (an integer-valued number such as
+        2.0 is accepted as that integer; 2.5 is not), or is less than 1 or
+        more than ``ndata``.
 
     Examples
     --------
@@ -1306,9 +1321,7 @@ def get_xval_assignments(ndata, nfolds):
     [2, 2, 1, 1, 1]
     """
     ndata = int(ndata)
-    if not isinstance(nfolds, numbers.Integral) or isinstance(nfolds, bool):
-        raise ValueError(f"nfolds must be an integer; got {nfolds!r}.")
-    nfolds = int(nfolds)
+    nfolds = _as_fold_count(nfolds)
     if not 1 <= nfolds <= ndata:
         raise ValueError(
             f"nfolds must be between 1 and the number of items ({ndata}); "

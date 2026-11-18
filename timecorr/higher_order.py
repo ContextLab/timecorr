@@ -379,10 +379,15 @@ def two_path_step(
     Warns
     -----
     UserWarning
-        When some rows of the analysis kernel have fewer than 3 non-zero
-        weights (for example the first timepoints of a backward kernel): the
-        correlations there are undefined and set to 0.  Also for a low
-        effective sample size or cancelled variances (see ``wcorr``).
+        From the correlation estimator on the analysis path (see ``wcorr``),
+        one per call, naming each that applies: timepoints whose kernel row
+        has fewer than 3 non-zero kernel weights (for example the first
+        timepoints of a backward kernel; their correlations are undefined and
+        set to 0); other timepoints whose effective sample size
+        ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
+        estimate correlations reliably there); and timepoints with zero
+        kernel-weighted variance in every feature (their correlations are set
+        to 0).  Never for the delta path.
 
     Raises
     ------
@@ -535,7 +540,7 @@ def features(
         step of the last order (``D_order``), which feeds no later order, is
         not computed, so ``delta_rfun`` is not called at that step (and is not
         called at all when ``order`` is 1).  Default: False.
-    max_memory_gb : float
+    max_memory_gb : float or None
         Upper limit, in gigabytes (1e9 bytes), on the estimated peak memory of
         any one correlation step for all subjects together (see
         ``estimate_memory_gb``; the estimate covers the correlation step and
@@ -543,7 +548,7 @@ def features(
         ``combine`` functions other than ``null_combine``).  It is checked on
         every step, because the (d, d, T) correlation array is allocated
         whether or not the result is then reduced; for large K, raising it is
-        the remedy.  Default: 4.0.
+        the remedy.  None checks nothing.  Default: 4.0.
 
     Returns
     -------
@@ -558,9 +563,14 @@ def features(
     Warns
     -----
     UserWarning
-        When some rows of the analysis kernel have fewer than 3 non-zero
-        weights (the correlations there are undefined and set to 0), a low
-        effective sample size, or cancelled variances (see ``wcorr``).
+        From the correlation estimator on the analysis path (see ``wcorr``),
+        one per correlation step, naming each that applies: timepoints whose
+        kernel row has fewer than 3 non-zero kernel weights (their
+        correlations are undefined and set to 0); other timepoints whose
+        effective sample size ``(sum |w|)**2 / sum w**2`` is below 2 (the
+        kernel is too narrow to estimate correlations reliably there); and
+        timepoints with zero kernel-weighted variance in every feature (their
+        correlations are set to 0).  Never for the delta path.
     UserWarning
         Once per call, when NaN co-fluctuations are set to 0 before a
         model-based or graph-measure delta reduction.
@@ -614,7 +624,7 @@ def features(
     delta_unreduced = (rfun if delta_rfun is None else delta_rfun) is None
 
     S = len(subjects)
-    if delta_unreduced:
+    if delta_unreduced and max_memory_gb is not None:
         # widths are known in advance: refuse before computing anything
         estimates = estimate_memory_gb(K, order, T, S, return_delta)
         for k in range(1, order + 1):

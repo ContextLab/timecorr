@@ -138,9 +138,15 @@ def timecorr(
     Warns
     -----
     UserWarning
-        When some kernel rows have fewer than 3 non-zero weights (for example
-        the first timepoints of a backward kernel): the correlations there are
-        undefined and set to 0.
+        From the correlation estimator (see ``wcorr``), one per call, naming
+        each that applies: timepoints whose kernel row has fewer than 3
+        non-zero kernel weights (for example the first timepoints of a
+        backward kernel; their correlations are undefined and set to 0);
+        other timepoints whose effective sample size
+        ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
+        estimate correlations reliably there); and timepoints with zero
+        kernel-weighted variance in every feature (their correlations are set
+        to 0).  Never for a delta kernel.
     UserWarning
         With ``cfun=None``, when some timepoints have no weighted, observed
         sample: the smoothed values there are undefined and set to 0.

@@ -720,3 +720,39 @@ def test_smooth_accepts_weights_function_and_the_kernel_aliases():
         tc.smooth(x, 5, weights_function=gaussian_weights, kernel_fun=gaussian_weights)
     with pytest.raises(TypeError, match="kernel_params, not both"):
         tc.smooth(x, 5, weights_params={"var": 4}, kernel_params={"var": 4})
+
+
+# ------------------------------------------------- review minors (m2)
+
+
+@pytest.mark.parametrize("nfolds", [2.0, np.float64(2.0)])
+def test_get_xval_assignments_accepts_integer_valued_floats(nfolds):
+    # m2: 0.2.0 accepted nfolds=2.0; an integer-valued number is that integer
+    np.random.seed(0)
+    out = get_xval_assignments(5, nfolds)
+    assert np.bincount(out.astype(int)).tolist() == [3, 2]
+
+
+def test_get_xval_assignments_rejects_two_and_a_half_clearly():
+    with pytest.raises(ValueError, match=r"nfolds must be an integer; got 2\.5"):
+        get_xval_assignments(5, 2.5)
+
+
+def test_timepoint_decoder_accepts_float_fold_count():
+    data = shared_ramping_data(S=4, T=20, K=4)
+    np.random.seed(0)
+    a = tc.timepoint_decoder(data, nfolds=2.0, level=0)
+    np.random.seed(0)
+    b = tc.timepoint_decoder(data, nfolds=2, level=0)
+    pd.testing.assert_frame_equal(a, b)
+
+
+def test_pca_decoder_accepts_float_fold_count():
+    from timecorr.helpers import pca_decoder
+
+    data = np.array(shared_ramping_data(S=4, T=20, K=4))
+    np.random.seed(0)
+    a = pca_decoder(data, nfolds=2.0, dims=3, weights_params={"scale": 5})
+    np.random.seed(0)
+    b = pca_decoder(data, nfolds=2, dims=3, weights_params={"scale": 5})
+    pd.testing.assert_frame_equal(a, b)

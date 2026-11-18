@@ -775,12 +775,15 @@ def test_signed_kernel_diagonal_exception_is_documented():
     assert np.all(np.diag(out[:, :, 30]) == 1.0)
 
 
-@pytest.mark.parametrize("offset", [1e9, 1e11])
+@pytest.mark.parametrize("offset", [1e9, 1e10, 1.1e10, 1e11])
 def test_large_constant_offset_does_not_zero_a_feature(offset):
     # R-N: an offset of 1e9 (1e11) standard deviations must not make a
-    # feature look constant.  Storing offset + x rounds x to the spacing of
-    # floats near the offset (1.2e-7 at 1e9, 1.5e-5 at 1e11), so results agree
-    # with the offset-free ones to about that spacing times a small factor.
+    # feature look constant.  On these data 0.2.0's tolerance zeroed the
+    # offset features on the delta path from an offset of about 1.088e10 on:
+    # 1e10 still passed there and 1.1e10 is the first case here that failed.
+    # Storing offset + x rounds x to the spacing of floats near the offset
+    # (1.2e-7 at 1e9, 1.5e-5 at 1e11), so results agree with the offset-free
+    # ones to about that spacing times a small factor.
     rng = _rng(57)
     T = 60
     x = rng.randn(T, 3)
@@ -892,3 +895,18 @@ def test_effective_sample_size_threshold_is_two():
     w[10, [9, 11]] = 0.1
     with pytest.warns(UserWarning, match="1 of 20 timepoints have an effective sample size"):
         wcorr(x, x, w)
+
+
+def test_warns_sections_name_all_three_estimator_clauses():
+    # m3: every function whose correlations go through the estimator lists
+    # the three clauses its UserWarning can carry, as the message words them
+    from timecorr.higher_order import two_path_step
+    for f in (tc.timecorr, wcorr, tc.isfc, tc.wisfc, tc.autofc, tc.features,
+              two_path_step):
+        doc = " ".join(f.__doc__.split())
+        warns = doc.split("Warns ----- ", 1)
+        assert len(warns) == 2, f.__name__
+        section = warns[1]
+        assert "fewer than 3 non-zero kernel weights" in section, f.__name__
+        assert "effective sample size" in section and "below 2" in section, f.__name__
+        assert "zero kernel-weighted variance in every feature" in section, f.__name__

@@ -938,6 +938,17 @@ def wcorr(a, b, weights):
         Array of shape (Ka, Kb, weights.shape[0]); entry ``[i, j, t]`` is the
         correlation between ``a[:, i]`` and ``b[:, j]`` at timepoint ``t``.
 
+    Warns
+    -----
+    UserWarning
+        One per call, naming each that applies: timepoints whose kernel row
+        has fewer than 3 non-zero kernel weights (their correlations are
+        undefined and set to 0); other timepoints whose effective sample size
+        ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
+        estimate correlations reliably there); and timepoints with zero
+        kernel-weighted variance in every feature (their correlations are set
+        to 0).  Never for a delta kernel.
+
     Raises
     ------
     ValueError
@@ -1120,11 +1131,13 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     Warns
     -----
     UserWarning
-        One per call, when some kernel rows have fewer than 3 non-zero
-        weights (their correlations are undefined and set to 0) or an
-        effective sample size below 2, or when every feature has zero
-        kernel-weighted variance at some timepoints (their correlations are
-        0); see ``wcorr``.  Never for a delta kernel.
+        One per call, naming each that applies: timepoints whose kernel row
+        has fewer than 3 non-zero kernel weights (their correlations are
+        undefined and set to 0); other timepoints whose effective sample size
+        ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
+        estimate correlations reliably there); and timepoints with zero
+        kernel-weighted variance in every feature (their correlations are set
+        to 0).  Never for a delta kernel.
 
     Raises
     ------
@@ -1226,11 +1239,13 @@ def isfc(data, timepoint_weights):
     Warns
     -----
     UserWarning
-        One per call, when some kernel rows have fewer than 3 non-zero
-        weights (their correlations are undefined and set to 0) or an
-        effective sample size below 2, or when every feature has zero
-        kernel-weighted variance at some timepoints (their correlations are
-        0); see ``wcorr``.  Never for a delta kernel.
+        One per call, naming each that applies: timepoints whose kernel row
+        has fewer than 3 non-zero kernel weights (their correlations are
+        undefined and set to 0); other timepoints whose effective sample size
+        ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
+        estimate correlations reliably there); and timepoints with zero
+        kernel-weighted variance in every feature (their correlations are set
+        to 0).  Never for a delta kernel.
 
     Raises
     ------
@@ -1281,11 +1296,13 @@ def autofc(data, timepoint_weights):
     Warns
     -----
     UserWarning
-        One per call, when some kernel rows have fewer than 3 non-zero
-        weights (their correlations are undefined and set to 0) or an
-        effective sample size below 2, or when every feature has zero
-        kernel-weighted variance at some timepoints (their correlations are
-        0); see ``wcorr``.  Never for a delta kernel.
+        One per call, naming each that applies: timepoints whose kernel row
+        has fewer than 3 non-zero kernel weights (their correlations are
+        undefined and set to 0); other timepoints whose effective sample size
+        ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
+        estimate correlations reliably there); and timepoints with zero
+        kernel-weighted variance in every feature (their correlations are set
+        to 0).  Never for a delta kernel.
 
     Raises
     ------

@@ -611,3 +611,40 @@ def test_data_without_nan_do_not_warn_about_nan_handling():
         warnings.simplefilter("error")
         tc.features(make_data(n_subjects=S), order=3, weights_params={"var": 10},
                     return_delta=True)
+
+
+# ------------------------------------------- review minors (m5)
+
+
+def test_features_max_memory_gb_none_means_no_limit():
+    # m5: None checks nothing, as in two_path_step and the decoders; the same
+    # data raise MemoryError with a 1.0 GB limit (see the guard test above)
+    data = make_data(K=10, T=100)
+    with pytest.raises(MemoryError):
+        tc.features(data, order=3, rfun=None, max_memory_gb=1.0)
+    X = tc.features(data, order=2, rfun=None, max_memory_gb=None)
+    assert X[2].shape == (100, 55 * 56 // 2)
+    # the reduced delta path checks each step; None skips that check too
+    data = make_data(K=50, T=100)
+    step = estimate_memory_gb(50, 1, 100)[1]
+    X = tc.features(data, order=2, rfun=None, delta_rfun="PCA",
+                    max_memory_gb=None)
+    assert len(X) == 3
+
+
+def test_max_memory_gb_none_is_documented_alike_everywhere():
+    # m5: every public function taking max_memory_gb says None checks nothing
+    import inspect
+    from timecorr import decoding
+    funcs = [tc.features, two_path_step, decoding.timepoint_decoder,
+             decoding.weighted_timepoint_decoder,
+             decoding.weighted_timepoint_decoder_ec, decoding.folding_levels]
+    for f in funcs:
+        assert "max_memory_gb" in inspect.signature(f).parameters, f.__name__
+        doc = " ".join(f.__doc__.split())
+        assert "max_memory_gb : float or None" in doc or (
+            "max_memory_gb" in doc and "As in" in doc
+        ), f.__name__
+    doc = " ".join(tc.features.__doc__.split())
+    assert "max_memory_gb : float or None" in doc
+    assert "None checks nothing" in doc

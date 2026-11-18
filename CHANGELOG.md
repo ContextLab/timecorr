@@ -102,10 +102,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (`weights_fun`; `kernel_fun`, `kernel_params`) are still accepted as
   aliases, positional order is unchanged, and passing a name together with
   its alias raises `TypeError`. A decoder `level` is an `order` in
-  `tc.features`.
+  `tc.features`. The declared kernel default of `timepoint_decoder`,
+  `weighted_timepoint_decoder`, `weighted_timepoint_decoder_ec`,
+  `pca_decoder` and `smooth` is now `None` (it was `laplace_weights`); `None`
+  means the Laplace kernel, with the same `weights_params` defaults as
+  before, so results do not change.
 - The decoders (`timepoint_decoder`, `weighted_timepoint_decoder`,
   `weighted_timepoint_decoder_ec`, `folding_levels`) and
-  `two_path_step` take `max_memory_gb` (default 4.0) and raise the same
+  `two_path_step` take `max_memory_gb` (default 4.0; None, as in
+  `tc.features`, checks nothing) and raise the same
   `MemoryError` as `tc.features` before an unreduced correlation step whose
   estimated peak memory exceeds it; the check now lives in the pipeline's
   shared path functions.
@@ -116,8 +121,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   different shapes; its `cfun`, `combine` and `rfun` arguments are accepted
   and ignored, as documented. `folding_levels_ec` without a kernel function
   raises `ValueError` (it raised `TypeError: 'NoneType' object is not
-  callable`). `get_xval_assignments` rejects a non-integer `nfolds` (2.5 was
-  truncated to 2).
+  callable`). `get_xval_assignments` and the decoders reject a non-integer
+  `nfolds` with `ValueError` (2.5 was truncated to 2); an integer-valued
+  number such as 2.0 is still accepted as that integer.
 - `decoding.reduce_wrapper` (internal, unused) reduces the raw features of
   both groups into one space and returns them in the structure they were
   given; it returned the first two subjects instead of the two groups.
@@ -140,8 +146,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   next order, so each order is blurred by the kernel once. Separate reducers
   for the two paths (`rfun`, `delta_rfun`); `rfun=None` runs without
   reduction, guarded by an estimate of each step's peak memory for all
-  subjects together (`max_memory_gb`, default 4 GB) that raises `MemoryError`
-  before allocating. `rfun` and `delta_rfun` are validated before anything is
+  subjects together (`max_memory_gb`, default 4 GB; None checks nothing) that
+  raises `MemoryError` before allocating. `rfun` and `delta_rfun` are validated before anything is
   computed (also a `delta_rfun` that a run would not call), and `ndims` is
   passed only to model-based reducers. The estimate counts the `(d, d, T)` correlation array,
   every subject's results, the `T x T` kernels and the block temporaries; it
@@ -173,6 +179,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is `subject_noise` times each feature's standard deviation, so ISFC has a
   shared signal to find (a feature's cross-subject correlation is about
   `1 / (1 + subject_noise**2)`). The default, None, keeps independent draws.
+  `subject_noise` applies to `order=1` only; with `order > 1` it raises
+  `ValueError` (those simulations already share their latent signs across
+  subjects).
 - `carrier_columns(blocks, level, K=None)`: `K` defaults to
   `blocks.max() + 1`, as in `carrier_reducer`.
 - New tutorial (`docs/tutorial/higher_order_tutorial.ipynb`) and gallery
@@ -241,7 +250,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
-- Every public name now has an API page, including the default kernel
+- Every user-facing name now has an API page, including the default kernel
   parameter dictionaries (`gaussian_params`, `laplace_params`, `eye_params`,
   `t_params`, `mexican_hat_params`, `uniform_params`, `boxcar_params`), which
   are listed in a table of their keys, default values and meanings, and

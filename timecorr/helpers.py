@@ -488,24 +488,57 @@ def _warn_user(message, category=UserWarning):
     warnings.warn(message, category, stacklevel=level)
 
 
-def _undefined_rows_message(weights):
+def _kernel_row_problems(weights):
     """
-    The undefined-row warning for a kernel (NaN weights count as 0), or None.
+    Masks ``(undefined, low)`` of the kernel's rows, or None for a delta or an
+    all-zero kernel (NaN weights count as 0).
 
-    A row with fewer than 3 non-zero weights is undefined unless every row has
-    exactly one (a true delta kernel); an all-zero kernel is left to ``wcorr``
-    to reject.
+    ``undefined``: fewer than 3 non-zero weights (two samples always give
+    r = +-1).  ``low``: the remaining rows whose effective sample size
+    ``(sum|w|)**2 / sum(w**2)`` is below 3.
     """
-    support = np.count_nonzero(np.nan_to_num(weights, nan=0.0), axis=1)
+    w = np.abs(np.nan_to_num(np.asarray(weights, dtype=np.float64), nan=0.0))
+    support = np.count_nonzero(w, axis=1)
     if np.all(support == 0) or np.all(support == 1):
         return None
     undefined = support < 3
-    if not np.any(undefined):
-        return None
-    return (
-        f"{int(undefined.sum())} of {len(undefined)} timepoints have fewer than 3 "
-        "non-zero kernel weights; their correlations are undefined and set to 0."
-    )
+    ess = _safe_divide(w.sum(axis=1) ** 2, (w**2).sum(axis=1))
+    return undefined, ~undefined & (ess < 3)
+
+
+def _estimator_message(weights, cancelled=None):
+    """
+    The one warning of a correlation call, or None.
+
+    It names the kernel rows with fewer than 3 non-zero weights (undefined, set
+    to 0), the other rows whose effective sample size is below 3, and the
+    timepoints (``cancelled``, a boolean mask) where every correlation was set
+    to 0 because the kernel-weighted variances there are zero.
+    """
+    T = np.shape(weights)[0]
+    parts = []
+    problems = _kernel_row_problems(weights)
+    if problems is not None:
+        undefined, low = problems
+        if undefined.any():
+            parts.append(
+                f"{int(undefined.sum())} of {T} timepoints have fewer than 3 "
+                "non-zero kernel weights; their correlations are undefined and "
+                "set to 0."
+            )
+        if low.any():
+            parts.append(
+                f"{int(low.sum())} of {T} timepoints have an effective sample size "
+                "((sum |w|)**2 / sum w**2 over the kernel row) below 3; the kernel "
+                "is too narrow to estimate correlations reliably there."
+            )
+    if cancelled is not None and np.any(cancelled):
+        parts.append(
+            f"{int(np.sum(cancelled))} of {T} timepoints have zero kernel-weighted "
+            "variance in every feature (the data are constant within the kernel, "
+            "or the kernel is too narrow); their correlations are set to 0."
+        )
+    return " ".join(parts) if parts else None
 
 
 def _is_polars(x):
@@ -655,6 +688,13 @@ _ZERO_VARIANCE_TOL = 1e-10
 # under 1 GB regardless of the number of features.
 _WCORR_BLOCK_ELEMENTS = 2**23
 
+# Relative round-off of removing a column's mean (a few float64 spacings).
+_ROUND_OFF = 64 * np.finfo(np.float64).eps
+
+# Values at most this far outside [-1, 1] are correlations with round-off error
+# (clipped to +-1), not co-fluctuations.
+_R_TOLERANCE = 1e-12
+
 
 def _safe_divide(num, den):
     """Elementwise num / den, with 0 wherever den is 0."""
@@ -671,13 +711,22 @@ def _nan_center(x):
 
 
 def _zscore_columns(x):
-    """Population z-scores of each column; NaN samples and constant columns give 0."""
+    """
+    Population z-scores of each column; NaN samples and constant columns give 0.
+
+    A column is constant when its standard deviation is at most 1e-10 of its
+    largest centered value, or within the round-off of removing its mean (a
+    few float spacings of its largest raw value), so a large constant offset
+    neither zeroes a varying column nor turns a constant one into signal.
+    """
     valid = ~np.isnan(x)
-    scale = np.where(valid, np.abs(x), 0.0).max(axis=0)
+    magnitude = np.where(valid, np.abs(x), 0.0).max(axis=0)
     x0 = np.where(valid, _nan_center(x), 0.0)
     sd = np.sqrt(_safe_divide((x0**2).sum(axis=0), valid.sum(axis=0)))
-    sd = np.where(sd <= _ZERO_VARIANCE_TOL * scale, 0.0, sd)
-    return _safe_divide(x0, sd)
+    constant = (sd <= _ZERO_VARIANCE_TOL * np.abs(x0).max(axis=0)) | (
+        sd <= _ROUND_OFF * magnitude
+    )
+    return _safe_divide(x0, np.where(constant, 0.0, sd))
 
 
 def _delta_wcorr(a, b, weights):
@@ -697,12 +746,17 @@ def _wcorr_blocks(a, b, weights, autocorrelation):
     """
     Kernel-weighted correlations, computed with matrix products over blocks of
     feature pairs.  NaN samples are excluded pairwise (they carry no weight).
+
+    Returns ``(out, cancelled)``: the (Ka, Kb, T) correlations, and a mask of
+    the kernel rows with any weight where every correlation was set to 0
+    because the variances there are zero.
     """
     T, Ka = a.shape
     Kb = b.shape[1]
     W = weights
     A = np.abs(W)
     out = np.zeros([Ka, Kb, W.shape[0]])
+    cancelled = A.sum(axis=1) > 0
 
     a = _nan_center(a)
     b = _nan_center(b)
@@ -772,6 +826,7 @@ def _wcorr_blocks(a, b, weights, autocorrelation):
             )
             var_a, var_b, zero = (v.reshape(shape) for v in (var_a, var_b, zero))
 
+        cancelled &= zero.reshape(shape[0], -1).all(axis=1)
         den = np.sqrt(np.where(zero, 1.0, var_a * var_b))
         r = np.where(zero, 0.0, np.clip(num / den, -1.0, 1.0))
 
@@ -785,7 +840,7 @@ def _wcorr_blocks(a, b, weights, autocorrelation):
         else:
             out[i0:i1, :, :] = r.transpose(1, 2, 0)
 
-    return out
+    return out, cancelled
 
 
 def wcorr(a, b, weights):
@@ -801,7 +856,13 @@ def wcorr(a, b, weights):
     where ``w = weights[t, tau]`` and ``d = x - sum_tau(|w| x) / sum_tau |w|``
     are deviations from the kernel-weighted mean.  For non-negative kernels
     this is the weighted Pearson correlation; for signed kernels (for example
-    the Mexican hat) it stays within [-1, 1].
+    the Mexican hat) it stays within [-1, 1].  The diagonal of an
+    autocorrelation (``a`` and ``b`` equal) is set to exactly 1 (0 for a
+    feature that is constant there).  For non-negative kernels the formula
+    gives 1 there too, but for signed kernels the diagonal is an exception:
+    the formula's value can be below 1, even negative (for the Mexican hat,
+    values near -1 occur), and it is what a cross-correlation (``a`` and
+    ``b`` different) returns for a pair of identical columns.
 
     Special cases:
 
@@ -811,8 +872,8 @@ def wcorr(a, b, weights):
       Averaged over timepoints this equals the static correlation.
     - Otherwise, a row with fewer than 3 non-zero weights is undefined (two
       samples always give r = +-1, which carries no information): its
-      correlations are set to 0 and one ``UserWarning`` reports how many rows
-      were affected.  If every row is all zeros, ``ValueError`` is raised.
+      correlations are set to 0.  If every row is all zeros, ``ValueError``
+      is raised.
     - NaN samples carry no weight: each pair of features uses only the
       timepoints where both are observed.  NaN kernel weights count as 0.
     - A feature is treated as constant at timepoint ``t`` when its
@@ -822,9 +883,20 @@ def wcorr(a, b, weights):
       itself included, at that timepoint.  This is a numerical limit:
       features whose local variance is below about 1e-10 of their mean square
       are treated as constant.  A constant offset of the whole series does
-      not matter (the overall mean is removed first), but a step much larger
-      than the local fluctuations does: a unit-variance series that jumps by
-      1e6 halfway through is treated as constant on both sides of the jump.  Elsewhere the diagonal of an autocorrelation is exactly 1.
+      not matter (the overall mean is removed first; an offset of 1e9
+      standard deviations is tested), but a step much larger than the local
+      fluctuations within a kernel window does: a unit-variance series that
+      jumps by 1e6 or more halfway through is treated as constant on both
+      sides of the jump.
+
+    One ``UserWarning`` per call reports, when they occur, how many
+    timepoints have fewer than 3 non-zero kernel weights; how many other
+    timepoints have an effective sample size ``(sum |w|)**2 / sum w**2``
+    below 3 (a kernel too narrow for a reliable estimate: for example a
+    Gaussian with ``var=0.05``, whose rows are one sample plus weights below
+    1e-4; a row of 3 unequal non-zero weights is also just below 3); and how
+    many timepoints have zero kernel-weighted variance in every feature, so
+    that all their correlations are 0.  A true delta kernel never warns.
 
     This estimator differs from Eq. 4 of Owen, Chang & Manning (2021) and
     from timecorr 0.2.0, where the kernel set only the means and the
@@ -871,8 +943,12 @@ def wcorr(a, b, weights):
     return _wcorr(a, b, weights)
 
 
-def _wcorr(a, b, weights, warn=True):
-    """``wcorr``; with ``warn=False`` the undefined-row warning is left to the caller."""
+def _wcorr(a, b, weights, warn=True, return_cancelled=False):
+    """
+    ``wcorr``.  With ``warn=False`` the warning is left to the caller; with
+    ``return_cancelled=True`` the mask of timepoints whose correlations all
+    cancelled (see ``_wcorr_blocks``) is returned too.
+    """
     a = np.asarray(a, dtype=np.float64)
     b = np.asarray(b, dtype=np.float64)
     if a.ndim == 1:
@@ -893,18 +969,21 @@ def _wcorr(a, b, weights, warn=True):
             "Every row of the kernel is zero; no correlation can be estimated."
         )
     if np.all(support == 1):
-        return _delta_wcorr(a, b, weights)
+        out = _delta_wcorr(a, b, weights)
+        return (out, np.zeros(weights.shape[0], dtype=bool)) if return_cancelled else out
 
-    undefined = support < 3
-    if np.any(undefined):
-        if warn:
-            _warn_user(_undefined_rows_message(weights))
-        weights[undefined] = 0
+    kernel = weights.copy() if warn else None
+    weights[support < 3] = 0
 
     autocorrelation = a is b or (
         a.shape == b.shape and np.array_equal(a, b, equal_nan=True)
     )
-    return _wcorr_blocks(a, b, weights, autocorrelation)
+    out, cancelled = _wcorr_blocks(a, b, weights, autocorrelation)
+    if warn:
+        message = _estimator_message(kernel, cancelled)
+        if message is not None:
+            _warn_user(message)
+    return (out, cancelled) if return_cancelled else out
 
 
 def _nan_weighted_mean(x, weights, tol=1e-5):
@@ -961,8 +1040,10 @@ def _fisher_mean(r, axis):
     Average correlations along ``axis`` in Fisher z space: ``z2r(mean(r2z(r)))``.
 
     Fisher z averaging applies to correlations only.  Where any value along
-    ``axis`` lies outside [-1, 1] (for example a co-fluctuation from a delta
-    kernel), the values are averaged on the raw scale (plain mean) instead.
+    ``axis`` lies outside [-1, 1] by more than 1e-12 (for example a
+    co-fluctuation from a delta kernel), the values are averaged on the raw
+    scale (plain mean) instead; values within 1e-12 of [-1, 1] are
+    correlations with round-off and are clipped to +-1.
     Values of exactly +-1 have infinite z.  Where only one sign of infinity
     occurs along ``axis`` the result is that sign (+-1).  Where both +inf and
     -inf occur they are excluded and the finite z values are averaged (0 if
@@ -970,8 +1051,9 @@ def _fisher_mean(r, axis):
     are raised.
     """
     r = np.asarray(r, dtype=np.float64)
-    raw = np.any(np.abs(r) > 1, axis=axis)
-    z = r2z(np.where(np.abs(r) > 1, 0.0, r))
+    outside = np.abs(r) > 1 + _R_TOLERANCE
+    raw = np.any(outside, axis=axis)
+    z = r2z(np.where(outside, 0.0, np.clip(r, -1.0, 1.0)))
     pos = np.any(np.isposinf(z), axis=axis)
     neg = np.any(np.isneginf(z), axis=axis)
     nan = np.any(np.isnan(z), axis=axis)
@@ -1020,9 +1102,11 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     Warns
     -----
     UserWarning
-        When some kernel rows have fewer than 3 non-zero weights (and the
-        kernel is not a delta kernel): the correlations at those timepoints
-        are undefined and set to 0 (see ``wcorr``).  One warning per call.
+        One per call, when some kernel rows have fewer than 3 non-zero
+        weights (their correlations are undefined and set to 0) or an
+        effective sample size below 3, or when every feature has zero
+        kernel-weighted variance at some timepoints (their correlations are
+        0); see ``wcorr``.  Never for a delta kernel.
 
     Raises
     ------
@@ -1070,22 +1154,23 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         subject_weights = subject_weights * np.ones([S, S])
         np.fill_diagonal(subject_weights, 0)
 
-    # every subject shares the kernel: warn about undefined rows once per call
-    message = _undefined_rows_message(timepoint_weights)
-    if message is not None:
-        _warn_user(message)
-
     stacked = np.stack(data, axis=2)
     corrs = []
+    cancelled = False
     for s, a in enumerate(data):
         b = _nan_weighted_mean(stacked, subject_weights[s, :])
-        wc = _wcorr(a, b, timepoint_weights, warn=False)
+        wc, c = _wcorr(a, b, timepoint_weights, warn=False, return_cancelled=True)
+        cancelled = cancelled | c
         if not np.array_equal(a, b, equal_nan=True):
             wc = _fisher_symmetrize(wc)
         corrs.append(mat2vec(wc))
         # free the (K, K, T) array before the next subject's is allocated
         del wc
 
+    # every subject shares the kernel: one warning per call
+    message = _estimator_message(timepoint_weights, cancelled)
+    if message is not None:
+        _warn_user(message)
     return corrs
 
 
@@ -1123,9 +1208,11 @@ def isfc(data, timepoint_weights):
     Warns
     -----
     UserWarning
-        When some kernel rows have fewer than 3 non-zero weights (and the
-        kernel is not a delta kernel): the correlations at those timepoints
-        are undefined and set to 0 (see ``wcorr``).  One warning per call.
+        One per call, when some kernel rows have fewer than 3 non-zero
+        weights (their correlations are undefined and set to 0) or an
+        effective sample size below 3, or when every feature has zero
+        kernel-weighted variance at some timepoints (their correlations are
+        0); see ``wcorr``.  Never for a delta kernel.
 
     Raises
     ------
@@ -1176,9 +1263,11 @@ def autofc(data, timepoint_weights):
     Warns
     -----
     UserWarning
-        When some kernel rows have fewer than 3 non-zero weights (and the
-        kernel is not a delta kernel): the correlations at those timepoints
-        are undefined and set to 0 (see ``wcorr``).  One warning per call.
+        One per call, when some kernel rows have fewer than 3 non-zero
+        weights (their correlations are undefined and set to 0) or an
+        effective sample size below 3, or when every feature has zero
+        kernel-weighted variance at some timepoints (their correlations are
+        0); see ``wcorr``.  Never for a delta kernel.
 
     Raises
     ------
@@ -1325,7 +1414,12 @@ def tstat_combine(corrs, return_pvals=False):
     with ``scipy.stats.ttest_1samp``.  Fisher z applies to correlations only:
     an entry where any matrix has a value outside [-1, 1] (for example the
     co-fluctuations of a delta kernel, ``eye_weights``) is tested on the raw
-    values, with no NaN and no warning.
+    values, with no NaN and no warning; values within 1e-12 of [-1, 1] are
+    correlations with round-off (clipped to +-1).  An entry with the same
+    value in every matrix (zero variance across subjects, for example the
+    diagonal of ``autofc`` results, where every value is 1) has t = +inf or
+    -inf with the sign of that value (p = 0), or t = 0 (p = 1) when the value
+    is 0, with no warning.
 
     Parameters
     ----------
@@ -1350,12 +1444,6 @@ def tstat_combine(corrs, return_pvals=False):
         If ``corrs`` is a list of fewer than two matrices (a t statistic across
         subjects needs at least two).
 
-    Warns
-    -----
-    RuntimeWarning
-        From ``scipy.stats.ttest_1samp`` where every matrix holds the same
-        value (the t statistic there is infinite or NaN).
-
     Examples
     --------
     >>> import numpy as np
@@ -1376,11 +1464,20 @@ def tstat_combine(corrs, return_pvals=False):
             f"subjects is undefined for fewer); got a list of {len(corrs)}."
         )
     else:
-        stacked = np.stack(corrs, axis=2)
-        outside = np.abs(stacked) > 1
+        stacked = np.asarray(np.stack(corrs, axis=2), dtype=np.float64)
+        outside = np.abs(stacked) > 1 + _R_TOLERANCE
         raw = np.any(outside, axis=2, keepdims=True)
-        vals = np.where(raw, stacked, r2z(np.where(outside, 0.0, stacked)))
-        ts, ps = ttest(vals, popmean=0, axis=2)
+        z = r2z(np.where(outside, 0.0, np.clip(stacked, -1.0, 1.0)))
+        vals = np.where(raw, stacked, z)
+        # zero variance across subjects (every value equal, infinities
+        # included): t is +-inf with the sign of the mean, 0 for a mean of 0
+        constant = np.all(vals == vals[:, :, :1], axis=2)
+        filler = np.arange(vals.shape[2], dtype=np.float64)  # any non-constant row
+        ts, ps = ttest(np.where(constant[:, :, None], filler, vals), popmean=0, axis=2)
+        first = vals[:, :, 0]
+        signed_inf = np.where(first > 0, np.inf, np.where(first < 0, -np.inf, 0.0))
+        ts = np.where(constant, signed_inf, ts)
+        ps = np.where(constant, np.where(first == 0, 1.0, 0.0), ps)
 
     if return_pvals:
         return ts, ps

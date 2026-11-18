@@ -62,7 +62,9 @@ print(len(X), X[3][0].shape)  # 4 (100, 5): orders 0-3, each reduced (PCA) to 5 
 # use only the current and earlier timepoints to estimate each timepoint's correlations
 backward = tc.timecorr(data, weights_params={"var": 10}, include_timepoints="backward")
 # UserWarning: 2 of 100 timepoints have fewer than 3 non-zero kernel weights;
-# their correlations are undefined and set to 0.
+# their correlations are undefined and set to 0. 1 of 100 timepoints have an
+# effective sample size ((sum |w|)**2 / sum w**2 over the kernel row) below 3;
+# the kernel is too narrow to estimate correlations reliably there.
 ```
 
 `include_timepoints="forward"` uses only the current and later timepoints, and `include_zero=False` leaves out the timepoint being estimated. The same options are available on every kernel function (`direction`, `include_zero`) and through `tc.one_sided`.

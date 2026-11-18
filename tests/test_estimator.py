@@ -678,3 +678,173 @@ def test_tstat_combine_needs_at_least_two_subjects():
         tc.tstat_combine(one)
     with pytest.raises(ValueError, match="at least two"):
         tc.tstat_combine([])
+
+
+# --- all-issues wave: narrow kernels (R-A), signed-kernel diagonal (R-B),
+# --- large offsets (R-N), the |r| <= 1 tolerance (R-O), tstat on constant
+# --- entries (R-H)
+
+
+def _user_warnings(rec):
+    return [r for r in rec if issubclass(r.category, UserWarning)]
+
+
+def test_narrow_kernel_warns_once_about_effective_sample_size():
+    # R-A (M1): var=0.05 has full support (no row has fewer than 3 non-zero
+    # weights) but each row is one sample plus weights of 4.5e-5 and less,
+    # so its effective sample size (sum|w|)**2 / sum(w**2) is about 1
+    rng = _rng(50)
+    T = 40
+    x = rng.randn(T, 3)
+    w = gaussian_weights(T, {"var": 0.05})
+    assert np.all(np.count_nonzero(w, axis=1) >= 3)
+    with pytest.warns(UserWarning, match="40 of 40 timepoints have an effective") as rec:
+        wcorr(x, x, w)
+    assert len(_user_warnings(rec)) == 1
+
+
+def test_kernel_whose_variances_all_cancel_is_reported():
+    # R-A (M1): var=0.01 gives weights of 1e-22 off the diagonal, so every
+    # kernel-weighted variance is below the zero-variance tolerance and the
+    # output is all zeros: that must be reported, not returned silently
+    rng = _rng(51)
+    T = 30
+    x = rng.randn(T, 3)
+    w = gaussian_weights(T, {"var": 0.01})
+    with pytest.warns(UserWarning) as rec:
+        out = wcorr(x, x, w)
+    msgs = [str(r.message) for r in _user_warnings(rec)]
+    assert len(msgs) == 1
+    assert "30 of 30 timepoints" in msgs[0] and "variance" in msgs[0]
+    assert np.all(out == 0)
+
+
+def test_timepoints_where_every_feature_is_constant_are_reported():
+    # R-A: a well-sampled kernel (boxcar, 5 equal weights, effective sample
+    # size 5) over a stretch where every feature is constant: the timepoints
+    # whose whole window is constant (12 to 27) have no variance at all
+    rng = _rng(52)
+    T = 50
+    x = rng.randn(T, 3)
+    x[10:30] = x[10]
+    w = boxcar_weights(T, {"width": 5})
+    with pytest.warns(UserWarning, match="16 of 50 timepoints") as rec:
+        out = wcorr(x, x, w)
+    assert len(_user_warnings(rec)) == 1
+    assert np.all(out[:, :, 12:28] == 0)
+    assert np.all(np.diag(out[:, :, 5]) == 1.0)
+
+
+def test_one_constant_feature_is_not_reported():
+    # only timepoints where every correlation cancels are reported
+    rng = _rng(53)
+    x = rng.randn(40, 3)
+    x[:, 1] = 2.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = wcorr(x, x, gaussian_weights(40, {"var": 10}))
+    assert np.all(out[1, :, :] == 0)
+
+
+@pytest.mark.parametrize("cfun", [isfc, autofc, wisfc])
+def test_narrow_kernel_warns_once_per_call_for_several_subjects(cfun):
+    rng = _rng(54)
+    data = [rng.randn(30, 3) for _ in range(3)]
+    with pytest.warns(UserWarning, match="effective sample size") as rec:
+        cfun(data, gaussian_weights(30, {"var": 0.05}))
+    assert len(_user_warnings(rec)) == 1
+
+
+def test_delta_kernel_never_warns_about_effective_sample_size():
+    rng = _rng(55)
+    x = rng.randn(30, 4)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        wcorr(x, x, eye_weights(30))
+        tc.timecorr([x, rng.randn(30, 4)], weights_function=eye_weights, cfun=autofc)
+
+
+def test_signed_kernel_diagonal_exception_is_documented():
+    # R-B (M2): the diagonal of an autocorrelation is pinned to 1, which for a
+    # signed kernel differs from the formula; the docstring formula says so
+    doc = " ".join(wcorr.__doc__.split())
+    assert "for signed kernels the diagonal is an exception" in doc
+    rng = _rng(56)
+    x = rng.randn(60, 2)
+    out = wcorr(x, x, mexican_hat_weights(60, {"sigma": 3}))
+    assert np.all(np.diag(out[:, :, 30]) == 1.0)
+
+
+@pytest.mark.parametrize("offset", [1e9, 1e11])
+def test_large_constant_offset_does_not_zero_a_feature(offset):
+    # R-N: an offset of 1e9 (1e11) standard deviations must not make a
+    # feature look constant.  Storing offset + x rounds x to the spacing of
+    # floats near the offset (1.2e-7 at 1e9, 1.5e-5 at 1e11), so results agree
+    # with the offset-free ones to about that spacing times a small factor.
+    rng = _rng(57)
+    T = 60
+    x = rng.randn(T, 3)
+    shifted = x + np.array([offset, 0.0, -offset])
+    tol = 100 * np.spacing(offset)
+    for w in (gaussian_weights(T, {"var": 10}), eye_weights(T)):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            ref = wcorr(x, x, w)
+            out = wcorr(shifted, shifted, w)
+        assert np.max(np.abs(out - ref)) < tol
+
+
+def test_constant_column_with_large_offset_stays_constant():
+    # the round-off of centering a constant column must not pass as signal
+    rng = _rng(58)
+    x = rng.randn(40, 2)
+    x[:, 1] = 1e9 + 0.1
+    out = wcorr(x, x, eye_weights(40))
+    assert np.all(out[1, :, :] == 0)
+    assert np.all(out[:, 1, :] == 0)
+
+
+def test_values_within_round_off_above_one_are_correlations():
+    # R-O: 1 + 1e-13 is a correlation of 1 with round-off, not a
+    # co-fluctuation: Fisher z (infinite, so the mean is 1), not a raw mean
+    corrs = [np.array([[1 + 1e-13, 0.5]]), np.array([[0.5, 0.5]])]
+    out = tc.corrmean_combine(corrs)
+    assert out[0, 0] == 1.0
+    assert np.isclose(out[0, 1], 0.5)
+    # a value clearly outside [-1, 1] is still a co-fluctuation (raw mean)
+    raw = tc.corrmean_combine([np.array([[1.5]]), np.array([[0.5]])])
+    assert np.isclose(raw[0, 0], 1.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ts = tc.tstat_combine([np.array([[-1 - 1e-13]]), np.array([[-1.0]])])
+    assert ts[0, 0] == -np.inf
+
+
+def test_tstat_combine_constant_entries_are_signed_infinities():
+    # R-H (M11): zero variance across subjects gives +-inf with the sign of
+    # the mean (0 when the mean is 0), p = 0 (p = 1 for t = 0), no warning
+    a = np.array([[0.3, -0.2, 0.0, 1.0, 0.1]])
+    b = np.array([[0.3, -0.2, 0.0, 1.0, 0.5]])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ts, ps = tc.tstat_combine([a, b, a.copy()], return_pvals=True)
+    assert ts[0, 0] == np.inf and ts[0, 1] == -np.inf and ts[0, 2] == 0
+    assert ts[0, 3] == np.inf
+    assert ps[0, 0] == 0 and ps[0, 1] == 0 and ps[0, 2] == 1 and ps[0, 3] == 0
+    z = r2z(np.array([0.1, 0.5, 0.1]))
+    ref = z.mean() / (z.std(ddof=1) / np.sqrt(3))
+    assert np.isclose(ts[0, 4], ref)
+
+
+def test_tstat_combine_with_autofc_has_an_infinite_diagonal_and_no_warning():
+    # R-H (M11): autofc's diagonal is exactly 1 for every subject
+    rng = _rng(59)
+    data = [rng.randn(30, 3) for _ in range(4)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ts = tc.timecorr(
+            data, cfun=autofc, combine=tc.tstat_combine, weights_params={"var": 10}
+        )
+    diag = [0, 1, 2]  # mat2vec puts the diagonal first
+    assert np.all(ts[:, diag] == np.inf)
+    assert np.all(np.isfinite(np.delete(ts, diag, axis=1)))

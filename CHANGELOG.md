@@ -28,7 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A kernel row with fewer than 3 non-zero weights gives an undefined
   correlation; those timepoints are set to 0 and one `UserWarning` per call
   (not per subject), attributed to the caller's line, reports how many there
-  are. A kernel whose rows are all zero raises `ValueError`.
+  are. The same warning also reports the other timepoints whose kernel row
+  has an effective sample size `(sum |w|)**2 / sum w**2` below 3 (a kernel too
+  narrow for a reliable estimate, such as a Gaussian with `var=0.05`; a row of
+  3 unequal non-zero weights, such as the third row of a one-sided kernel, is
+  just below 3), and the timepoints where every feature has zero
+  kernel-weighted variance, so that all correlations there are 0 (constant
+  data, or a kernel so narrow that every variance cancels). A delta kernel
+  never warns. A kernel whose rows are all zero raises `ValueError`.
 - Kernel convention: row `t` of a weights matrix (`weights[t, :]`) is the
   kernel used to estimate at timepoint `t`, everywhere in the package.
 - ISFC (`isfc`, `wisfc`): each subject-versus-others cross-correlation matrix
@@ -44,7 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tstat_combine` and the ISFC symmetrization, an entry where any value lies
   outside [-1, 1] (the co-fluctuations of a delta kernel, `eye_weights`) is
   combined on the raw scale (plain mean; t-statistic of the raw values)
-  instead of giving NaN.
+  instead of giving NaN. Values within 1e-12 of [-1, 1] are correlations with
+  round-off and are clipped to +-1.
+- `tstat_combine`: an entry with the same value in every subject (zero
+  variance, for example the diagonal of `autofc` results) gives t = +inf or
+  -inf with the sign of that value (p = 0), or t = 0 (p = 1) for a value of
+  0, with no warning (it was NaN with a scipy `RuntimeWarning`).
 - Input formatting goes through pydata-wrangler: numpy arrays, pandas
   DataFrames, polars DataFrames, and lists of them are accepted; inputs are
   never modified; subjects with mismatched shapes and non-numeric columns
@@ -137,6 +149,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   both now mean what their names say (aliases of `'backward'` and
   `'forward'`).
 - `wcorr` crashed for inputs with different numbers of features.
+- With a delta kernel, a feature with a constant offset of about 1e10
+  standard deviations or more was treated as constant (all zeros); the
+  zero-variance test now uses the centered data, with a round-off allowance
+  so that a constant feature stays constant.
 - `vec2mat` failed on a 1 x V input; `z2r(inf)` returned 0 (now 1).
 - `mat2vec` and `vec2mat` are vectorized; `mat2vec` copies row by row, which
   lowers its peak memory from about 3.1 to about 1.1 times the output size.

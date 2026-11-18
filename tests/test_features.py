@@ -347,10 +347,15 @@ def test_backward_corrmean_pipeline_is_finite_and_warns_only_for_undefined_rows(
                         combine=tc.corrmean_combine, weights_params={"var": 10})
     assert np.all(np.isfinite(X[1]))
     messages = {(r.category, str(r.message)) for r in rec}
+    # R-A: row 2 of the backward kernel has weights 1, exp(-1/20), exp(-4/20),
+    # effective sample size (sum w)**2 / sum w**2 = 2.98 < 3; row 3 has 3.90
     assert messages == {(
         UserWarning,
         "2 of 60 timepoints have fewer than 3 non-zero kernel weights; their "
-        "correlations are undefined and set to 0.",
+        "correlations are undefined and set to 0. 1 of 60 timepoints have an "
+        "effective sample size ((sum |w|)**2 / sum w**2 over the kernel row) "
+        "below 3; the kernel is too narrow to estimate correlations reliably "
+        "there.",
     )}
 
 

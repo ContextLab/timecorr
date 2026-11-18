@@ -77,7 +77,10 @@ class TestRemainingCoverage:
         a = np.ones((5, 3)) * 1e-16
         b = np.ones((5, 3)) * 1e-16
         weights = np.ones((5, 5)) * 1e-16
-        result = wcorr(a, b, weights)
+        with pytest.warns(
+            UserWarning, match="5 of 5 timepoints have zero kernel-weighted variance"
+        ):
+            result = wcorr(a, b, weights)
         assert result.shape == (3, 3, 5)
         assert np.all(np.isfinite(result))
         assert np.allclose(result, 0)

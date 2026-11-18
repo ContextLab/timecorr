@@ -119,8 +119,12 @@ class TestFullCoverageHelpers:
         data_b = np.ones((10, 3))  # Constant data
         weights = gaussian_weights(10)
 
-        # This should trigger the exception handling branch
-        result = wcorr(data_a, data_b, weights)
+        # This should trigger the exception handling branch; constant data have
+        # no variance anywhere, which is reported (R-A)
+        with pytest.warns(
+            UserWarning, match="10 of 10 timepoints have zero kernel-weighted variance"
+        ):
+            result = wcorr(data_a, data_b, weights)
         assert result.shape == (3, 3, 10)
 
     def test_simulate_data_edge_cases(self):

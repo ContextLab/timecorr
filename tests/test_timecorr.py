@@ -221,3 +221,13 @@ def test_smoothing_path_list_input_returns_arrays():
     assert all(isinstance(o, np.ndarray) and o.shape == (30, 3) for o in out)
     single = tc.timecorr(data[0], cfun=None, weights_params={"var": 9})
     assert np.allclose(out[0], single)
+
+
+def test_empty_list_raises_a_clear_value_error():
+    # R-J (M13): it raised IndexError
+    import timecorr as tc
+
+    with pytest.raises(ValueError, match="at least one subject"):
+        timecorr([])
+    with pytest.raises(ValueError, match="at least one subject"):
+        tc.features([])

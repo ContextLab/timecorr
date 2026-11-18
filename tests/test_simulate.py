@@ -670,3 +670,66 @@ def test_truth_unscaled_without_amplitude_noise():
         order=2, amplitude_noise=0.0,
     )
     assert np.array_equal(truth["corrs"], truth["requested"])
+
+
+# ------------------------------------------ shared signal across subjects (R-K)
+
+
+def test_subject_noise_gives_subjects_a_shared_signal():
+    # One draw from the ramping template is shared by all subjects; each adds
+    # Gaussian noise with SD 0.5 x each feature's SD, so the cross-subject
+    # correlation of a feature is 1 / (1 + 0.5**2) = 0.8.  Each pair's
+    # estimate has a (delta-method) standard error se; the mean over pairs
+    # has a standard error of at most the largest se.
+    S, T, K = 8, 2000, 6
+    data = tc.simulate_data(datagen="ramping", S=S, T=T, K=K, set_random_seed=3,
+                            subject_noise=0.5)
+    for i in range(K):
+        stats = [_pearson_with_se(data[0][:, i], data[s][:, i]) for s in range(1, S)]
+        r = np.mean([x[0] for x in stats])
+        se = max(x[1] for x in stats)
+        assert abs(r - 0.8) < 4 * se, (i, r, se)
+
+
+def test_subject_noise_none_keeps_independent_draws():
+    S, T, K = 8, 2000, 6
+    data = tc.simulate_data(datagen="ramping", S=S, T=T, K=K, set_random_seed=3)
+    same = tc.simulate_data(datagen="ramping", S=S, T=T, K=K, set_random_seed=3,
+                            subject_noise=None)
+    for a, b in zip(data, same):
+        np.testing.assert_array_equal(a, b)
+    # independent draws: cross-subject correlations are N(0, 1/T)
+    for i in range(K):
+        r = np.mean([np.corrcoef(data[0][:, i], data[s][:, i])[0, 1] for s in range(1, S)])
+        assert abs(r) < 4 / np.sqrt(T), (i, r)
+
+
+def test_subject_noise_zero_gives_identical_subjects():
+    data = tc.simulate_data(S=3, T=50, K=4, set_random_seed=1, subject_noise=0.0)
+    np.testing.assert_array_equal(data[0], data[1])
+    np.testing.assert_array_equal(data[0], data[2])
+
+
+@pytest.mark.parametrize("bad", [-0.1, np.nan, np.inf, "0.5"])
+def test_subject_noise_must_be_a_non_negative_number(bad):
+    with pytest.raises(ValueError, match="subject_noise"):
+        tc.simulate_data(S=2, T=20, K=4, subject_noise=bad)
+
+
+def test_subject_noise_is_for_order_one():
+    with pytest.raises(ValueError, match="subject_noise"):
+        tc.simulate_data(S=2, T=20, K=8, order=2, subject_noise=0.5)
+
+
+def test_simulate_k1_message_names_the_order1_requirement():
+    # R-J (M13): the order-1 message no longer quotes the order > 1 formula
+    with pytest.raises(ValueError, match="min_features") as info:
+        tc.simulate_data(K=1)
+    assert "K >= 2" in str(info.value)
+    assert "2**(order-1)" not in str(info.value)
+
+
+def test_carrier_columns_k_defaults_like_carrier_reducer():
+    blocks = [[0, 1], [2, 3]]
+    np.testing.assert_array_equal(tc.carrier_columns(blocks, 1),
+                                  tc.carrier_columns(blocks, 1, 4))

@@ -169,6 +169,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for structure embedded at order 3, PCA's contrast was not distinguishable
   from its noise control (-0.00 versus 0.02, Welch p = 0.20; 0.48 with
   `carrier_reducer`). Orders above 3 were not measured.
+- `simulate_data(subject_noise=...)` (order 1): all subjects share one draw
+  from the template plus independent Gaussian noise whose standard deviation
+  is `subject_noise` times each feature's standard deviation, so ISFC has a
+  shared signal to find (a feature's cross-subject correlation is about
+  `1 / (1 + subject_noise**2)`). The default, None, keeps independent draws.
+- `carrier_columns(blocks, level, K=None)`: `K` defaults to
+  `blocks.max() + 1`, as in `carrier_reducer`.
 - New tutorial (`docs/tutorial/higher_order_tutorial.ipynb`) and gallery
   examples for one-sided kernels and recovery of simulated structure by order.
   The other three tutorials and the existing examples were updated to run on
@@ -224,7 +231,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `random_corrmat` returned matrices that were not positive semidefinite;
   block lengths came from a float; the `simulate_data` docstring described the
   wrong return values.
-- `format_data` failed on read-only pandas 3 arrays.
+- `format_data` failed on read-only pandas 3 arrays. An empty list (for
+  example `timecorr([])`) raises a clear `ValueError` (it raised
+  `IndexError`), and `simulate_data(K=1)` says that order 1 needs `K >= 2`
+  (the message quoted the formula for higher orders).
 - `folding_levels` and `folding_levels_ec` failed for scalar settings and
   `rfun=None`.
 - Importing timecorr changed matplotlib's global font sizes (to 18-24

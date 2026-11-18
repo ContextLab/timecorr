@@ -640,9 +640,9 @@ def format_data(data, fill_nan=True):
     Raises
     ------
     ValueError
-        If a DataFrame has a non-numeric column, if an input is 0-dimensional
-        or has more than two dimensions, or if subjects differ in their
-        number of timepoints or features.
+        If ``data`` is an empty list, a DataFrame has a non-numeric column,
+        an input is 0-dimensional or has more than two dimensions, or
+        subjects differ in their number of timepoints or features.
 
     Examples
     --------
@@ -658,6 +658,8 @@ def format_data(data, fill_nan=True):
     (5, 1)
     """
     items = list(data) if isinstance(data, (list, tuple)) else [data]
+    if not items:
+        raise ValueError("data must contain at least one subject; got an empty list.")
     for x in items:
         _check_numeric(x)
 

@@ -339,6 +339,12 @@ def min_features(order, p=3):
 
 def _template_size(K, order):
     """p = K / 2**(order-1), validated."""
+    if order == 1 and K < 2:
+        raise ValueError(
+            f"order=1 needs K >= 2 features (a template of at least 2 features); "
+            f"got K={K}. min_features(1) = 3 gives a template whose correlation "
+            "matrix has more than one entry."
+        )
     m = 2 ** (order - 1)
     if K % m or K // m < 2:
         raise ValueError(
@@ -363,9 +369,13 @@ _ORDER3 = (
 )
 
 
-def _generate(datagen, p, order, S, T, B, amplitude_noise, rng):
+def _generate(datagen, p, order, S, T, B, amplitude_noise, rng, subject_noise=None):
     """
     S subjects sharing one template; returns (list of (T, p * m) arrays, truth).
+
+    With ``subject_noise`` (order 1 only) the subjects share one draw from the
+    template and each adds independent Gaussian noise whose SD is
+    ``subject_noise`` times each feature's SD in that draw.
     """
     if datagen not in _DATAGENS:
         raise ValueError(f"datagen must be one of {_DATAGENS}; got {datagen!r}.")
@@ -380,7 +390,11 @@ def _generate(datagen, p, order, S, T, B, amplitude_noise, rng):
     }
     if order == 1:
         mean = 0.0 if datagen == "random" else 0.1
-        return [_gaussian(R, mean, rng) for _ in range(S)], truth
+        if subject_noise is None:
+            return [_gaussian(R, mean, rng) for _ in range(S)], truth
+        shared = _gaussian(R, mean, rng)
+        sd = subject_noise * shared.std(axis=0)
+        return [shared + sd * rng.standard_normal(shared.shape) for _ in range(S)], truth
 
     G, achieved = _latent_sign_correlation(R)
     corrs = _vectorize(achieved)
@@ -457,6 +471,7 @@ def simulate_data(
     B=5,
     order=1,
     amplitude_noise=0.2,
+    subject_noise=None,
 ):
     """
     Simulate timeseries data with a known dynamic correlation matrix.
@@ -475,7 +490,9 @@ def simulate_data(
 
     All subjects share the template (and, for ``order > 1``, the block layout and
     the latent signs ``A_j(t)``); everything else is drawn independently per
-    subject.
+    subject.  For ``order=1`` that means the subjects' samples are independent
+    draws from the same template, so there is no signal shared across
+    subjects for ISFC to find; ``subject_noise`` gives them one.
 
     Parameters
     ----------
@@ -508,6 +525,17 @@ def simulate_data(
         ``exp(amplitude_noise / sqrt(m) * z)`` with independent ``z ~ N(0, 1)``,
         so the data are not binary and ``log|product|`` is
         ``N(0, amplitude_noise**2)``.  Ignored for ``order=1``.  Default: 0.2.
+    subject_noise : float or None
+        For ``order=1`` only.  None (default): each subject's samples are an
+        independent draw from the template.  A non-negative number: all
+        subjects share one draw from the template, and each adds independent
+        Gaussian noise whose standard deviation is ``subject_noise`` times
+        each feature's standard deviation in the shared draw.  A feature's
+        correlation across subjects is then about
+        ``1 / (1 + subject_noise**2)`` (0.8 for 0.5), and within a subject
+        the template's off-diagonal correlations are divided by about
+        ``1 + subject_noise**2`` (``corrs`` is the template, the correlation
+        of the shared draw).
 
     Returns
     -------
@@ -538,8 +566,10 @@ def simulate_data(
     ------
     ValueError
         If ``order``, ``S``, ``T`` or ``B`` is not a positive integer, ``datagen``
-        is unknown, ``amplitude_noise`` is negative, or ``K`` does not fit the
-        order (the message gives ``min_features(order)``).
+        is unknown, ``amplitude_noise`` is negative, ``subject_noise`` is not
+        None or a non-negative number (or is given with ``order > 1``), or
+        ``K`` does not fit the order (the message gives
+        ``min_features(order)``).
     TypeError
         If ``set_random_seed`` is not a bool or an integer.
 
@@ -569,6 +599,12 @@ def simulate_data(
     ...                                T=50, K=8, order=2)
     >>> data.shape, truth["corrs"].shape, truth["blocks"].tolist()
     ((50, 8), (50, 10), [[0, 1], [2, 3], [4, 5], [6, 7]])
+    >>> import numpy as np
+    >>> subjects = tc.simulate_data(S=4, T=500, K=3, set_random_seed=0,
+    ...                             subject_noise=0.5)
+    >>> r = np.corrcoef(subjects[0][:, 0], subjects[1][:, 0])[0, 1]
+    >>> bool(0.7 < r < 0.9)  # about 1 / (1 + 0.5**2) = 0.8
+    True
     """
     if (
         not isinstance(order, numbers.Integral)
@@ -580,6 +616,23 @@ def simulate_data(
     if datagen not in _DATAGENS:
         raise ValueError(f"datagen must be one of {_DATAGENS}; got {datagen!r}.")
     S, T, amplitude_noise = _check_common(S, T, amplitude_noise)
+    if subject_noise is not None:
+        if (
+            not isinstance(subject_noise, numbers.Real)
+            or isinstance(subject_noise, bool)
+            or not np.isfinite(subject_noise)
+            or subject_noise < 0
+        ):
+            raise ValueError(
+                "subject_noise must be None or a non-negative number; got "
+                f"{subject_noise!r}."
+            )
+        if order > 1:
+            raise ValueError(
+                "subject_noise applies to order=1 only (for order > 1 the "
+                f"subjects already share the latent signs); got order={order}."
+            )
+        subject_noise = float(subject_noise)
     B = _check_positive_int("B", B)
     K = _check_positive_int("K", K)
     p = _template_size(K, order)
@@ -590,7 +643,9 @@ def simulate_data(
     if order >= 3:
         warnings.warn(_ORDER3.format(order=order), UserWarning, stacklevel=2)
 
-    data, truth = _generate(datagen, p, order, S, T, B, amplitude_noise, rng)
+    data, truth = _generate(
+        datagen, p, order, S, T, B, amplitude_noise, rng, subject_noise
+    )
     if order == 1:
         truth = truth["corrs"]
         truths = [truth] + [truth.copy() for _ in range(S - 1)]
@@ -803,7 +858,7 @@ def _check_K(blocks, K):
     return K
 
 
-def carrier_columns(blocks, level, K):
+def carrier_columns(blocks, level, K=None):
     """
     Columns of each block's carriers in unreduced delta features.
 
@@ -821,8 +876,11 @@ def carrier_columns(blocks, level, K):
         ``truth["blocks"]``; ``m`` is a power of 2.
     level : int
         Carrier order, from 0 to ``log2(m)``.
-    K : int
-        Number of columns in the data.
+    K : int, optional
+        Number of columns in the data.  Default: ``blocks.max() + 1`` (the data
+        are exactly the blocks, as ``simulate_data`` returns them), as in
+        ``carrier_reducer``; pass the full width for data from
+        ``simulate_multi_order``.
 
     Returns
     -------

@@ -670,3 +670,11 @@ def test_wisfc_default_weights_with_too_few_features_exclude_the_subject(K):
     ref = wisfc(data, w, subject_weights=1 - np.eye(3))
     for o, r in zip(out, ref):
         assert np.array_equal(o, r)
+
+
+def test_tstat_combine_needs_at_least_two_subjects():
+    one = [np.full((4, 3), 0.5)]
+    with pytest.raises(ValueError, match="at least two"):
+        tc.tstat_combine(one)
+    with pytest.raises(ValueError, match="at least two"):
+        tc.tstat_combine([])

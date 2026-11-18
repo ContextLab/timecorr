@@ -133,9 +133,9 @@ Distances ``|t - tau|`` are in samples.
      - :func:`eye_weights`.  No keys: the delta kernel has no parameters.
    * - :data:`t_params`
      - ``{"df": 100}``
-     - :func:`t_weights`.  ``df``: degrees-of-freedom parameter of the
-       t-shaped kernel; smaller values give heavier tails (see
-       :func:`t_weights` for the formula).
+     - :func:`t_weights`.  ``df``: degrees of freedom of Student's t
+       density (unit scale, lags in samples); smaller values give heavier
+       tails.
    * - :data:`mexican_hat_params`
      - ``{"sigma": 10}``
      - :func:`mexican_hat_weights`.  ``sigma``: width of the wavelet, in

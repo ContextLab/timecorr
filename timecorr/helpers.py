@@ -32,8 +32,8 @@ gaussian_params = {"var": 100}
 laplace_params = {"scale": 100}
 #: Default ``params`` of :func:`eye_weights` (the delta kernel has no parameters).
 eye_params = {}
-#: Default ``params`` of :func:`t_weights`: ``df``, the degrees-of-freedom
-#: parameter of the t-shaped kernel.
+#: Default ``params`` of :func:`t_weights`: ``df``, the degrees of freedom of
+#: Student's t density.
 t_params = {"df": 100}
 #: Default ``params`` of :func:`mexican_hat_weights`: ``sigma``, the width of
 #: the wavelet in samples.
@@ -297,18 +297,18 @@ def uniform_weights(T, params=uniform_params, direction=None, include_zero=True)
 
 def t_weights(T, params=t_params, direction=None, include_zero=True):
     """
-    Generate a t-shaped weighting function for dynamic correlations.
+    Generate Student's t weighting function for dynamic correlations.
 
     The weight given to timepoint ``tau`` when estimating at timepoint ``t`` is
+    Student's t density (unit scale) evaluated at the lag ``t - tau``:
 
-    ``weights[t, tau] = c * (1 + (t - tau)**2 / df) ** (-(df - 1) / 2)``,
+    ``weights[t, tau] = c * (1 + (t - tau)**2 / df) ** (-(df + 1) / 2)``,
 
-    where ``c = gamma((df + 1) / 2) / (sqrt(df * pi) * gamma(df / 2))`` is the
-    normalizing constant of Student's t density.  The exponent is
-    ``-(df - 1) / 2``, not the ``-(df + 1) / 2`` of Student's t density, so
-    the kernel has heavier tails than that density with the same ``df`` (for
-    ``df=1`` every weight equals ``c``, a uniform kernel).  As ``df`` grows the
-    kernel approaches ``c * exp(-(t - tau)**2 / 2)``.
+    with ``c = gamma((df + 1) / 2) / (sqrt(df * pi) * gamma(df / 2))``
+    (``scipy.stats.t.pdf(t - tau, df)``).  Smaller ``df`` gives heavier tails
+    (``df=1`` is the Cauchy density); as ``df`` grows the kernel approaches the
+    standard normal density.  Because the scale is fixed at one sample, this
+    kernel is narrow: most of its weight lies within a few samples of ``t``.
 
     Parameters
     ----------
@@ -318,8 +318,8 @@ def t_weights(T, params=t_params, direction=None, include_zero=True):
         Kernel parameters.  Default: ``t_params`` (``{'df': 100}``); None also
         uses ``t_params``.
 
-        - ``df`` : float, the degrees-of-freedom parameter in the formula
-          above (distances in samples).  Smaller values give heavier tails.
+        - ``df`` : float, the degrees of freedom of the t density (distances
+          in samples).  Smaller values give heavier tails.
     direction : {None, 'backward', 'forward'}, optional
         If 'backward', only timepoints at or before each timepoint receive
         weight (``weights[t, tau] = 0`` for ``tau > t``); if 'forward', only
@@ -353,7 +353,7 @@ def t_weights(T, params=t_params, direction=None, include_zero=True):
         gamma((params["df"] + 1) / 2),
         np.sqrt(params["df"] * math.pi) * gamma(params["df"] / 2),
     )
-    c2 = np.divide(-params["df"] + 1, 2)
+    c2 = np.divide(-(params["df"] + 1), 2)
 
     sqdiffs = toeplitz(np.arange(T) ** 2)
     w = np.multiply(c1, np.power(1 + np.divide(sqdiffs, params["df"]), c2))
@@ -1344,12 +1344,17 @@ def tstat_combine(corrs, return_pvals=False):
         Only with ``return_pvals=True``: the two-sided p-values (all NaN for an
         array input).
 
+    Raises
+    ------
+    ValueError
+        If ``corrs`` is a list of fewer than two matrices (a t statistic across
+        subjects needs at least two).
+
     Warns
     -----
     RuntimeWarning
-        From ``scipy.stats.ttest_1samp`` when a t statistic is undefined: with a
-        one-element list (every statistic is NaN) or where all matrices hold
-        the same value.
+        From ``scipy.stats.ttest_1samp`` where every matrix holds the same
+        value (the t statistic there is infinite or NaN).
 
     Examples
     --------
@@ -1365,6 +1370,11 @@ def tstat_combine(corrs, return_pvals=False):
     if not (type(corrs) == list):
         ts = corrs
         ps = np.nan * np.zeros_like(corrs)
+    elif len(corrs) < 2:
+        raise ValueError(
+            "tstat_combine needs at least two subjects (a t statistic across "
+            f"subjects is undefined for fewer); got a list of {len(corrs)}."
+        )
     else:
         stacked = np.stack(corrs, axis=2)
         outside = np.abs(stacked) > 1
@@ -1642,9 +1652,9 @@ def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=None):
     Returns
     -------
     numpy.ndarray or list of numpy.ndarray
-        The smoothed data, the same shape (and container) as ``w``.  The output
-        has the dtype of ``w``, so an integer array gives truncated integer
-        values; pass floats.
+        The smoothed data, the same shape (and container) as ``w``.  Floating
+        point input keeps its dtype; integer or boolean input gives float64
+        output (the same values as smoothing the input converted to floats).
 
     Raises
     ------
@@ -1686,7 +1696,10 @@ def smooth(w, windowsize=10, kernel_fun=laplace_weights, kernel_params=None):
         kernel = k[int(np.floor(windowsize / 2)), :]
 
     kernel /= kernel.sum()
-    x = np.zeros_like(w)
+    # floating-point output: an integer input must not truncate the result
+    x = np.zeros(
+        w.shape, dtype=w.dtype if np.issubdtype(w.dtype, np.inexact) else np.float64
+    )
     # The kernel is row ``center`` of the window's kernel matrix, so entry j weights
     # the sample j - center steps away: x[t] = sum_j kernel[j] * w[t + j - center].
     # That is a convolution with the reversed row (this matters for one-sided

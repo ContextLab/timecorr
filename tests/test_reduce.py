@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 from sklearn.decomposition import PCA
 
-from timecorr.helpers import mat2vec, pca_decoder, reduce, vec2mat
+from timecorr.helpers import mat2vec, pca_decoder, reduce, smooth, vec2mat
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "graph_reference.npz")
 
@@ -266,3 +266,12 @@ def test_dict_rfun_with_conflicting_params_and_kwargs_raises():
     rfun = {"model": "PCA", "params": {"whiten": True}, "kwargs": {"whiten": False}}
     with pytest.raises(ValueError, match="whiten"):
         reduce(a, rfun=rfun, ndims=3)
+
+
+def test_smooth_integer_input_matches_float_input():
+    # integer data must not be truncated by an integer output array
+    x = np.arange(20).reshape(10, 2) * 3
+    out = smooth(x, windowsize=3)
+    assert np.issubdtype(out.dtype, np.floating)
+    assert np.allclose(out, smooth(x.astype(float), windowsize=3), rtol=0, atol=1e-12)
+    assert not np.allclose(out, np.trunc(out))

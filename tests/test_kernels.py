@@ -171,3 +171,31 @@ def test_wcorr_reads_kernel_by_row():
     b = rng.randn(30, 3)
     w = rng.rand(30, 30)
     assert not np.allclose(tc.wcorr(a, b, w), tc.wcorr(a, b, w.T))
+
+
+@pytest.mark.parametrize("df", [1, 5, 100])
+def test_t_weights_rows_are_the_student_t_density_of_the_lag(df):
+    # Each row is scipy's Student's t density evaluated at the lag t - tau.
+    from scipy.stats import t as student_t
+
+    n = 12
+    w = t_weights(n, {"df": df})
+    lags = np.subtract.outer(np.arange(n), np.arange(n))
+    assert np.allclose(w, student_t.pdf(lags, df), rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize("direction", [None, "backward", "forward"])
+def test_t_weights_flags_apply_to_the_student_t_density(direction):
+    from scipy.stats import t as student_t
+
+    n = 9
+    lags = np.subtract.outer(np.arange(n), np.arange(n))
+    full = student_t.pdf(lags, 5)
+    w = t_weights(n, {"df": 5}, direction=direction, include_zero=False)
+    keep = ~np.eye(n, dtype=bool)
+    if direction == "backward":
+        keep &= lags >= 0
+    elif direction == "forward":
+        keep &= lags <= 0
+    assert np.allclose(w[keep], full[keep], rtol=0, atol=1e-12)
+    assert np.all(w[~keep] == 0)

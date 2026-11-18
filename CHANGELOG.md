@@ -124,6 +124,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `t_weights` used the exponent `-(df - 1) / 2` with the normalizing constant
+  of Student's t density, so its rows were not a t density (with `df=1` every
+  weight was equal). Each row is now Student's t density of the lag,
+  `scipy.stats.t.pdf(t - tau, df)`, so `t_weights` results differ from 0.2.0.
+- `smooth` returned integer (truncated) values for integer input; it now
+  returns floating-point values equal to smoothing the input as floats.
+- `tstat_combine` with a one-element list returned NaN with scipy
+  `RuntimeWarning`s; it now raises `ValueError` (a t statistic across
+  subjects needs at least two).
 - `include_timepoints='pre'` used future timepoints and `'post'` past ones;
   both now mean what their names say (aliases of `'backward'` and
   `'forward'`).
@@ -171,9 +180,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `t_params`, `mexican_hat_params`, `uniform_params`, `boxcar_params`), which
   are listed in a table of their keys, default values and meanings, and
   `iseven` and `isodd`. Each kernel function's docstring names its default
-  dictionary and keys. The `t_weights` docstring now gives the kernel's
-  formula, whose exponent is `-(df - 1) / 2` rather than the `-(df + 1) / 2`
-  of Student's t density. `tests/test_api_docs.py` checks that every
+  dictionary and keys. `tests/test_api_docs.py` checks that every
   user-facing function has Parameters, Returns and Examples sections, that
   every user-facing name is listed on the API page, and that the parameter
   table matches the code.

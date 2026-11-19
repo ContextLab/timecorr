@@ -208,7 +208,16 @@ def _as_units(corrs, name):
                 f"{name}: each unit must be a 2-D (T, K(K+1)/2) array of "
                 f"vectorized correlations; got shape {u.shape}."
             )
+        if u.shape[0] < 1:
+            raise ValueError(
+                f"{name}: each unit needs at least one timepoint; got shape {u.shape}."
+            )
         V = u.shape[1]
+        if V < 1:
+            raise ValueError(
+                f"{name}: each unit needs at least one column (K(K+1)/2 for K >= 1 "
+                f"nodes); got shape {u.shape}."
+            )
         k = int(round(0.5 * (np.sqrt(8 * V + 1) - 1)))
         if k * (k + 1) // 2 != V:
             raise ValueError(
@@ -220,10 +229,10 @@ def _as_units(corrs, name):
                 f"{name}: every unit must have the same number of nodes; got "
                 f"{K} and {k}."
             )
-        if np.isnan(u).any():
+        if not np.isfinite(u).all():
             raise ValueError(
-                f"{name}: the correlations contain NaN; the summaries need "
-                "finite correlations."
+                f"{name}: the correlations contain NaN or infinite values (the "
+                "diagonal included); the summaries need finite correlations."
             )
         K = k
         out.append(u)
@@ -275,10 +284,11 @@ class _Summary:
         Raises
         ------
         ValueError
-            If the input is not vectorized correlations, contains NaN, if
-            communities are needed with K < 4, ``n`` larger than K // 2,
-            ``n=None`` without ``null_threshold``, or if the clustering leaves
-            no community with at least 2 members.
+            If the input is not vectorized correlations, has no timepoints,
+            contains NaN or infinite values, if ``null_threshold`` is given
+            and not finite, if communities are needed with K < 4, ``n``
+            larger than K // 2, ``n=None`` without ``null_threshold``, or if
+            the clustering leaves no community with at least 2 members.
         """
         units, K, _ = _as_units(corrs, type(self).__name__)
         self._check_fit(K, null_threshold)
@@ -295,6 +305,10 @@ class _Summary:
         """Raise ``ValueError`` for a fit to K nodes that cannot be done (see ``fit``)."""
         name = type(self).__name__
         needs = self._needs_communities
+        if null_threshold is not None and not np.isfinite(float(null_threshold)):
+            raise ValueError(
+                f"{name}: null_threshold must be finite; got {null_threshold!r}."
+            )
         if needs and K < 4:
             raise ValueError(
                 f"{self._what()} needs K >= 4 nodes (got K = {K}); use "
@@ -381,7 +395,7 @@ class _Summary:
         ------
         ValueError
             If the instance was never fitted, K differs from the fit's, or
-            the input contains NaN.
+            the input has no timepoints or contains NaN or infinite values.
 
         Warns
         -----
@@ -495,8 +509,8 @@ class WeightedStrength(_Summary):
     units: the weights (and communities) come from the data being summarized.
     ``fit`` and ``transform`` separate the two.  The summary of a unit
     returned by a combine function other than ``null_combine`` describes the
-    combined correlations.  The correlations must be finite (NaN raises
-    ``ValueError``).
+    combined correlations.  The correlations must be finite (NaN or infinite
+    values, on the diagonal too, raise ``ValueError``).
 
     Examples
     --------
@@ -622,7 +636,8 @@ class Communities(_Summary):
     clustering found.  Calling the instance fits to the given units and
     transforms the same units; the communities come from the data being
     summarized.  ``fit`` and ``transform`` separate the two.  The
-    correlations must be finite (NaN raises ``ValueError``).
+    correlations must be finite (NaN or infinite values, on the diagonal
+    too, raise ``ValueError``).
 
     Examples
     --------

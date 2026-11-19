@@ -638,3 +638,45 @@ def test_named_summaries_match_the_recognised_names():
     from timecorr.helpers import _SUMMARY_NAMES
 
     assert set(sm._NAMED) == set(_SUMMARY_NAMES)
+
+
+# ----------------------------------------------------------------------------
+# input validation (review item 7)
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [tc.WeightedStrength(), tc.WeightedStrength(signed=True), tc.Communities(n=2)],
+    ids=["ws", "ws-signed", "comm"],
+)
+def test_non_finite_and_empty_inputs_raise(summary):
+    K = 5
+    v = _random_corr_series(K, 60, seed=3)
+    inf = v.copy()
+    inf[7, 9] = np.inf
+    # the diagonal (columns 0..K-1 of mat2vec) is ignored by the formulas,
+    # but 0 * inf there would still give NaN outputs
+    diag = v.copy()
+    diag[5, 2] = -np.inf
+    for bad in (np.full((2, 15), np.inf), inf, diag):
+        with pytest.raises(ValueError, match="finite"):
+            summary.fit(bad)
+    with pytest.raises(ValueError, match="timepoint"):
+        summary.fit(np.zeros((0, 15)))
+    with pytest.raises(ValueError, match="column"):
+        summary.fit(np.zeros((10, 0)))
+    fitted = summary.fit(v)
+    for bad in (inf, diag):
+        with pytest.raises(ValueError, match="finite"):
+            fitted.transform(bad)
+    with pytest.raises(ValueError, match="timepoint"):
+        fitted.transform(np.zeros((0, 15)))
+
+
+def test_non_finite_null_threshold_raises():
+    v = _random_corr_series(8, 80, seed=4)
+    for threshold in (np.nan, np.inf, -np.inf):
+        with pytest.raises(ValueError, match="null_threshold"):
+            tc.Communities().fit(v, null_threshold=threshold)
+    tc.Communities().fit(v, null_threshold=0.0)

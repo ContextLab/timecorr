@@ -835,3 +835,20 @@ def test_weighted_strength_width_is_known_in_advance():
     assert _known_width("weighted_strength_split", 7, None) == 14
     assert _known_width(tc.Communities(n=2), 7, None) is None
     assert _known_width(lambda c: c, 7, None) is None
+
+
+# Task 8 review: delta_weights_params alone without "var" ---------------------
+
+
+@pytest.mark.parametrize("params", [{"scale": 5}, {}], ids=["scale", "empty"])
+def test_default_gaussian_feeding_params_need_var(params):
+    # gaussian_weights itself needs "var" (only None selects its defaults)
+    with pytest.raises(KeyError):
+        tc.gaussian_weights(10, params)
+    data = noise()
+    with pytest.raises(ValueError, match='default Gaussian feeding kernel needs "var"'):
+        tc.features(data, order=1, cfun=tc.autofc, return_delta=True,
+                    delta_rfun="weighted_strength", delta_weights_params=params)
+    with pytest.raises(ValueError, match='default Gaussian feeding kernel needs "var"'):
+        two_path_step(data, cfun=tc.autofc, delta_rfun="weighted_strength",
+                      delta_weights_params=params)

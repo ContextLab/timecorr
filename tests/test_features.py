@@ -724,7 +724,8 @@ def test_events_order_one_masks_only_order_one_analysis():
     X, D = legacy_features(data, order=2, return_delta=True, events={1: B}, **EVENTS_KW)
     assert_list_equal(X[1], tc.timecorr(data, events=B, **EVENTS_KW))
     assert not np.allclose(X[1][0], X0[1][0])
-    # the delta path is never masked, so D_1 and therefore X_2 are unchanged
+    # the eye feeding path of the original pipeline (legacy_features) is
+    # never masked, so D_1 and therefore X_2 are unchanged
     assert_list_equal(D[1], D0[1])
     assert_list_equal(D[2], D0[2])
     assert_list_equal(X[2], X0[2])

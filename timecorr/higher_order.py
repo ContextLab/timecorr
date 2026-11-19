@@ -987,6 +987,13 @@ def _feeding_kernel(weights_function, weights_params, default=None):
             weights_function = eye_weights
         elif weights_params is None:
             return gaussian_weights, dict(_DEFAULT_FEEDING_PARAMS)
+        elif not isinstance(weights_params, dict) or "var" not in weights_params:
+            raise ValueError(
+                'delta_weights_params without delta_weights_function: the default '
+                'Gaussian feeding kernel needs "var" (its variance in squared '
+                f"samples, for example {{'var': 25}}); got {weights_params!r}. "
+                "Pass delta_weights_function to use another kernel's parameters."
+            )
         else:
             return gaussian_weights, weights_params
     if not callable(weights_function):
@@ -1095,7 +1102,8 @@ def two_path_step(
     delta_weights_params : dict or None
         Parameters of the feeding kernel (keyword-only).  With
         ``delta_weights_function=None`` they are the parameters of
-        ``gaussian_weights`` (None: ``{"var": 25}``); with a given function,
+        ``gaussian_weights`` (None: ``{"var": 25}``; a dict without
+        ``"var"`` raises ``ValueError``); with a given function,
         None means that function's own defaults; with ``eye_weights``, which
         takes no parameters, they must be None (``ValueError`` otherwise).
         Default: None.
@@ -1150,7 +1158,9 @@ def two_path_step(
         map, or an order map with a key that is not a positive integer or a
         value that is not a reducer; if ``ndims`` is not a positive integer,
         or is given with a summary on either path (with the defaults, at
-        orders 2 and above); if the default feeding reducer
+        every order: the feeding reducer is ``Communities()`` at order 1 and
+        the analysis reducer a summary from order 2); if the default
+        feeding reducer
         (``delta_rfun="auto"``) gets fewer than 4 features or fewer than 40
         timepoints (the message names ``delta_rfun="weighted_strength"`` and
         the original pipeline's settings); for a ``Communities`` (or split
@@ -1477,7 +1487,9 @@ def features(
         object.  Default: "auto".
     delta_rfun : None, str, dict, or callable
         Feeding-path reducer, with the same forms as ``rfun``; here
-        ``"auto"`` is ``"communities"`` at every order.  None (also as an
+        ``"auto"`` is ``Communities()`` at every order (automatic count; at
+        least 4 features and 40 timepoints, otherwise ``ValueError`` naming
+        the alternatives).  None (also as an
         order map value) is the same as ``rfun`` at that order.  A
         delta-kernel co-fluctuation matrix ``z z^T`` has rank one, so with
         ``eye_weights`` eigenvector centrality equals ``|z| / ||z||`` and the
@@ -1560,7 +1572,8 @@ def features(
         Parameters of the feeding kernel (keyword-only).  With
         ``delta_weights_function=None`` they are the parameters of
         ``gaussian_weights`` (None: ``{"var": 25}``, standard deviation 5
-        samples); with a given function, None means that function's own
+        samples; a dict without ``"var"`` raises ``ValueError``); with a
+        given function, None means that function's own
         defaults; with ``eye_weights``, which takes no parameters, they must
         be None (``ValueError`` otherwise).  Default: None.
 
@@ -1605,7 +1618,9 @@ def features(
         a value that is not a reducer (all are checked before anything is
         computed, even when a reducer would not be called); if ``ndims`` is
         not a positive integer, or is given with a summary on a computed
-        step (with the defaults, whenever ``order >= 2``); if the default
+        step (with the defaults, whenever ``order >= 2``, and at
+        ``order=1`` with ``return_delta=True``, which computes the order-1
+        feeding step and its reducer ``Communities()``); if the default
         feeding reducer (``delta_rfun="auto"``) gets fewer than 4 features
         or fewer than 40 timepoints at a computed feeding step (the message
         names ``delta_rfun="weighted_strength"`` and the original pipeline's

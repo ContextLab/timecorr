@@ -14,8 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `WeightedStrength(signed=True)` at orders 2 and above),
   `delta_rfun="auto"` (`Communities()`, with the number of communities
   counted with a shift null) and a Gaussian feeding kernel with variance 25
-  (`delta_weights_function=None`; standard deviation 5 samples). Order-1
-  outputs are unchanged; orders 2 and above differ. The original two-path
+  (`delta_weights_function=None`; standard deviation 5 samples). `X[1]` is
+  unchanged; `D[1]` (`return_delta=True`) and orders 2 and above differ.
+  `rfun=None` alone no longer leaves the pipeline unreduced: the feeding
+  path is still reduced by `Communities()`; `rfun=None, delta_rfun=None`
+  reduces neither path. The original two-path
   pipeline of Owen, Chang & Manning (2021, Fig. 10), with co-fluctuations on
   the feeding path and PCA on both paths (the defaults of `features` earlier
   in the development of this release, commit d4bb5ba), is
@@ -23,8 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The default feeding reducer needs at least 4 features and 40 timepoints at
   every feeding step that is computed; otherwise `ValueError` names
   `delta_rfun="weighted_strength"` (any number of features and timepoints)
-  and the original pipeline's settings. `ndims` with the defaults at
-  `order >= 2` raises `ValueError`, because the order-2 reducer is a summary.
+  and the original pipeline's settings. `ndims` with the defaults raises
+  `ValueError` in `features` at `order >= 2` (the order-2 analysis reducer
+  is a summary) and at `order=1` with `return_delta=True` (the order-1
+  feeding reducer is `Communities()`), and in `two_path_step` at every
+  order.
   `delta_weights_params` without `delta_weights_function` sets the
   parameters of the Gaussian feeding kernel. The decoders are unchanged
   (co-fluctuations on the path that feeds the next level).
@@ -171,8 +177,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   order. With `eye_weights` as the feeding kernel (the original pipeline)
   they are unblurred co-fluctuations, so each order is blurred by the kernel
   once. Separate reducers
-  for the two paths (`rfun`, `delta_rfun`); `rfun=None` runs without
-  reduction, guarded by an estimate of each step's peak memory for all
+  for the two paths (`rfun`, `delta_rfun`); `rfun=None, delta_rfun=None`
+  runs without reduction, guarded by an estimate of each step's peak memory for all
   subjects together (`max_memory_gb`, default 4 GB; None checks nothing) that
   raises `MemoryError` before allocating. `rfun` and `delta_rfun` are validated before anything is
   computed (also a `delta_rfun` that a run would not call), and `ndims` is
@@ -180,7 +186,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every subject's results, the `T x T` kernels and the block temporaries; it
   does not count reducers or `combine` functions other than `null_combine`.
 - `timecorr.higher_order.two_path_step` (one order of the pipeline) and
-  `timecorr.higher_order.estimate_memory_gb`.
+  `timecorr.higher_order.estimate_memory_gb` (keyword `delta_weights_function`:
+  with None, the default Gaussian feeding kernel, or any kernel other than
+  `eye_weights`, the feeding path's block temporaries are counted).
 - One-sided kernels: `tc.one_sided`; `direction` (`'backward'`, `'forward'`)
   and `include_zero` arguments on every `*_weights` function;
   `include_timepoints='backward'` / `'forward'` and `include_zero` on
@@ -263,7 +271,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and is shaped by `include_timepoints`, `include_zero` and the events of
   each order.
   `rfun` and `delta_rfun` accept `"auto"` (analysis path: PCA at order 1 and
-  `WeightedStrength(signed=True)` above; delta path: `"communities"`) and
+  `WeightedStrength(signed=True)` above; delta path: `Communities()`) and
   dicts keyed by order. A step whose reducer is a summary, with
   `combine=null_combine` and `cfun` `autofc`, `isfc` or `wisfc`, is computed
   in blocks of nodes (streamed), sized to `max_memory_gb` (the estimator's

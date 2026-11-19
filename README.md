@@ -67,7 +67,7 @@ X = tc.features(subjects, order=3, weights_params={"var": 10},
 print(len(X), X[3][0].shape)  # 4 (100, 5): orders 0-3, each reduced (PCA) to 5 features
 ```
 
-In the original pipeline the analysis kernel is applied to the previous order's co-fluctuations (computed with a delta kernel, `eye_weights`), so every order is blurred by the kernel once, and the features of each order are reduced with PCA. `rfun=None` keeps every correlation (with `delta_rfun=None` on both paths; the number of features then grows from `K` to `K(K+1)/2` at each order, and `tc.features` raises `MemoryError` before a step whose estimated peak memory, for all subjects together, exceeds `max_memory_gb`, 4 GB by default).
+In the original pipeline the analysis kernel is applied to the previous order's co-fluctuations (computed with a delta kernel, `eye_weights`), so every order is blurred by the kernel once, and the features of each order are reduced with PCA. With `rfun=None` and `delta_rfun=None`, nothing is reduced and every correlation is kept (the number of features then grows from `K` to `K(K+1)/2` at each order, and `tc.features` raises `MemoryError` before a step whose estimated peak memory, for all subjects together, exceeds `max_memory_gb`, 4 GB by default).
 
 ## One-sided kernels
 

@@ -41,9 +41,12 @@ A ridge map from subject A's order-2 features to ``h`` (every 10th timepoint,
 z-scored columns, penalty equal to the mean eigenvalue of the Gram matrix) is
 applied to subject B's features.  The left panel shows the decoded and true
 ``h`` of one supergroup; the right panel shows the communities found at
-order 1 against the simulated modules.
+order 1 against the simulated modules.  The printed correlations are raw
+scores for one seed (seed 0), without a control; the development values over
+seeds, with controls from subjects with an independent ``h``, are in the
+docstring of ``tests/test_nested_recovery.py``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 29-93
+.. GENERATED FROM PYTHON SOURCE LINES 32-96
 
 
 
@@ -60,7 +63,7 @@ order 1 against the simulated modules.
     communities found at order 1: 18
     order-2 features per subject: (1000, 36)
     correlation of decoded and true h, per supergroup: [0.81 0.75 0.89 0.8  0.48 0.72]
-    mean: 0.74
+    mean (raw score, one seed): 0.74
 
 
 
@@ -116,7 +119,7 @@ order 1 against the simulated modules.
     decoded = B @ (A.T @ alpha)
     r = [np.corrcoef(decoded[:, c], y[:, c])[0, 1] for c in range(h.shape[1])]
     print("correlation of decoded and true h, per supergroup:", np.round(r, 2))
-    print("mean:", round(float(np.mean(r)), 2))
+    print("mean (raw score, one seed):", round(float(np.mean(r)), 2))
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4), gridspec_kw={"width_ratios": [2, 1]})
     t = np.arange(0, T, step)
@@ -139,7 +142,7 @@ order 1 against the simulated modules.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 3.576 seconds)
+   **Total running time of the script:** (0 minutes 3.090 seconds)
 
 
 .. _sphx_glr_download_auto_examples_plot_nested_recovery.py:

@@ -6,7 +6,7 @@
 
 Computation times
 =================
-**00:04.878** total execution time for 9 files **from auto_examples**:
+**00:04.392** total execution time for 9 files **from auto_examples**:
 
 .. container::
 
@@ -33,7 +33,7 @@ Computation times
      - Time
      - Mem (MB)
    * - :ref:`sphx_glr_auto_examples_plot_nested_recovery.py` (``plot_nested_recovery.py``)
-     - 00:03.576
+     - 00:03.090
      - 0.0
    * - :ref:`sphx_glr_auto_examples_plot_higher_order_recovery.py` (``plot_higher_order_recovery.py``)
      - 00:00.781

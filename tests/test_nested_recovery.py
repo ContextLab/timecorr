@@ -16,15 +16,21 @@ Decode protocol (``decode_score``): features subsampled every 10th
 timepoint, columns z-scored per subject, ridge map with penalty
 trace(Gram) / n fitted on subject A's order-2 features to ``h``, applied to
 subject B's features; score = mean over the columns of ``h`` of the
-correlation between prediction and ``h``.  The control applies the same map
-to subjects from independent calls of ``simulate_nested`` (each with its own
-``h``), scored against the first call's ``h``.  For the autofc cases the
+correlation between prediction and ``h``.  The control applies the same
+map to subjects from independent calls of ``simulate_nested`` (each with its
+own ``h``), scored against the first call's ``h``.  For the autofc cases the
 control is the mean over 4 control subjects (one call each, seeds
 seed + 1,000,000 + j), which go through the same ``features`` call as A and
-B (so the fitted communities and PCA space are shared by all six); one
-control subject per seed gave control scores with a standard deviation of
-about 0.2 over seeds (0.3 at T 3000), too variable for a 4-seed bound of
-0.15 (3 of 6 T 1000 cases exceeded it on the test seeds).  In the isfc case
+B, so the fitted communities and PCA space are shared by all six.
+Including the control subjects in the call changes the fitted communities
+and therefore the score: with global signal 0.5 and communities, the score
+was .617 +- .023 (adjusted Rand index .887) with one control subject in the
+call (3 subjects) and .677 +- .021 (index .956) with four (6 subjects), on
+the same 24 development seeds.  The first design used one control subject
+per seed; its control bound failed on asserted seeds (3 of 6 T 1000 cases
+on 30000-30003), as its development standard deviation predicts (about .2
+per seed at T 1000 and .3 at T 3000, so a 4-seed mean has a standard error
+of about .1 to .15), and it was replaced by the mean of 4.  In the isfc case
 the control group is computed in its own call, with the communities fitted
 on the data group (frozen, as in the spike).
 
@@ -44,6 +50,9 @@ standard error over seeds; the seed counts are given per row):
 | isfc, shared="order1", T 3000, tau3 40 (sd 11), held out, communities (slow) | 12 | .366 +- .027 | .053 +- .025 |
 | same, weighted strength (slow) | 12 | .261 +- .029 | .042 +- .018 |
 
+The isfc development controls (.053 +- .025 and .042 +- .018) are about 2
+standard errors above 0.
+
 Standard deviation of the control over seeds: .08-.12 at T 1000, .17 at
 T 3000.  The isfc rows use one control subject per seed (a group of 4
 simulated in its own call).  Controls from the inputs (sustained, T 1000,
@@ -51,7 +60,14 @@ simulated in its own call).  Controls from the inputs (sustained, T 1000,
 order-1 features (``order1_score``: ``features(order=1)``, PCA fitted on
 the two subjects) .001 +- .046 (sd .228), asserted on 16 seeds
 (30000-30015; measured -.098, standard error .064, sd .256) because 4 seeds were too few (4-seed
-mean -.28 when the order-1 features came from the 6-subject call).
+mean -.28 when the order-1 features came from the 6-subject call; that
+6-subject decode, computed by ``_development_table``, is .119 +- .052, sd
+.255, over the 24 development seeds).  Magnitude check
+(``order1_magnitudes``, 6-subject call, 24 development seeds): mean
+|score| .240 +- .028 for the shared-h subject and .213 +- .017 for the
+independent-h control subjects (difference .027 +- .034, sd .167); asserted
+on 30000-30015 that the difference is below 0.13 (about 3 standard errors
+at 16 seeds; measured .031).
 Adjusted Rand index of the order-1 communities against the modules: 1.000
 on all seeds (sustained, sign-flip, T 3000), .956 +- .005 with global
 signal 0.5 (not asserted).  Automatic count on independent autocorrelated
@@ -68,10 +84,10 @@ per seed (12 seeds, 4 control subjects each), so its standard error is about
 score .858 +- .016, control -.104 +- .046 (sd .131); weighted strength score
 .819 +- .029, control -.092 +- .056 (sd .158).
 
-K 702 (slow, 2 seeds, one control subject, ``max_memory_gb=4``, OMP 2, run
-alongside other jobs): seed 30000 score .825 (control -.014), peak resident
-memory growth 1.09 GB, wall 250 s; seed 30001 score .741 (control .320),
-growth 1.09 GB, wall 263 s.
+K 702 (slow, 2 seeds, ``max_memory_gb=4``, OMP 2; one control subject, not
+asserted): seed 30000 score .825 (control -.014), peak resident memory
+growth 1.08 GB, wall 91 s; seed 30001 score .741 (control .320), growth
+1.09 GB, wall 91 s (250 s and 263 s in an earlier run alongside other jobs).
 """
 
 import multiprocessing
@@ -279,6 +295,27 @@ def order1_score(seed, T=1000):
     return decode_score(X1[0], X1[1], truth["h"])
 
 
+def order1_magnitudes(seed, T=1000):
+    """Mean |score| of the order-1 decode (PCA fitted on all six subjects of
+    one call) for the shared-h subject B and for the 4 independent-h control
+    subjects: ``(|score(A -> B)|, mean_j |score(A -> N_j)|)``.  A signed mean
+    over seeds misses h carried with a subject-specific sign; the magnitudes
+    do not."""
+    gen = dict(T=T)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        data, truth = tc.simulate_nested(S=2, set_random_seed=seed, **gen)
+        others = [
+            tc.simulate_nested(S=1, set_random_seed=seed + CONTROL_OFFSET + j, **gen)[0][0]
+            for j in range(N_CONTROLS)
+        ]
+        X1 = tc.features([data[0], data[1]] + others, order=1, cfun=tc.autofc,
+                         weights_params={"var": wide_sd(T) ** 2}, rfun="auto")[1]
+    h = truth["h"]
+    return (abs(decode_score(X1[0], X1[1], h)),
+            float(np.mean([abs(decode_score(X1[0], N, h)) for N in X1[2:]])))
+
+
 def test_raw_input_does_not_carry_h():
     rows = [_cached_case("sustained, communities", s) for s in TEST_SEEDS]
     assert abs(np.mean([r["raw"] for r in rows])) < 0.15
@@ -289,6 +326,16 @@ def test_order1_features_do_not_carry_h():
     # control uses 16 seeds
     scores = [order1_score(s) for s in range(TEST_SEEDS[0], TEST_SEEDS[0] + 16)]
     assert abs(np.mean(scores)) < 0.15, scores
+
+
+def test_order1_features_do_not_carry_h_in_magnitude():
+    # development (24 seeds): |shared| .240 +- .028, |control| .213 +- .017,
+    # difference .027 +- .034 (sd .167, so se .042 at 16 seeds); margin 0.13
+    # is about 3 standard errors at 16 seeds
+    rows = np.array([order1_magnitudes(s)
+                     for s in range(TEST_SEEDS[0], TEST_SEEDS[0] + 16)])
+    diff = np.mean(rows[:, 0] - rows[:, 1])
+    assert diff < 0.13, (diff, rows.mean(0))
 
 
 def test_communities_recover_the_modules():
@@ -320,9 +367,11 @@ from test_nested_recovery import decode_score, wide_sd, CONTROL_OFFSET
 warnings.simplefilter("ignore")
 seed = {seed}
 data, truth = tc.simulate_nested(S=2, T=1000, nodes_per_module=39, set_random_seed=seed)
-other, _ = tc.simulate_nested(S=2, T=1000, nodes_per_module=39,
+other, _ = tc.simulate_nested(S=1, T=1000, nodes_per_module=39,
                               set_random_seed=seed + CONTROL_OFFSET)
 units = [data[0], data[1], other[0]]
+# ru_maxrss is the process's high-water mark (KB on Linux, bytes on macOS),
+# taken here after the simulation, so the growth below is that of features
 scale = 1 if sys.platform.startswith("linux") else 1 / 1024
 base = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * scale
 t = time.time()
@@ -345,6 +394,13 @@ print(json.dumps(dict(score=decode_score(X[2][0], X[2][1], h),
 def test_k702_streamed(seed):
     import json
 
+    from timecorr.higher_order import estimate_memory_gb
+
+    # the property the test exists for: these steps fit max_memory_gb=4 only
+    # when streamed, so completing under that budget implies they streamed
+    K, T, S = 702, 1000, 3
+    assert max(estimate_memory_gb(K, 2, T, S, streamed=True)) < 4
+    assert estimate_memory_gb(K, 1, T, S)[1] > 4
     code = _K702.format(tests=os.path.dirname(os.path.abspath(__file__)), seed=seed)
     out = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
                          check=True)

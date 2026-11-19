@@ -1,24 +1,18 @@
-timecorr.WeightedStrength
+﻿timecorr.WeightedStrength
 =========================
 
 .. currentmodule:: timecorr
 
 .. autoclass:: WeightedStrength
 
-   
-   .. automethod:: __init__
 
-   
+
    .. rubric:: Methods
 
    .. autosummary::
-   
-      ~WeightedStrength.__init__
+      :toctree:
+      :nosignatures:
+
+      ~WeightedStrength.__call__
       ~WeightedStrength.fit
       ~WeightedStrength.transform
-   
-   
-
-   
-   
-   

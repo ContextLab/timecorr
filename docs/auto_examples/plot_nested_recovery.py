@@ -23,7 +23,10 @@ A ridge map from subject A's order-2 features to ``h`` (every 10th timepoint,
 z-scored columns, penalty equal to the mean eigenvalue of the Gram matrix) is
 applied to subject B's features.  The left panel shows the decoded and true
 ``h`` of one supergroup; the right panel shows the communities found at
-order 1 against the simulated modules.
+order 1 against the simulated modules.  The printed correlations are raw
+scores for one seed (seed 0), without a control; the development values over
+seeds, with controls from subjects with an independent ``h``, are in the
+docstring of ``tests/test_nested_recovery.py``.
 
 """
 # Code source: Contextual Dynamics Laboratory
@@ -71,7 +74,7 @@ alpha = np.linalg.solve(G + np.trace(G) / len(G) * np.eye(len(G)), y - y.mean(0)
 decoded = B @ (A.T @ alpha)
 r = [np.corrcoef(decoded[:, c], y[:, c])[0, 1] for c in range(h.shape[1])]
 print("correlation of decoded and true h, per supergroup:", np.round(r, 2))
-print("mean:", round(float(np.mean(r)), 2))
+print("mean (raw score, one seed):", round(float(np.mean(r)), 2))
 
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4), gridspec_kw={"width_ratios": [2, 1]})
 t = np.arange(0, T, step)

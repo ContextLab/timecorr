@@ -278,13 +278,13 @@ def test_ndims_with_summary_raises(nested):
 
 def test_bad_arguments(nested):
     _, _, corrs = nested
-    with pytest.raises(ValueError, match="n"):
+    with pytest.raises(ValueError, match="n must be a positive integer"):
         tc.Communities(n=0)
-    with pytest.raises(ValueError, match="n"):
+    with pytest.raises(ValueError, match="n must be a positive integer"):
         tc.Communities(n=2.5)
     with pytest.raises(ValueError):
         tc.Communities(n=K_NESTED + 1)(corrs)
-    with pytest.raises(ValueError, match="K"):
+    with pytest.raises(ValueError, match=r"expected length K\(K\+1\)/2"):
         tc.WeightedStrength()([np.zeros((10, 5))])  # 5 is not K(K+1)/2
     with pytest.raises(ValueError, match="fit"):
         tc.WeightedStrength().transform(corrs)
@@ -455,6 +455,64 @@ def test_block_sizes_agree(nested, summary):
                 i1 = min(i0 + bs, K)
                 summary._emit(fit, unit, i0, i1, R[i0:i1], out)
             np.testing.assert_allclose(out, expected[u], atol=1e-12, rtol=0)
+
+
+def test_one_eigenvalue_gives_two_communities():
+    # 4 strongly correlated nodes plus 8 independent nodes: one eigenvalue of
+    # C stands out; a threshold between the first and second eigenvalue gives
+    # max(2, 1) = 2 communities, with the 4 nodes together
+    rng = np.random.default_rng(5)
+    T = 400
+    f = rng.standard_normal(T)
+    x = np.column_stack(
+        [f + 0.4 * rng.standard_normal(T) for _ in range(4)]
+        + [rng.standard_normal(T) for _ in range(8)]
+    )
+    v = tc.timecorr(x, cfun=tc.autofc, rfun=None, weights_params={"var": 25})
+    ev = _centered_eigs([v])
+    thr = 0.5 * (ev[0] + ev[1])
+    comm = tc.Communities().fit(v, null_threshold=thr)
+    f0 = comm.fits_[-1]
+    labels = f0["labels"]
+    assert f0["n"] == 2 and len(np.unique(labels)) == 2
+    assert len(np.unique(labels[:4])) == 1
+    assert not np.any(labels[4:] == labels[0])
+
+
+def test_explicit_n_above_half_K_raises(nested):
+    _, _, corrs = nested
+    with pytest.raises(ValueError, match=r"exceed K // 2"):
+        tc.Communities(n=K_NESTED // 2 + 1)(corrs)
+    with pytest.raises(ValueError, match=r"exceed K // 2"):
+        tc.WeightedStrength(split=True, n=K_NESTED)(corrs)
+    tc.Communities(n=K_NESTED // 2)(corrs)  # the cap itself is allowed
+
+
+def test_no_community_with_two_members_raises():
+    # with n <= K // 2 some community always has 2 members; the check guards
+    # the labels themselves
+    with pytest.raises(ValueError, match="no community with at least 2 members"):
+        sm._check_labels(np.arange(5), "Communities")
+    sm._check_labels(np.array([0, 0, 1, 2]), "Communities")
+
+
+def test_fits_n_is_number_found():
+    v = np.zeros((50, 15))  # K = 5: identical embeddings, one cluster
+    comm = tc.Communities(n=2)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        comm(v)
+    labels = comm.fits_[-1]["labels"]
+    assert comm.fits_[-1]["n"] == len(np.unique(labels))
+
+
+def test_split_flag_drives_communities():
+    ws = tc.WeightedStrength()
+    assert not ws._needs_communities
+    ws.split = True
+    assert ws._needs_communities
+    ws.split = False
+    assert not ws._needs_communities
 
 
 def test_private_helpers():

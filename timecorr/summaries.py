@@ -95,9 +95,14 @@ def _centered(wbar):
 
 
 def _count_above(wbar, threshold, K):
-    """Number of eigenvalues of ``_centered(wbar)`` above ``threshold``, capped at ``K // 2``."""
+    """
+    Number of communities from the eigenvalues of ``_centered(wbar)``: 0 when
+    no eigenvalue exceeds ``threshold``; otherwise ``max(2, c)`` for ``c``
+    eigenvalues above it, capped at ``K // 2``.
+    """
     ev = np.linalg.eigvalsh(_centered(wbar))
-    return int(min(np.sum(ev > threshold), K // 2))
+    c = int(np.sum(ev > threshold))
+    return 0 if c == 0 else int(min(max(2, c), K // 2))
 
 
 def _renumber(labels):
@@ -128,6 +133,16 @@ def _find_communities(wbar, n):
         warnings.filterwarnings("ignore", message="Number of distinct clusters")
         labels = KMeans(n, n_init=10, random_state=0).fit_predict(emb)
     return _renumber(labels)
+
+
+def _check_labels(labels, what):
+    """Raise ``ValueError`` unless some community has at least 2 members."""
+    if not np.any(np.bincount(labels) >= 2):
+        raise ValueError(
+            f"{what}: the clustering left no community with at least 2 members "
+            f"({len(labels)} nodes in {len(np.unique(labels))} communities); "
+            "use a smaller n."
+        )
 
 
 def _member_coefficients(labels):
@@ -228,9 +243,11 @@ class _Summary:
         path : {"analysis", "feeding"} or None
             Recorded in ``fits_``.  Default: None (a direct call).
         null_threshold : float or None
-            With ``n=None``, the number of communities is the number of
-            eigenvalues of the centered mean weight matrix above this value,
-            capped at K // 2.  Recorded in ``fits_``.  Default: None.
+            With ``n=None``, the number of communities is ``max(2, c)``,
+            capped at K // 2, where ``c`` is the number of eigenvalues of the
+            centered mean weight matrix above this value; with ``c = 0``,
+            one community holds every node.  Recorded in ``fits_``.
+            Default: None.
 
         Returns
         -------
@@ -241,8 +258,9 @@ class _Summary:
         ------
         ValueError
             If the input is not vectorized correlations, contains NaN, if
-            communities are needed with K < 4, ``n`` larger than K, or
-            ``n=None`` without ``null_threshold``.
+            communities are needed with K < 4, ``n`` larger than K // 2,
+            ``n=None`` without ``null_threshold``, or if the clustering leaves
+            no community with at least 2 members.
         """
         name = type(self).__name__
         units, K, _ = _as_units(corrs, name)
@@ -260,9 +278,10 @@ class _Summary:
                 "data-driven count (n=None) is available only inside features "
                 "and two_path_step."
             )
-        if needs and self.n is not None and self.n > K:
+        if needs and self.n is not None and self.n > K // 2:
             raise ValueError(
-                f"{self._what()}: n={self.n} communities exceed the K = {K} nodes."
+                f"{self._what()}: n={self.n} communities exceed K // 2 = {K // 2} "
+                f"(K = {K} nodes); give n <= {K // 2}."
             )
 
         weights, means = [], []
@@ -291,6 +310,8 @@ class _Summary:
                     )
                     n = 1
             labels = _find_communities(wbar, n)
+            _check_labels(labels, self._what())
+            n = int(len(np.unique(labels)))
 
         self.fits_.append(
             {
@@ -408,8 +429,8 @@ class WeightedStrength(_Summary):
         If True, K more columns ``s_i(t) = sum_{j != i} mean_t(r_ij)
         r_ij(t)``.  Default: False.
     n : int or None
-        Number of communities for ``split=True`` (unused otherwise).
-        ``n=None`` with ``split=True`` needs ``null_threshold`` in ``fit``.
+        Number of communities for ``split=True`` (unused otherwise), at most
+        K // 2.  ``n=None`` with ``split=True`` needs ``null_threshold`` in ``fit``.
         Default: None.
 
     Attributes
@@ -419,7 +440,7 @@ class WeightedStrength(_Summary):
         ``fit``), ``"weights"`` (list of (K, K) pair weights ``w``, one per
         unit, zero diagonal), ``"mean_r"`` (list of (K, K) ``mean_t r_ij``
         when signed, otherwise None), ``"labels"`` ((K,) community of each
-        node, or None), ``"n"`` (number of communities, or None) and
+        node, or None), ``"n"`` (number of communities found, or None) and
         ``"null_threshold"``.
 
     Notes
@@ -452,7 +473,10 @@ class WeightedStrength(_Summary):
     def __init__(self, split=False, signed=False, n=None):
         super().__init__(n=n, signed=signed)
         self.split = bool(split)
-        self._needs_communities = self.split
+
+    @property
+    def _needs_communities(self):
+        return bool(self.split)
 
     def __repr__(self):
         return f"WeightedStrength(split={self.split}, signed={self.signed}, n={self.n})"
@@ -518,9 +542,10 @@ class Communities(_Summary):
     Parameters
     ----------
     n : int or None
-        Number of communities.  ``n=None`` needs ``null_threshold`` in
-        ``fit`` (the number of eigenvalues of ``C`` above it, capped at
-        K // 2); direct calls with ``n=None`` raise ``ValueError``.
+        Number of communities, at most K // 2.  ``n=None`` needs
+        ``null_threshold`` in ``fit``: with ``c`` eigenvalues of ``C`` above
+        it, ``max(2, c)`` communities, capped at K // 2 (``c = 0``: one
+        community); direct calls with ``n=None`` raise ``ValueError``.
         Default: None.
     signed : bool
         If True, as many more columns: ``mean over i != j in g of
@@ -532,7 +557,8 @@ class Communities(_Summary):
         One dict per fit, with keys ``"order"``, ``"path"``, ``"weights"``
         (list of (K, K) pair weights, one per unit), ``"mean_r"`` (list of
         (K, K) ``mean_t r_ij`` when signed, otherwise None), ``"labels"``
-        ((K,)), ``"n"`` and ``"null_threshold"``.
+        ((K,)), ``"n"`` (number of communities found) and
+        ``"null_threshold"``.
 
     Notes
     -----
@@ -542,8 +568,12 @@ class Communities(_Summary):
     holds every node (one column: the mean squared correlation).  A signal
     shared by every node raises the number of eigenvalues above a threshold,
     so the count from ``null_threshold`` can exceed the number of
-    communities.  Calling
-    the instance fits to the given units and transforms the same units; the
+    communities: in simulations with 18 modules and a global signal, the
+    count from the shift null used by ``features`` was 20 to 25.  The shift
+    null's false-positive rate is measured, not guaranteed: on independent
+    autocorrelated noise, about 10% of recordings gave one eigenvalue above
+    it.  ``fits_[-1]["n"]`` is the number of communities the clustering
+    found.  Calling the instance fits to the given units and transforms the same units; the
     communities come from the data being summarized.  ``fit`` and
     ``transform`` separate the two.  The correlations must be finite (NaN
     raises ``ValueError``).

@@ -756,3 +756,235 @@ def test_pca_decoder_accepts_float_fold_count():
     np.random.seed(0)
     b = pca_decoder(data, nfolds=2, dims=3, weights_params={"scale": 5})
     pd.testing.assert_frame_equal(a, b)
+
+
+# ------------------------------------------------------- event-restricted kernels
+
+_EV_KW = dict(weights_function=gaussian_weights, weights_params={"var": 25})
+# each decoder with the settings of a small run (S=6, T=24, K=3)
+_EV_RUNS = {
+    "timepoint_decoder": lambda data, **kw: tc.timepoint_decoder(
+        data, nfolds=2, level=2, **_EV_KW, **kw
+    ),
+    "weighted_timepoint_decoder": lambda data, **kw: weighted_timepoint_decoder(
+        data, nfolds=2, level=2, **_EV_KW, **kw
+    ),
+    "weighted_timepoint_decoder_ec": lambda data, **kw: weighted_timepoint_decoder_ec(
+        [data], nfolds=2, level=1, **_EV_KW, **kw
+    ),
+    "pca_decoder": lambda data, **kw: tc.helpers.pca_decoder(
+        data, nfolds=2, dims=2, **_EV_KW, **kw
+    ),
+}
+
+
+def _seeded(run, seed=3):
+    np.random.seed(seed)
+    return run().reset_index(drop=True)
+
+
+def _differing_boundaries():
+    # one boundary set per subject (S=6, T=24), no two alike
+    return [[8], [12], [6, 16], [10], [], [5, 14]]
+
+
+def test_decoders_events_and_events_params_are_keyword_only():
+    for f, positional in [
+        (tc.timepoint_decoder, ["data", "mu", "nfolds", "level", "cfun",
+                                "weights_function", "weights_params", "combine",
+                                "rfun", "weights_fun", "max_memory_gb"]),
+        (weighted_timepoint_decoder, ["data", "nfolds", "level", "optimize_levels",
+                                      "cfun", "weights_function", "weights_params",
+                                      "combine", "rfun", "opt_init", "weights_fun",
+                                      "max_memory_gb"]),
+        (weighted_timepoint_decoder_ec, ["data", "nfolds", "level", "optimize_levels",
+                                         "cfun", "weights_function", "weights_params",
+                                         "combine", "rfun", "opt_init", "weights_fun",
+                                         "max_memory_gb"]),
+        (tc.helpers.pca_decoder, ["data", "nfolds", "dims", "cfun", "weights_function",
+                                  "weights_params", "combine", "rfun", "weights_fun"]),
+    ]:
+        params = inspect.signature(f).parameters
+        names = [n for n, p in params.items()
+                 if p.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD]
+        assert names == positional, f.__name__
+        assert list(params) == positional + ["events", "events_params"], f.__name__
+        assert all(params[n].kind == inspect.Parameter.KEYWORD_ONLY
+                   for n in ("events", "events_params")), f.__name__
+        assert params["events"].default is None
+        assert params["events_params"].default is None
+
+
+@pytest.mark.parametrize("name", sorted(_EV_RUNS))
+def test_decoders_events_none_and_one_block_are_unchanged(name):
+    data = shared_ramping_data(S=6, T=24, K=3)
+    run = _EV_RUNS[name]
+    today = _seeded(lambda: run(data))
+    pd.testing.assert_frame_equal(_seeded(lambda: run(data, events=None)), today,
+                                  check_exact=True)
+    # an empty boundary set is one block: no restriction
+    pd.testing.assert_frame_equal(_seeded(lambda: run(data, events=[])), today,
+                                  check_exact=True)
+
+
+def test_decoder_features_with_shared_events_equal_pipeline():
+    from timecorr.decoding import _decoder_features
+    from timecorr.events import resolve_events_by_order
+
+    data = shared_ramping_data(S=6, T=24, K=3)
+    groups = [[0, 2, 4], [1, 3, 5]]
+    events = {1: [12], 2: [8, 16]}
+    resolved = resolve_events_by_order(events, 24, 6, 2)
+    feats = _decoder_features(data, groups, 2, rfun=None, combine=mean_combine,
+                              events=resolved, **_EV_KW)
+    plain = _decoder_features(data, groups, 2, rfun=None, combine=mean_combine,
+                              **_EV_KW)
+    for g, members in enumerate(groups):
+        X = tc.features([data[j] for j in members], order=2, cfun=isfc, rfun=None,
+                        combine=mean_combine, events=events, **_EV_KW)
+        assert np.array_equal(feats[0][g], plain[0][g])  # level 0 unchanged
+        for k in (1, 2):
+            assert np.allclose(feats[k][g], X[k], atol=1e-12, rtol=0)
+            assert not np.allclose(feats[k][g], plain[k][g], atol=1e-3)
+
+
+def test_decoder_features_per_subject_events_follow_original_subject_index():
+    from timecorr.decoding import _decoder_features
+    from timecorr.events import resolve_events_by_order
+
+    data = shared_ramping_data(S=6, T=24, K=3)
+    events = _differing_boundaries()
+    groups = [[4, 0, 3], [5, 2, 1]]  # shuffled membership
+    resolved = resolve_events_by_order(events, 24, 6, 1)
+    feats = _decoder_features(data, groups, 1, rfun=None, combine=mean_combine,
+                              events=resolved, **_EV_KW)
+    for g, members in enumerate(groups):
+        own = tc.features([data[j] for j in members], order=1, rfun=None,
+                          combine=mean_combine, events=[events[j] for j in members],
+                          **_EV_KW)
+        # the group's subjects given the events of positions 0..2 instead
+        wrong = tc.features([data[j] for j in members], order=1, rfun=None,
+                            combine=mean_combine, events=events[:3], **_EV_KW)
+        assert np.allclose(feats[1][g], own[1], atol=1e-12, rtol=0)
+        assert not np.allclose(feats[1][g], wrong[1], atol=1e-3)
+
+
+def test_timepoint_decoder_per_subject_events_follow_subjects_through_folds():
+    from timecorr.decoding import _level_matrices
+    from timecorr.events import resolve_events_by_order
+
+    data = shared_ramping_data(S=6, T=24, K=3)
+    events = _differing_boundaries()
+    np.random.seed(5)
+    results = tc.timepoint_decoder(data, nfolds=3, level=[0, 1], events=events,
+                                 **_EV_KW)
+    resolved = resolve_events_by_order(events, 24, 6, 1)
+    np.random.seed(5)
+    assignments = get_xval_assignments(6, 3)
+    D = [data]
+    rows = []
+    for i in range(3):
+        decode = np.where(assignments == i)[0]
+        template = np.where(assignments != i)[0]
+        corrs = _level_matrices(data, decode, template, 1, D, rfun=None,
+                                events=resolved, **_EV_KW)
+        for v in (0, 1):
+            rows.append(decoder(corrs[v]))
+    expected = pd.concat(rows).reset_index(drop=True)
+    got = results[["rank", "accuracy", "error"]].reset_index(drop=True)
+    pd.testing.assert_frame_equal(got, expected, check_exact=True)
+    np.random.seed(5)
+    plain = tc.timepoint_decoder(data, nfolds=3, level=[0, 1], **_EV_KW)
+    assert not plain[["rank"]].reset_index(drop=True).equals(got[["rank"]])
+
+
+def test_weighted_decoder_per_subject_events_follow_subjects_into_training_halves():
+    from timecorr.decoding import _level_matrices, optimize_weights
+    from timecorr.events import resolve_events_by_order
+
+    data = shared_ramping_data(S=6, T=24, K=3)
+    events = _differing_boundaries()
+    np.random.seed(7)
+    results = weighted_timepoint_decoder(data, nfolds=2, level=1, events=events,
+                                         **_EV_KW)
+    resolved = resolve_events_by_order(events, 24, 6, 1)
+    np.random.seed(7)
+    assignments = get_xval_assignments(6, 2)
+    D = [data]
+    for i in range(2):
+        test = np.where(assignments == i)[0]
+        train = np.where(assignments != i)[0]
+        corrs = _level_matrices(data, test, train, 1, D, rfun=None, events=resolved,
+                                **_EV_KW)
+        halves = get_xval_assignments(len(train), 2)
+        sub = _level_matrices(data, train[halves == 0], train[halves == 1], 1, D,
+                              rfun=None, events=resolved, **_EV_KW)
+        mu = optimize_weights(sub[[0, 1]])
+        row = results[(results["folds"] == i) & (results["level"] == 1)]
+        assert np.array_equal(row[["level_0", "level_1"]].values[0], mu)
+        expected = decoder(weight_corrs(corrs[[0, 1]], mu))
+        assert np.array_equal(row[["rank", "accuracy", "error"]].values,
+                              expected.values)
+
+
+@pytest.mark.parametrize("name", sorted(_EV_RUNS))
+def test_decoders_run_with_events_and_return_the_documented_shape(name):
+    data = shared_ramping_data(S=6, T=24, K=3)
+    run = _EV_RUNS[name]
+    today = _seeded(lambda: run(data))
+    shared = _seeded(lambda: run(data, events=[12]))
+    per_subject = _seeded(lambda: run(data, events=_differing_boundaries()))
+    for res in (shared, per_subject):
+        assert list(res.columns) == list(today.columns)
+        assert len(res) == len(today)
+        for col in ("rank", "accuracy", "error"):
+            assert np.all((res[col] >= 0) & (res[col] <= 1))
+    if name == "pca_decoder":
+        # level 0 only: the smoothing kernel is not restricted
+        pd.testing.assert_frame_equal(shared, today, check_exact=True)
+    else:
+        assert not np.array_equal(shared["rank"].values, today["rank"].values)
+
+
+@pytest.mark.parametrize("name", sorted(_EV_RUNS))
+def test_decoders_check_events_before_computing(name):
+    data = shared_ramping_data(S=6, T=24, K=3)
+    run = _EV_RUNS[name]
+    with pytest.raises(ValueError):
+        run(data, events=[[4], [8]])  # two entries for six subjects
+    with pytest.raises(ValueError):
+        run(data, events=[30])  # outside [0, T)
+    with pytest.raises(ValueError, match="events_params"):
+        run(data, events=[12], events_params={"n": 2})  # no features to segment
+
+
+def test_level_zero_decoders_and_pca_decoder_refuse_events_by_order():
+    data = shared_ramping_data(S=6, T=24, K=3)
+    np.random.seed(0)
+    with pytest.raises(ValueError, match="order"):
+        tc.timepoint_decoder(data, level=0, events={1: [12]})
+    with pytest.raises(ValueError, match="order"):
+        tc.helpers.pca_decoder(data, dims=2, events={1: [12]})
+    # a level-0 decoder checks the events and is otherwise unchanged
+    np.random.seed(0)
+    a = tc.timepoint_decoder(data, level=0, events=[12])
+    np.random.seed(0)
+    b = tc.timepoint_decoder(data, level=0)
+    pd.testing.assert_frame_equal(a, b, check_exact=True)
+
+
+def test_decoders_segment_features_events_once_for_all_folds():
+    # a features array with T rows is segmented once, on the full subject list;
+    # the decoder equals one run with the resulting boundaries
+    from timecorr.events import segment
+
+    data = shared_ramping_data(S=6, T=24, K=3)
+    rng = np.random.RandomState(2)
+    stim = np.repeat([0.0, 3.0, 0.0], 8)[:, None] + 0.2 * rng.randn(24, 2)
+    bounds = segment(stim, n=3)
+    np.random.seed(1)
+    a = tc.timepoint_decoder(data, level=1, events=stim, events_params={"n": 3},
+                             **_EV_KW)
+    np.random.seed(1)
+    b = tc.timepoint_decoder(data, level=1, events=bounds, **_EV_KW)
+    pd.testing.assert_frame_equal(a, b, check_exact=True)

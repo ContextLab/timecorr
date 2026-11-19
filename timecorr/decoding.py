@@ -25,7 +25,8 @@ from .helpers import (
     reduce,
     z2r,
 )
-from .higher_order import _analysis_path, _delta_path
+from .events import resolve_events_by_order
+from .higher_order import _analysis_path, _check_events_order_zero, _delta_path
 from .timecorr import timecorr
 
 _DEFAULT_MEMORY_GB = 4.0
@@ -82,6 +83,22 @@ def _decoder_kernel(weights_function, weights_fun):
     return laplace_weights if weights_function is None else weights_function
 
 
+def _decoder_events(events, events_params, T, n_subjects, top):
+    """
+    Resolve the decoders' ``events`` once, on the full subject list.
+
+    Returns ``{k: entry}`` for orders ``1..top`` (see
+    ``timecorr.events.resolve_events_by_order``; a per-subject entry is a list
+    indexed by original subject), or None when ``top`` is 0: there is no
+    correlation kernel to restrict, so the specification is only checked
+    (as in ``features(order=0)``: a dict with any key raises ``ValueError``).
+    """
+    if top == 0:
+        _check_events_order_zero(events, T, n_subjects, events_params)
+        return None
+    return resolve_events_by_order(events, T, n_subjects, top, events_params)
+
+
 def _decoder_delta_chain(data, level, rfun=None, max_memory_gb=None):
     """
     Delta features ``[D_0, ..., D_{level-1}]`` for every subject.
@@ -121,6 +138,7 @@ def _decoder_features(
     D=None,
     max_memory_gb=None,
     weights_fun=None,
+    events=None,
 ):
     """
     Features of every order from 0 to ``level`` for each group of subjects.
@@ -138,6 +156,12 @@ def _decoder_features(
     ``D`` (from ``_decoder_delta_chain``) may be passed to reuse the delta
     chain across folds.  Each analysis step is checked against
     ``max_memory_gb`` before it runs.
+
+    ``events`` is None or the RESOLVED events by order (``{k: entry}`` from
+    ``_decoder_events``); order ``k``'s entry restricts the order-``k``
+    analysis kernel.  A per-subject entry is a list indexed by subject in
+    ``data``, and is subset by the group's member indices, so each subject
+    keeps its own events whatever group it is in.  Order 0 is never restricted.
     """
     weights_function = _decoder_kernel(weights_function, weights_fun)
     subjects = _subjects(data)
@@ -163,6 +187,7 @@ def _decoder_features(
                 groups=groups,
                 max_memory_gb=max_memory_gb,
                 order=k,
+                events=None if events is None else events[k],
             )
         )
     return feats
@@ -190,6 +215,9 @@ def timepoint_decoder(
     rfun=None,
     weights_fun=None,
     max_memory_gb=_DEFAULT_MEMORY_GB,
+    *,
+    events=None,
+    events_params=None,
 ):
     """
     Decode timepoints across groups of subjects from features at each order.
@@ -247,6 +275,24 @@ def timepoint_decoder(
         step whose estimate is larger raises ``MemoryError`` before it
         allocates (unreduced features grow from ``d`` to ``d(d+1)/2`` per
         order).  None checks nothing.  Default: 4.0.
+    events : None, dict, array-like, or list
+        Restricts the analysis kernel of orders ``k >= 1`` to events
+        (keyword-only; see ``features``: boundaries shared by all subjects,
+        features with T rows segmented with ``segment``, a list with one such
+        entry, or None, per subject, or a dict keyed by order).  The events
+        are resolved once, on the full subject list, before any fold is
+        formed (a features entry is segmented once), and a per-subject entry
+        stays with its subject in every fold.  Boundaries are external
+        information supplied by the caller and are used as given for all
+        folds; they are not estimated from held-out data by the decoder.
+        Events change only the order-``k >= 1`` analysis features: order 0
+        (the data combined within each group) and the delta path ``D_k`` are
+        unaffected.  With a highest level of 0 the specification is checked
+        and nothing changes (a dict with any key raises ``ValueError``).
+        Default: None (no restriction).
+    events_params : dict or None
+        Keyword arguments for ``segment`` when ``events`` holds features
+        (keyword-only; see ``features``).  Default: None.
 
     Returns
     -------
@@ -273,8 +319,9 @@ def timepoint_decoder(
         If ``nfolds`` is below 1 or above the number of subjects, if ``level``
         is not a non-negative integer (or list of them), if ``mu`` has the
         wrong length or does not sum to one, if the subjects differ in shape,
-        or if a per-order list (``cfun``, ``combine``, ``rfun``) does not have
-        one entry per order.
+        if a per-order list (``cfun``, ``combine``, ``rfun``) does not have
+        one entry per order, or for a malformed ``events`` or
+        ``events_params`` (checked before anything is computed).
 
     Examples
     --------
@@ -319,6 +366,10 @@ def timepoint_decoder(
             f"nfolds must be between 1 and the number of subjects ({len(subjects)}); "
             f"got {nfolds}."
         )
+    # resolved once, on every subject, before the folds are formed
+    events = _decoder_events(
+        events, events_params, subjects[0].shape[0], len(subjects), top
+    )
 
     settings = dict(
         cfun=cfun,
@@ -327,6 +378,7 @@ def timepoint_decoder(
         combine=combine,
         rfun=rfun,
         max_memory_gb=max_memory_gb,
+        events=events,
     )
     D = _decoder_delta_chain(subjects, top, rfun, max_memory_gb)
     group_assignments = get_xval_assignments(len(subjects), nfolds)
@@ -361,6 +413,9 @@ def weighted_timepoint_decoder(
     opt_init=None,
     weights_fun=None,
     max_memory_gb=_DEFAULT_MEMORY_GB,
+    *,
+    events=None,
+    events_params=None,
 ):
     """
     Decode timepoints from a weighted mix of the orders' decoding matrices.
@@ -407,6 +462,25 @@ def weighted_timepoint_decoder(
     weights_fun, max_memory_gb
         As in ``timepoint_decoder`` (``weights_fun`` is an alias of
         ``weights_function``; ``max_memory_gb`` defaults to 4.0).
+    events : None, dict, array-like, or list
+        Restricts the analysis kernel of orders ``k >= 1`` to events
+        (keyword-only; see ``features``: boundaries shared by all subjects,
+        features with T rows segmented with ``segment``, a list with one such
+        entry, or None, per subject, or a dict keyed by order).  The events
+        are resolved once, on the full subject list, before any fold is
+        formed (a features entry is segmented once), and a per-subject entry
+        stays with its subject in every fold and in both halves of every
+        training group.  Boundaries are external information supplied by the
+        caller and are used as given for all folds; they are not estimated
+        from held-out data by the decoder.
+        Events change only the order-``k >= 1`` analysis features: order 0
+        (the data combined within each group) and the delta path ``D_k`` are
+        unaffected.  With a highest level of 0 the specification is checked
+        and nothing changes (a dict with any key raises ``ValueError``).
+        Default: None (no restriction).
+    events_params : dict or None
+        Keyword arguments for ``segment`` when ``events`` holds features
+        (keyword-only; see ``features``).  Default: None.
 
     Returns
     -------
@@ -432,8 +506,10 @@ def weighted_timepoint_decoder(
     ValueError
         If the training group of a fold has fewer than two subjects (it cannot
         be split), if ``nfolds`` exceeds the number of subjects, if ``level``
-        is not a non-negative integer (or list of them), or if
-        ``optimize_levels`` is empty or names an order outside 0 to ``level``.
+        is not a non-negative integer (or list of them), if
+        ``optimize_levels`` is empty or names an order outside 0 to ``level``,
+        or for a malformed ``events`` or ``events_params`` (checked before
+        anything is computed).
 
     Examples
     --------
@@ -455,6 +531,10 @@ def weighted_timepoint_decoder(
     _, top = _parse_levels(level)
     nfolds, circular = _check_folds(nfolds, len(subjects))
     optimize_levels = _check_optimize_levels(optimize_levels, top)
+    # resolved once, on every subject, before the folds are formed
+    events = _decoder_events(
+        events, events_params, subjects[0].shape[0], len(subjects), top
+    )
 
     settings = dict(
         cfun=cfun,
@@ -463,6 +543,7 @@ def weighted_timepoint_decoder(
         combine=combine,
         rfun=rfun,
         max_memory_gb=max_memory_gb,
+        events=events,
     )
     D = _decoder_delta_chain(subjects, top, rfun, max_memory_gb)
     return _weighted_decode(
@@ -703,6 +784,9 @@ def weighted_timepoint_decoder_ec(
     opt_init=None,
     weights_fun=None,
     max_memory_gb=_DEFAULT_MEMORY_GB,
+    *,
+    events=None,
+    events_params=None,
 ):
     """
     ``weighted_timepoint_decoder`` with externally computed lower-order features.
@@ -723,6 +807,25 @@ def weighted_timepoint_decoder_ec(
         array per subject, for ``k = 0, ..., max(level - 1, 0)``.
     nfolds, level, optimize_levels, cfun, weights_function, weights_params, combine, rfun, opt_init, weights_fun, max_memory_gb
         As in ``weighted_timepoint_decoder``.
+    events : None, dict, array-like, or list
+        Restricts the analysis kernel of orders ``k >= 1`` to events
+        (keyword-only; see ``features``: boundaries shared by all subjects,
+        features with T rows segmented with ``segment``, a list with one such
+        entry, or None, per subject, or a dict keyed by order).  The events
+        are resolved once, on the full subject list, before any fold is
+        formed (a features entry is segmented once), and a per-subject entry
+        stays with its subject in every fold and in both halves of every
+        training group.  Boundaries are external information supplied by the
+        caller and are used as given for all folds; they are not estimated
+        from held-out data by the decoder.
+        Events change only the order-``k >= 1`` analysis features: order 0
+        (the data combined within each group) and the inputs ``data[k]`` are
+        unaffected.  With a highest level of 0 the specification is checked
+        and nothing changes (a dict with any key raises ``ValueError``).
+        Default: None (no restriction).
+    events_params : dict or None
+        Keyword arguments for ``segment`` when ``events`` holds features
+        (keyword-only; see ``features``).  Default: None.
 
     Returns
     -------
@@ -771,6 +874,10 @@ def weighted_timepoint_decoder_ec(
     subjects = D[0]
     nfolds, circular = _check_folds(nfolds, len(subjects))
     optimize_levels = _check_optimize_levels(optimize_levels, top)
+    # resolved once, on every subject, before the folds are formed
+    events = _decoder_events(
+        events, events_params, subjects[0].shape[0], len(subjects), top
+    )
     settings = dict(
         cfun=cfun,
         weights_function=weights_function,
@@ -778,6 +885,7 @@ def weighted_timepoint_decoder_ec(
         combine=combine,
         rfun=rfun,
         max_memory_gb=max_memory_gb,
+        events=events,
     )
     return _weighted_decode(
         subjects, D, nfolds, circular, top, optimize_levels, opt_init, settings
@@ -907,6 +1015,9 @@ def pca_decoder(
     combine=mean_combine,
     rfun=None,
     weights_fun=None,
+    *,
+    events=None,
+    events_params=None,
 ):
     """
     Decode timepoints from the first ``d`` principal components, for each ``d``.
@@ -947,6 +1058,15 @@ def pca_decoder(
     weights_fun : function, optional
         Alias of ``weights_function`` (its name in timecorr 0.2.0).  Passing
         both raises ``TypeError``.  Default: None.
+    events : None, array-like, or list
+        Checked as in ``features(order=0)`` and otherwise not used
+        (keyword-only).  Events restrict correlation kernels at orders
+        ``k >= 1``; this decoder works at level 0 only (its features are
+        smoothed components, not correlations), so its results are the same
+        with or without events.  A dict keyed by order raises ``ValueError``.
+        Default: None.
+    events_params : dict or None
+        Checked as in ``features(order=0)`` (keyword-only).  Default: None.
 
     Returns
     -------
@@ -958,8 +1078,9 @@ def pca_decoder(
     Raises
     ------
     ValueError
-        If the subjects differ in their number of timepoints or features, or
-        ``nfolds`` is below 1 or above the number of subjects.
+        If the subjects differ in their number of timepoints or features,
+        ``nfolds`` is below 1 or above the number of subjects, or for a
+        malformed ``events`` or ``events_params``.
     TypeError
         If both ``weights_function`` and ``weights_fun`` are given.
 
@@ -984,6 +1105,7 @@ def pca_decoder(
         raise ValueError("all data matrices must have the same number of timepoints")
     if len({np.shape(x)[1] for x in data}) != 1:
         raise ValueError("all data matrices must have the same number of features")
+    _decoder_events(events, events_params, np.shape(data[0])[0], len(data), 0)
 
     # never request more components than the data has features or samples; the
     # loop below slices the first d columns, so d > n_components is harmless

@@ -380,17 +380,16 @@ def two_path_step(
     -----
     UserWarning
         From the correlation estimator on the analysis path (see ``wcorr``),
-        one per call, naming each that applies: timepoints whose kernel row
-        has fewer than 3 non-zero kernel weights (for example the first
-        timepoints of a backward kernel; their correlations are undefined and
-        set to 0); other timepoints whose effective sample size
+        one per call, naming each that applies: timepoints whose kernel row has
+        fewer than 3 non-zero kernel weights (for example the first timepoints
+        of a backward kernel; their correlations are undefined and set to 0);
+        other timepoints whose effective sample size
         ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
-        estimate correlations reliably there);
-        timepoints where, because of NaN samples, some pairs of features
-        have fewer than 3 observed samples with non-zero kernel weight
-        (those correlations are undefined and set to 0); and timepoints
-        with zero kernel-weighted variance in every feature (their correlations are set
-        to 0).  Never for the delta path.
+        estimate correlations reliably there); timepoints where, because of NaN
+        samples, some pairs of features have fewer than 3 observed samples with
+        non-zero kernel weight (those correlations are undefined and set to 0);
+        and timepoints with zero kernel-weighted variance in every feature
+        (their correlations are set to 0).  Never for the delta path.
 
     Raises
     ------
@@ -568,15 +567,14 @@ def features(
     UserWarning
         From the correlation estimator on the analysis path (see ``wcorr``),
         one per correlation step, naming each that applies: timepoints whose
-        kernel row has fewer than 3 non-zero kernel weights (their
-        correlations are undefined and set to 0); other timepoints whose
-        effective sample size ``(sum |w|)**2 / sum w**2`` is below 2 (the
-        kernel is too narrow to estimate correlations reliably there);
-        timepoints where, because of NaN samples, some pairs of features
-        have fewer than 3 observed samples with non-zero kernel weight
-        (those correlations are undefined and set to 0); and timepoints
-        with zero kernel-weighted variance in every feature (their
-        correlations are set to 0).  Never for the delta path.
+        kernel row has fewer than 3 non-zero kernel weights (their correlations
+        are undefined and set to 0); other timepoints whose effective sample
+        size ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow
+        to estimate correlations reliably there); timepoints where, because of
+        NaN samples, some pairs of features have fewer than 3 observed samples
+        with non-zero kernel weight (those correlations are undefined and set
+        to 0); and timepoints with zero kernel-weighted variance in every
+        feature (their correlations are set to 0).  Never for the delta path.
     UserWarning
         Once per call, when NaN co-fluctuations are set to 0 before a
         model-based or graph-measure delta reduction.

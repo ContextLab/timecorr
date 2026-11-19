@@ -969,16 +969,15 @@ def wcorr(a, b, weights):
     Warns
     -----
     UserWarning
-        One per call, naming each that applies: timepoints whose kernel row
-        has fewer than 3 non-zero kernel weights (their correlations are
-        undefined and set to 0); other timepoints whose effective sample size
+        One per call, naming each that applies: timepoints whose kernel row has
+        fewer than 3 non-zero kernel weights (their correlations are undefined
+        and set to 0); other timepoints whose effective sample size
         ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
-        estimate correlations reliably there);
-        timepoints where, because of NaN samples, some pairs of features
-        have fewer than 3 observed samples with non-zero kernel weight
-        (those correlations are undefined and set to 0); and timepoints
-        with zero kernel-weighted variance in every feature (their correlations are set
-        to 0).  Never for a delta kernel.
+        estimate correlations reliably there); timepoints where, because of NaN
+        samples, some pairs of features have fewer than 3 observed samples with
+        non-zero kernel weight (those correlations are undefined and set to 0);
+        and timepoints with zero kernel-weighted variance in every feature
+        (their correlations are set to 0).  Never for a delta kernel.
 
     Raises
     ------
@@ -1170,18 +1169,21 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     Warns
     -----
     UserWarning
-        One per call, naming each that applies: timepoints whose kernel row
-        has fewer than 3 non-zero kernel weights (their correlations are
-        undefined and set to 0); other timepoints whose effective sample size
+        One per call, naming each that applies: timepoints whose kernel row has
+        fewer than 3 non-zero kernel weights (their correlations are undefined
+        and set to 0); other timepoints whose effective sample size
         ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
-        estimate correlations reliably there);
-        timepoints where, because of NaN samples, some pairs of features
-        have fewer than 3 observed samples with non-zero kernel weight
-        (those correlations are undefined and set to 0); and timepoints
-        with zero kernel-weighted variance in every feature (their correlations are set
-        to 0).  Never for a delta kernel.  With several different kernels,
-        the one warning names, for each kernel with a problem, the subjects
-        that use it.
+        estimate correlations reliably there); timepoints where, because of NaN
+        samples, some pairs of features have fewer than 3 observed samples with
+        non-zero kernel weight (those correlations are undefined and set to 0);
+        and timepoints with zero kernel-weighted variance in every feature
+        (their correlations are set to 0).  Never for a delta kernel.  With
+        several different kernels, the one warning names, for each kernel with
+        a problem, the subjects that use it.  In the symmetrized output, such
+        an undefined entry ``C[i, j]`` is averaged (in Fisher z space) with
+        ``C[j, i]``, which can be defined, so the returned value need not be 0;
+        a feature with zero kernel-weighted variance on one side only (subject
+        or reference) is treated the same way.
 
     Raises
     ------
@@ -1280,12 +1282,19 @@ def _subject_kernels(timepoint_weights, S):
     the index of its kernel.  ``timepoint_weights`` is one kernel shared by every
     subject, or a list or tuple of S kernels (subject s uses item s); equal kernels
     in a list are grouped (compared by identity, then by value).  A list or tuple
-    is per-subject kernels only when its items are 2-D; otherwise (for example a
-    T x T kernel given as a list of lists) it is one kernel.
+    is per-subject kernels when its items are 2-D, and one kernel (for example a
+    T x T kernel given as a list of lists) when none is; a mix raises ValueError.
     """
-    if not isinstance(timepoint_weights, (list, tuple)) or not all(
-        np.ndim(w) == 2 for w in timepoint_weights
-    ):
+    if not isinstance(timepoint_weights, (list, tuple)):
+        return [timepoint_weights], [0] * S
+    two_d = [np.ndim(w) == 2 for w in timepoint_weights]
+    if any(two_d) and not all(two_d):
+        raise ValueError(
+            "timepoint_weights is a list mixing 2-D kernels with items that are not "
+            "2-D; pass one kernel (an array or a list of rows), or one 2-D kernel per "
+            "subject"
+        )
+    if not all(two_d):
         return [np.asarray(timepoint_weights, dtype=np.float64)], [0] * S
     if len(timepoint_weights) != S:
         raise ValueError(
@@ -1366,18 +1375,21 @@ def isfc(data, timepoint_weights):
     Warns
     -----
     UserWarning
-        One per call, naming each that applies: timepoints whose kernel row
-        has fewer than 3 non-zero kernel weights (their correlations are
-        undefined and set to 0); other timepoints whose effective sample size
+        One per call, naming each that applies: timepoints whose kernel row has
+        fewer than 3 non-zero kernel weights (their correlations are undefined
+        and set to 0); other timepoints whose effective sample size
         ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
-        estimate correlations reliably there);
-        timepoints where, because of NaN samples, some pairs of features
-        have fewer than 3 observed samples with non-zero kernel weight
-        (those correlations are undefined and set to 0); and timepoints
-        with zero kernel-weighted variance in every feature (their correlations are set
-        to 0).  Never for a delta kernel.  With several different kernels,
-        the one warning names, for each kernel with a problem, the subjects
-        that use it.
+        estimate correlations reliably there); timepoints where, because of NaN
+        samples, some pairs of features have fewer than 3 observed samples with
+        non-zero kernel weight (those correlations are undefined and set to 0);
+        and timepoints with zero kernel-weighted variance in every feature
+        (their correlations are set to 0).  Never for a delta kernel.  With
+        several different kernels, the one warning names, for each kernel with
+        a problem, the subjects that use it.  In the symmetrized output, such
+        an undefined entry ``C[i, j]`` is averaged (in Fisher z space) with
+        ``C[j, i]``, which can be defined, so the returned value need not be 0;
+        a feature with zero kernel-weighted variance on one side only (subject
+        or reference) is treated the same way.
 
     Raises
     ------
@@ -1445,18 +1457,17 @@ def autofc(data, timepoint_weights):
     Warns
     -----
     UserWarning
-        One per call, naming each that applies: timepoints whose kernel row
-        has fewer than 3 non-zero kernel weights (their correlations are
-        undefined and set to 0); other timepoints whose effective sample size
+        One per call, naming each that applies: timepoints whose kernel row has
+        fewer than 3 non-zero kernel weights (their correlations are undefined
+        and set to 0); other timepoints whose effective sample size
         ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
-        estimate correlations reliably there);
-        timepoints where, because of NaN samples, some pairs of features
-        have fewer than 3 observed samples with non-zero kernel weight
-        (those correlations are undefined and set to 0); and timepoints
-        with zero kernel-weighted variance in every feature (their correlations are set
-        to 0).  Never for a delta kernel.  With several different kernels,
-        the one warning names, for each kernel with a problem, the subjects
-        that use it.
+        estimate correlations reliably there); timepoints where, because of NaN
+        samples, some pairs of features have fewer than 3 observed samples with
+        non-zero kernel weight (those correlations are undefined and set to 0);
+        and timepoints with zero kernel-weighted variance in every feature
+        (their correlations are set to 0).  Never for a delta kernel.  With
+        several different kernels, the one warning names, for each kernel with
+        a problem, the subjects that use it.
 
     Raises
     ------

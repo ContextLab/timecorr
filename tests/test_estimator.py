@@ -390,10 +390,11 @@ def test_nan_reduced_support_cross_correlation():
 
 
 def test_nan_support_count_changes_only_undefined_pairs():
-    # bit for bit: the rows that keep 3 observed samples per pair equal the same
-    # call with a kernel that gives row 5 full support, and the pair without
-    # feature 0 at row 5 equals the call on the features without NaN samples
-    # (empty NaN mask, so the estimator's no-NaN path)
+    # the rows that keep 3 observed samples per pair equal the same call with a
+    # kernel that gives row 5 full support, and the pair without feature 0 at row 5
+    # equals the call on the features without NaN samples (empty NaN mask, so the
+    # estimator's no-NaN path).  Different matrix-product shapes: compared to
+    # round-off, not bit for bit.
     x, xn, w = _nan_reduced_support_case()
     T = x.shape[0]
     with pytest.warns(UserWarning, match="fewer than 3"):
@@ -403,8 +404,8 @@ def test_nan_support_count_changes_only_undefined_pairs():
         wide = wcorr(xn, xn, gaussian_weights(T, {"var": 10}))
         observed = wcorr(xn[:, 1:], xn[:, 1:], w)
     rows = [t for t in range(T) if t != 5]
-    assert np.array_equal(out[:, :, rows], wide[:, :, rows])
-    assert np.array_equal(out[1:, 1:, 5], observed[:, :, 5])
+    assert np.allclose(out[:, :, rows], wide[:, :, rows], atol=1e-12, rtol=0)
+    assert np.allclose(out[1:, 1:, 5], observed[:, :, 5], atol=1e-12, rtol=0)
 
 
 @pytest.mark.parametrize("cfun", [isfc, wisfc, autofc])
@@ -421,11 +422,54 @@ def test_nan_reduced_support_in_correlation_functions(cfun):
     if cfun is autofc:
         assert np.all(m[0, :, 5] == 0)
     else:
-        # the cross-correlation C[0, j] is undefined (0) but C[j, 0] (the subject's
-        # feature j with the reference's feature 0) is not, and the Fisher-z
-        # symmetrization averages the two, as for a feature constant in one of them
         assert m[0, 0, 5] == 0
     assert np.all(np.isfinite(np.asarray(out)))
+
+
+@pytest.mark.parametrize(
+    "cfun, kwargs, ref_weights",
+    [
+        (isfc, {}, [0.5, 0.5]),
+        (wisfc, {"subject_weights": np.array([[0, 0.25, 0.75], [1, 0, 1], [1, 1, 0]])},
+         [0.25, 0.75]),
+    ],
+)
+def test_nan_reduced_support_symmetrized_entry(cfun, kwargs, ref_weights):
+    # the cross-correlation C[0, j] (subject 0's feature 0, two observed samples,
+    # with the reference's feature j) is undefined and 0, but C[j, 0] (subject 0's
+    # feature j with the reference's feature 0) is defined; the Fisher-z
+    # symmetrization averages them: z2r((r2z(0) + r2z(C[j, 0])) / 2)
+    x, xn, w = _nan_reduced_support_case()
+    rng = _rng(34)
+    others = [x + 0.3 * rng.randn(*x.shape) for _ in range(2)]
+    with pytest.warns(UserWarning, match="fewer than 3 observed"):
+        out = cfun([xn] + others, w, **kwargs)
+    m = vec2mat(out[0])
+    reference = ref_weights[0] * others[0] + ref_weights[1] * others[1]
+    for j in (1, 2):
+        c_j0 = _weighted_pearson(xn[:, [j]], reference[:, [0]], w[5])[0, 0]
+        expected = z2r(r2z(c_j0) / 2)
+        assert abs(c_j0) > 0.05
+        assert np.isclose(m[0, j, 5], expected, atol=1e-10, rtol=0)
+        assert np.isclose(m[j, 0, 5], expected, atol=1e-10, rtol=0)
+
+
+def test_kernel_rows_with_exactly_three_weights_without_nan_do_not_warn():
+    # without NaN samples the observed-sample count never fires: every row of this
+    # kernel has exactly 3 non-zero weights, and the call is silent and defined
+    rng = _rng(35)
+    T = 20
+    x = rng.randn(T, 3)
+    w = np.zeros((T, T))
+    for t in range(T):
+        lo = min(max(t - 1, 0), T - 3)
+        w[t, lo : lo + 3] = [0.5, 1.0, 0.75]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = wcorr(x, x, w)
+    for t in (0, 7, T - 1):
+        ref = _weighted_pearson(x, x, w[t])
+        assert np.allclose(out[:, :, t], ref, atol=1e-10, rtol=0)
 
 
 def test_nan_kernel_weights_are_zero():

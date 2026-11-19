@@ -697,6 +697,14 @@ def test_nested_list_kernel_is_one_kernel(fn, n_subjects):
             assert np.array_equal(out[s], ref[s])
 
 
+@pytest.mark.parametrize("fn", [tc.wisfc, tc.isfc, tc.autofc])
+def test_list_mixing_kernels_and_rows_raises(fn):
+    data = _subjects()
+    w = tc.gaussian_weights(NT, PARAMS)
+    with pytest.raises(ValueError, match="timepoint_weights"):
+        fn(data, [w, w[0], w])
+
+
 # ---------------------------------------------------------------- (d) custom cfun
 def test_custom_cfun_per_subject_matches_builtin():
     data = _subjects()

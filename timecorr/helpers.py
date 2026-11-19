@@ -1373,6 +1373,40 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         return wisfc([data], timepoint_weights, subject_weights=subject_weights)[0]
 
     S = len(data)
+    subject_weights = _subject_weight_matrix(data, subject_weights)
+
+    kernels, group_of = _subject_kernels(timepoint_weights, S)
+    stacked = np.stack(data, axis=2)
+    corrs = []
+    cancelled = [False] * len(kernels)
+    sparse = [False] * len(kernels)
+    for s, a in enumerate(data):
+        g = group_of[s]
+        b = _nan_weighted_mean(stacked, subject_weights[s, :])
+        wc, (c, few) = _wcorr(a, b, kernels[g], warn=False, return_cancelled=True)
+        cancelled[g] = cancelled[g] | c
+        sparse[g] = sparse[g] | few
+        if not np.array_equal(a, b, equal_nan=True):
+            wc = _fisher_symmetrize(wc)
+        corrs.append(mat2vec(wc))
+        # free the (K, K, T) array before the next subject's is allocated
+        del wc
+
+    # one warning per call, covering every kernel
+    message = _kernels_message(kernels, group_of, cancelled, sparse)
+    if message is not None:
+        _warn_user(message)
+    return corrs
+
+
+def _subject_weight_matrix(data, subject_weights):
+    """
+    The S x S subject weights ``wisfc`` uses for a list of S subjects: the
+    given matrix, a scalar for every other subject, or (None) the default
+    weights from the correlations between the subjects' static correlation
+    matrices (see ``wisfc``).
+    """
+    S = len(data)
     if subject_weights is None:
         K = data[0].shape[1]
         iu = np.triu_indices(K, 1)
@@ -1399,28 +1433,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         subject_weights = subject_weights * np.ones([S, S])
         np.fill_diagonal(subject_weights, 0)
 
-    kernels, group_of = _subject_kernels(timepoint_weights, S)
-    stacked = np.stack(data, axis=2)
-    corrs = []
-    cancelled = [False] * len(kernels)
-    sparse = [False] * len(kernels)
-    for s, a in enumerate(data):
-        g = group_of[s]
-        b = _nan_weighted_mean(stacked, subject_weights[s, :])
-        wc, (c, few) = _wcorr(a, b, kernels[g], warn=False, return_cancelled=True)
-        cancelled[g] = cancelled[g] | c
-        sparse[g] = sparse[g] | few
-        if not np.array_equal(a, b, equal_nan=True):
-            wc = _fisher_symmetrize(wc)
-        corrs.append(mat2vec(wc))
-        # free the (K, K, T) array before the next subject's is allocated
-        del wc
-
-    # one warning per call, covering every kernel
-    message = _kernels_message(kernels, group_of, cancelled, sparse)
-    if message is not None:
-        _warn_user(message)
-    return corrs
+    return subject_weights
 
 
 def _subject_kernels(timepoint_weights, S):

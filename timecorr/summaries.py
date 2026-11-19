@@ -11,6 +11,10 @@ Each summary works on blocks of complete rows of the (K, K, T) correlation
 array: ``_accumulate`` adds a block's sums of ``r**2`` (and of ``r``) to a
 fitting state, and ``_emit`` adds a block's contribution to the output.  The
 materialized ``fit`` and ``transform`` use one block holding every row.
+``_streamed_summary`` computes the correlations of ``autofc``, ``isfc`` or
+``wisfc`` a block of rows at a time from the data (two passes: fit, then
+output), so the (K, K, T) array is never held; ``_shift_null_threshold`` gives
+the threshold of the automatic number of communities.
 """
 
 import numbers
@@ -19,7 +23,7 @@ import warnings
 import numpy as np
 from sklearn.cluster import KMeans
 
-from .helpers import vec2mat
+from .helpers import _warn_user, vec2mat
 
 __all__ = ["WeightedStrength", "Communities"]
 
@@ -151,7 +155,6 @@ def _member_coefficients(labels):
     community of ``m >= 2`` members (0 elsewhere), and the output column of
     each node (-1 for members of single-node communities).
     """
-    K = len(labels)
     same = labels[:, None] == labels[None, :]
     np.fill_diagonal(same, False)
     sizes = np.bincount(labels)
@@ -262,8 +265,20 @@ class _Summary:
             ``n=None`` without ``null_threshold``, or if the clustering leaves
             no community with at least 2 members.
         """
+        units, K, _ = _as_units(corrs, type(self).__name__)
+        self._check_fit(K, null_threshold)
+        states = []
+        for u in units:
+            R = vec2mat(u)
+            state = _new_state(K, R.shape[2], self.signed)
+            _accumulate(state, 0, K, R)
+            states.append(state)
+        self._fit_states(states, K, order=order, path=path, null_threshold=null_threshold)
+        return self
+
+    def _check_fit(self, K, null_threshold):
+        """Raise ``ValueError`` for a fit to K nodes that cannot be done (see ``fit``)."""
         name = type(self).__name__
-        units, K, _ = _as_units(corrs, name)
         needs = self._needs_communities
         if needs and K < 4:
             raise ValueError(
@@ -284,29 +299,31 @@ class _Summary:
                 f"(K = {K} nodes); give n <= {K // 2}."
             )
 
+    def _fit_states(self, states, K, *, order=None, path=None, null_threshold=None):
+        """
+        Finish a fit from one accumulated state per unit (``_new_state`` /
+        ``_accumulate``): pair weights, mean correlations, communities; appends
+        the record to ``fits_``.  ``_check_fit`` must have passed.
+        """
         weights, means = [], []
-        for u in units:
-            R = vec2mat(u)
-            state = _new_state(K, R.shape[2], self.signed)
-            _accumulate(state, 0, K, R)
+        for state in states:
             weights.append(_pair_weights(state["sum_r2"], state["T"]))
             if self.signed:
                 means.append(_mean_r(state["sum_r"], state["T"]))
 
         labels, n = None, None
-        if needs:
+        if self._needs_communities:
             wbar = np.mean(weights, axis=0)
             if self.n is not None:
                 n = self.n
             else:
                 n = _count_above(wbar, null_threshold, K)
                 if n == 0:
-                    warnings.warn(
-                        f"{name}: no community structure above the shift null "
-                        f"(no eigenvalue above null_threshold={null_threshold!r}); "
-                        "one community holds every node.",
-                        UserWarning,
-                        stacklevel=2,
+                    _warn_user(
+                        f"{type(self).__name__}: no community structure above the "
+                        f"shift null (no eigenvalue above "
+                        f"null_threshold={null_threshold!r}); one community holds "
+                        "every node."
                     )
                     n = 1
             labels = _find_communities(wbar, n)
@@ -324,7 +341,6 @@ class _Summary:
                 "null_threshold": null_threshold,
             }
         )
-        return self
 
     # -- output -------------------------------------------------------------
 
@@ -376,18 +392,21 @@ class _Summary:
             out = np.zeros((R.shape[2], c))
             self._emit(fit, unit, 0, K, R, out)
             outs.append(out)
+        self._warn_constant(outs)
+        return outs[0] if single else outs
+
+    def _warn_constant(self, outs):
+        """One ``UserWarning`` when some column of the outputs is constant over time."""
         constant = sum(
             int(np.sum(np.ptp(o, axis=0) == 0)) for o in outs if o.shape[0] > 0
         )
         if constant:
-            warnings.warn(
-                f"{name}: {constant} output column{'s are' if constant > 1 else ' is'} "
-                "constant over time (zero variance), for example because every "
-                "weight is 0; returned as computed.",
-                UserWarning,
-                stacklevel=2,
+            _warn_user(
+                f"{type(self).__name__}: {constant} output "
+                f"column{'s are' if constant > 1 else ' is'} constant over time "
+                "(zero variance), for example because every weight is 0; returned "
+                "as computed."
             )
-        return outs[0] if single else outs
 
     def __call__(self, corrs):
         """Fit to ``corrs``, then transform ``corrs`` (see ``fit`` and ``transform``)."""
@@ -635,3 +654,359 @@ class Communities(_Summary):
             out[:, col] += mag[b]
             if self.signed:
                 out[:, unit["n_kept"] + col] += sgn[b]
+
+
+# ----------------------------------------------------------------------------
+# streaming: correlations in row blocks, never the full (K, K, T) array
+# ----------------------------------------------------------------------------
+
+# float64 elements held at the peak of a streamed step (see
+# _streamed_peak_elements).  Measured with tracemalloc (autofc and isfc, with
+# and without NaN samples, T 150-600, K 30-120, S 2-6): per row of a block up
+# to 28 K T; fixed terms up to about 10 K T + 5.4 S K T + 6 T**2.
+_PEAK_PER_BLOCK = 32  # times b * K * T: block arrays and estimator temporaries
+_PEAK_PER_DATA = 16  # times T * K: the estimator's per-feature terms
+_PEAK_PER_SUBJECT = 6  # times T * K per subject: stacked data, references, outputs
+_PEAK_PER_KERNEL = 7  # times T * T: kernel copies of both orientations
+_PEAK_PER_UNIT_PAIRS = 6  # times K * K per subject: accumulators and fitted weights
+_FISHER_CHUNKS = 16  # the Fisher average of a block runs on 1/16 of it at a time
+
+
+def _streamed_peak_elements(T, K, S, b):
+    """
+    Number of float64 elements a streamed step holds at its peak, for S
+    subjects of T timepoints and K features and row blocks of b rows:
+    ``32 b K T`` (the block, its other orientation and the estimator's
+    temporaries) ``+ 16 T K`` (the estimator's per-feature terms) ``+ 6 S T
+    K`` (stacked data, references, outputs of up to 4K columns) ``+ 7 T**2``
+    (kernel copies of both orientations) ``+ 6 S K**2`` (accumulators and
+    fitted weights).  The coefficients are measured with ``tracemalloc``
+    (autofc and isfc, with and without NaN samples), with margin; the
+    caller's inputs (data and kernels) are not included.
+    """
+    T, K, S, b = int(T), int(K), int(S), int(b)
+    return (
+        _PEAK_PER_BLOCK * b * K * T
+        + _PEAK_PER_DATA * T * K
+        + _PEAK_PER_SUBJECT * S * T * K
+        + _PEAK_PER_KERNEL * T * T
+        + _PEAK_PER_UNIT_PAIRS * S * K * K
+    )
+
+
+def _block_rows_for(T, K, S, max_bytes):
+    """
+    The largest number of rows per block b (at most K) whose peak
+    (``8 * _streamed_peak_elements(T, K, S, b)`` bytes) fits in
+    ``max_bytes``; 0 if one row does not fit.
+    """
+    fixed = 8 * _streamed_peak_elements(T, K, S, 0)
+    per_row = 8 * _PEAK_PER_BLOCK * int(K) * int(T)
+    if max_bytes < fixed + per_row:
+        return 0
+    return int(min(int(K), (max_bytes - fixed) // per_row))
+
+
+def _correlation_kind(cfun):
+    """``"auto"``, ``"isfc"`` or ``"wisfc"`` for the supported correlation functions."""
+    from .helpers import autofc, isfc, wisfc
+
+    for kind, f in (("auto", autofc), ("isfc", isfc), ("wisfc", wisfc)):
+        if cfun is f:
+            return kind
+    raise ValueError(
+        "the streamed summaries support cfun=autofc, isfc or wisfc; got "
+        f"{getattr(cfun, '__name__', cfun)!r}."
+    )
+
+
+def _as_subjects(subjects):
+    """List of float (T, K) arrays of equal shape."""
+    if not isinstance(subjects, (list, tuple)):
+        subjects = [subjects]
+    out = [np.asarray(x, dtype=np.float64) for x in subjects]
+    if not out or any(x.ndim != 2 for x in out):
+        raise ValueError("subjects must be a non-empty list of 2-D (T, K) arrays.")
+    if any(x.shape != out[0].shape for x in out):
+        raise ValueError(
+            "every subject must have the same shape; got "
+            f"{sorted({x.shape for x in out})}."
+        )
+    return out
+
+
+def _rows_per_block(max_block_elements, T_out, K):
+    """Rows per block for blocks of at most ``max_block_elements`` elements."""
+    if max_block_elements is None:
+        return K
+    b = int(max_block_elements) // (int(T_out) * int(K))
+    if b < 1:
+        raise MemoryError(
+            f"the streamed step needs blocks of at least one row of {T_out} x {K} "
+            f"correlations ({T_out * K} elements); max_block_elements="
+            f"{max_block_elements} is smaller."
+        )
+    return min(b, K)
+
+
+def _fisher_rows(R, Rt):
+    """
+    In place, ``R = _fisher_mean([R, Rt])`` elementwise (the symmetrization of
+    ``wisfc``), a part of the block at a time.
+    """
+    from .helpers import _fisher_mean
+
+    flat, flat_t = R.reshape(-1), Rt.reshape(-1)
+    step = max(1, flat.size // _FISHER_CHUNKS)
+    for k0 in range(0, flat.size, step):
+        k1 = min(flat.size, k0 + step)
+        flat[k0:k1] = _fisher_mean(np.stack([flat[k0:k1], flat_t[k0:k1]]), axis=0)
+
+
+def _unit_row_blocks(a, ref, kernel, symmetric, b):
+    """
+    Rows of one subject's (K, K, T') correlations as ``wisfc`` returns them
+    (before ``mat2vec``), in blocks of b rows: ``(i0, i1, R, cancelled_all,
+    sparse_any)`` as from ``helpers._corr_row_blocks``.  With ``symmetric``
+    (the reference is the subject's own data) the rows are those of the
+    autocorrelation; otherwise each block holds rows of ``C`` (subject versus
+    reference) and of ``C.T`` (reference versus subject), averaged in Fisher z
+    space as ``_fisher_symmetrize`` does.
+    """
+    from .helpers import _corr_row_blocks
+
+    if symmetric:
+        for i0, i1, R, cancelled, sparse in _corr_row_blocks(a, ref, kernel, True, b):
+            yield i0, i1, R, cancelled, sparse
+        return
+    forward = _corr_row_blocks(a, ref, kernel, False, b)
+    backward = _corr_row_blocks(ref, a, kernel, False, b)
+    for (i0, i1, R, cancelled, sparse), (_, _, Rt, _, _) in zip(forward, backward):
+        R = np.ascontiguousarray(R)
+        Rt = np.ascontiguousarray(Rt)
+        _fisher_rows(R, Rt)
+        del Rt
+        yield i0, i1, R, cancelled, sparse
+
+
+class _Units:
+    """
+    The fitting units of a streamed step: each subject, its kernel and its
+    reference (the subject's own data for ``autofc``; otherwise the weighted
+    mean of the subjects that ``wisfc`` correlates it with).
+    """
+
+    def __init__(self, subjects, kernels, cfun):
+        from .helpers import _nan_weighted_mean, _subject_kernels, _subject_weight_matrix
+
+        self.kind = _correlation_kind(cfun)
+        self.subjects = _as_subjects(subjects)
+        S = len(self.subjects)
+        self.kernels, self.group_of = _subject_kernels(kernels, S)
+        self.kernels = [np.asarray(k, dtype=np.float64) for k in self.kernels]
+        if self.kind == "auto":
+            self.weights = None
+            self.stacked = None
+        else:
+            given = 1 - np.eye(S) if self.kind == "isfc" else None
+            self.weights = _subject_weight_matrix(self.subjects, given)
+            self.stacked = np.stack(self.subjects, axis=2)
+        self._mean = _nan_weighted_mean
+
+    def __len__(self):
+        return len(self.subjects)
+
+    def kernel(self, s):
+        return self.kernels[self.group_of[s]]
+
+    def blocks(self, s, b):
+        a = self.subjects[s]
+        if self.kind == "auto":
+            return _unit_row_blocks(a, a, self.kernel(s), True, b)
+        ref = self._mean(self.stacked, self.weights[s, :])
+        symmetric = bool(np.array_equal(a, ref, equal_nan=True))
+        return _unit_row_blocks(a, ref, self.kernel(s), symmetric, b)
+
+
+def _accumulate_units(units, K, T_out, signed, b, masks=None):
+    """
+    Pass 1: one fitting state per unit; with ``masks`` (a pair of lists, one
+    entry per distinct kernel), the estimator's cancelled and sparse masks
+    are merged into it as ``wisfc`` merges them.
+    """
+    states = []
+    for s in range(len(units)):
+        state = _new_state(K, T_out, signed)
+        cancelled = np.ones(T_out, dtype=bool)
+        sparse = np.zeros(T_out, dtype=bool)
+        for i0, i1, R, c, f in units.blocks(s, b):
+            _accumulate(state, i0, i1, R)
+            cancelled &= c
+            sparse |= f
+        if masks is not None:
+            g = units.group_of[s]
+            masks[0][g] = masks[0][g] | cancelled
+            masks[1][g] = masks[1][g] | sparse
+        states.append(state)
+    return states
+
+
+def _shift_null_threshold(
+    subjects, kernels, n_null=5, bandwidth=5.0, max_block_elements=None
+):
+    """
+    Threshold of the automatic number of communities (``autofc`` steps).
+
+    Each repetition circularly shifts every column of every subject's data by
+    an independent lag, drawn with ``numpy.random.default_rng(0)`` uniformly
+    from the integers in ``[L, T - L]``, ``L = min(T // 4, max(10, 10 *
+    bandwidth))``; computes the subjects' pair weights ``w`` with the given
+    kernels and ``autofc`` (streamed, in blocks of at most
+    ``max_block_elements`` correlations; None: one block); and records the
+    largest eigenvalue of ``C = Wbar - median(Wbar over i < j)`` (zero
+    diagonal).  Returns the maximum over ``n_null`` repetitions.  Lags are
+    drawn per repetition, subject by subject, K at a time.  NumPy's global
+    random state is not used.
+
+    Raises
+    ------
+    ValueError
+        If T < 40, or for inputs ``autofc`` rejects.
+    """
+    from .helpers import autofc
+
+    subjects = _as_subjects(subjects)
+    T, K = subjects[0].shape
+    if T < 40:
+        raise ValueError(
+            f"the shift null needs T >= 40 timepoints (got T = {T}); give the "
+            "number of communities n."
+        )
+    L = int(min(T // 4, max(10, 10 * float(bandwidth))))
+    rng = np.random.default_rng(0)
+    probe = _Units(subjects, kernels, autofc)
+    T_out = probe.kernels[0].shape[0]
+    b = _rows_per_block(max_block_elements, T_out, K)
+    rows = np.arange(T)[:, None]
+    cols = np.arange(K)
+    top = []
+    for _ in range(int(n_null)):
+        shifted = []
+        for x in subjects:
+            lags = rng.integers(L, T - L, size=K, endpoint=True)
+            shifted.append(x[(rows - lags[None, :]) % T, cols])
+        units = _Units(shifted, kernels, autofc)
+        states = _accumulate_units(units, K, T_out, False, b)
+        del units, shifted
+        wbar = np.mean([_pair_weights(s["sum_r2"], s["T"]) for s in states], axis=0)
+        top.append(float(np.linalg.eigvalsh(_centered(wbar))[-1]))
+    return float(max(top))
+
+
+def _streamed_summary(
+    subjects,
+    kernels,
+    summary,
+    cfun,
+    *,
+    max_block_elements,
+    order=None,
+    path=None,
+    auto_n=False,
+    bandwidth=5.0,
+):
+    """
+    A summary of the subjects' correlations, computed in row blocks.
+
+    Equals ``summary(cfun(subjects, kernels))`` (one fitting unit per
+    subject, as with ``null_combine``) without the (K, K, T) correlation
+    arrays: pass 1 accumulates every unit's pair weights block by block, the
+    summary is fit (median clip, communities, the automatic count), and pass 2
+    computes the correlations again and adds each block's contribution to the
+    outputs.  Rows of ``isfc`` / ``wisfc`` correlations are built from both
+    orientations (subject versus reference and reference versus subject) and
+    averaged in Fisher z space as ``wisfc`` does.
+
+    Parameters
+    ----------
+    subjects : list of numpy.ndarray
+        One (T, K) array per subject.
+    kernels : numpy.ndarray or list of numpy.ndarray
+        One T' x T kernel, or one per subject (already restricted and
+        event-masked).
+    summary : WeightedStrength or Communities
+        The summary; its ``fits_`` gains one entry.
+    cfun : callable
+        ``autofc``, ``isfc`` or ``wisfc`` (default subject weights).
+    max_block_elements : int or None
+        Largest block of correlations computed at once (b rows hold
+        ``b * K * T'`` elements); None: one block of K rows.
+    order, path : optional
+        Recorded in ``fits_``.
+    auto_n : bool
+        With ``summary.n`` None and a summary that needs communities, set the
+        count with ``_shift_null_threshold`` (``autofc`` only).  Default:
+        False.
+    bandwidth : float
+        Kernel standard deviation for the shift null's lags.  Default: 5.0.
+
+    Returns
+    -------
+    (list of numpy.ndarray, str or None)
+        One (T', c) array per subject, and the estimator's warning message
+        (as ``wisfc`` would issue it, built with ``_kernels_message``) or
+        None.  The message is returned, not issued; the summary's own
+        warnings (no community structure, constant output columns) are
+        issued.
+
+    Raises
+    ------
+    ValueError
+        For an unsupported ``cfun``, the summary's fitting errors, or
+        ``auto_n`` with a ``cfun`` other than ``autofc``.
+    MemoryError
+        If one row block does not fit in ``max_block_elements``.
+    """
+    from .helpers import _kernels_message
+
+    units = _Units(subjects, kernels, cfun)
+    T, K = units.subjects[0].shape
+    T_out = units.kernels[0].shape[0]
+    b = _rows_per_block(max_block_elements, T_out, K)
+
+    null_threshold = None
+    if auto_n and summary._needs_communities and summary.n is None:
+        if units.kind != "auto":
+            raise ValueError(
+                "the automatic number of communities (n=None) is available for "
+                "cfun=autofc only; give n."
+            )
+        summary._check_fit(K, 0.0)
+        null_threshold = _shift_null_threshold(
+            units.subjects,
+            kernels,
+            bandwidth=bandwidth,
+            max_block_elements=max_block_elements,
+        )
+    summary._check_fit(K, null_threshold)
+
+    n_kernels = len(units.kernels)
+    masks = ([False] * n_kernels, [False] * n_kernels)
+    states = _accumulate_units(units, K, T_out, summary.signed, b, masks)
+    message = _kernels_message(units.kernels, units.group_of, masks[0], masks[1])
+    summary._fit_states(
+        states, K, order=order, path=path, null_threshold=null_threshold
+    )
+    del states
+
+    fit = summary.fits_[-1]
+    c = summary._n_columns(fit, K)
+    outs = []
+    for s in range(len(units)):
+        unit = summary._unit_params(fit, s)
+        out = np.zeros((T_out, c))
+        for i0, i1, R, _, _ in units.blocks(s, b):
+            summary._emit(fit, unit, i0, i1, R, out)
+        outs.append(out)
+    summary._warn_constant(outs)
+    return outs, message

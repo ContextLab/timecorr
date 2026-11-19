@@ -20,8 +20,10 @@ are kernel-weighted correlations.
 A step whose reducer is a squared-correlation summary (``WeightedStrength``
 or ``Communities``) and whose correlations come from ``autofc``, ``isfc`` or
 ``wisfc`` with ``null_combine`` (every feeding step with a kernel other than
-``eye_weights`` qualifies) is streamed: its correlations are computed a block
-of rows at a time and never held as one (d, d, T) array per subject.
+``eye_weights`` qualifies) is streamed: its correlations are computed in row
+blocks sized to ``max_memory_gb`` (the estimator's default block size when it
+is None), and the full (d, d, T) array of a subject is held only when one
+block holds all d rows.
 """
 
 import inspect
@@ -53,9 +55,9 @@ from .events import (
     resolve_events_by_order,
 )
 from .summaries import (
-    Communities,
     WeightedStrength,
     _block_rows_for,
+    _from_name,
     _shift_null_threshold,
     _streamed_peak_elements,
     _streamed_summary,
@@ -65,11 +67,11 @@ from .timecorr import _event_kernels, _shaped_kernel, timecorr
 
 _BYTES_PER_GB = 1e9
 
-# The feeding kernel used when delta_weights_function is None: "delta"
-# (eye_weights, co-fluctuations) or "gaussian" (gaussian_weights with
-# _DEFAULT_FEEDING_PARAMS).  While it is "delta", delta_weights_params without
-# delta_weights_function raises ValueError (eye_weights takes no parameters);
-# that rule goes away when the default becomes "gaussian".
+# The feeding kernel used when delta_weights_function is None (read by
+# _feeding_kernel): "delta" (eye_weights, co-fluctuations) or "gaussian"
+# (gaussian_weights with _DEFAULT_FEEDING_PARAMS unless delta_weights_params
+# is given).  With "delta", delta_weights_params without delta_weights_function
+# raises ValueError, since eye_weights takes no parameters.
 _DEFAULT_FEEDING = "delta"
 _DEFAULT_FEEDING_PARAMS = {"var": 25}
 # kernel standard deviation assumed by the shift null for kernels without a
@@ -224,7 +226,8 @@ def _streamed_block_elements(d, T, n_subjects, max_memory_gb, order=None,
     ``max_block_elements`` for a streamed step on ``n_subjects`` (T, d)
     inputs: ``b * d * T`` with b the largest number of rows per block whose
     peak (``summaries._streamed_peak_elements``) fits in ``max_memory_gb``
-    (None: one block of d rows, no limit).  Raise MemoryError, before the step
+    (None: no limit; the step then uses the estimator's default block
+    size, ``helpers._wcorr_block_rows``).  Raise MemoryError, before the step
     computes anything, when one row per block does not fit.  The only place
     that converts the byte budget of a streamed step to a block size.
     """
@@ -300,24 +303,27 @@ def _as_summary(rfun):
     if isinstance(rfun, _Summary):
         return rfun
     if isinstance(rfun, str) and rfun in _SUMMARY_NAMES:
-        return {
-            "weighted_strength": lambda: WeightedStrength(),
-            "weighted_strength_split": lambda: WeightedStrength(split=True),
-            "communities": lambda: Communities(),
-        }[rfun]()
+        return _from_name(rfun)
     return None
 
 
-def _apply_reducer(corrs, rfun, ndims, order=None, path=None, null_threshold=None):
+def _apply_reducer(corrs, rfun, ndims, order=None, path=None, null_threshold=None,
+                   append_fit=False):
     """
     ``_reduce``; a summary is fit (recording ``order`` and ``path`` in its
-    ``fits_``) and then transforms the same correlations.
+    ``fits_``) and then transforms the same correlations.  With
+    ``append_fit`` False, ``fits_`` keeps only the new fit (as a direct call
+    of the summary does); True appends it (the steps of ``features`` and
+    ``two_path_step``).
     """
     summary = _as_summary(rfun)
     if summary is None:
         return _reduce(corrs, rfun, ndims)
     summary.fit(corrs, order=order, path=path, null_threshold=null_threshold)
-    return summary.transform(corrs)
+    out = summary.transform(corrs)
+    if not append_fit:
+        del summary.fits_[:-1]
+    return out
 
 
 def _streams(rfun, cfun, combine, groups=None):
@@ -363,10 +369,10 @@ def _step_kernels(T, n_subjects, weights_function, weights_params,
 
 
 def _run_streamed(subjects, summary, cfun, kernels, *, max_memory_gb, order, path,
-                  auto_n, bandwidth):
+                  auto_n, bandwidth, append_fit=False):
     """
     ``summaries._streamed_summary`` under a memory budget; issues the
-    estimator's warning.
+    estimator's warning.  ``append_fit`` as in ``_apply_reducer``.
     """
     # C-ordered float copies: the blocked arithmetic's round-off then does not
     # depend on the memory layout of the inputs (reducers can return views)
@@ -386,6 +392,8 @@ def _run_streamed(subjects, summary, cfun, kernels, *, max_memory_gb, order, pat
         auto_n=auto_n,
         bandwidth=bandwidth,
     )
+    if not append_fit:
+        del summary.fits_[:-1]
     if message is not None:
         _warn_user(message)
     return out
@@ -406,6 +414,7 @@ def _analysis_path(
     n_outputs=1,
     order=None,
     events=None,
+    append_fit=False,
 ):
     """
     Analysis path of one order: ``reduce(combine(timecorr(subjects, kernel, cfun)))``.
@@ -432,7 +441,8 @@ def _analysis_path(
     ``max_memory_gb`` with the streamed estimate); with ``autofc``, a
     ``Communities`` (or split ``WeightedStrength``) with ``n=None`` gets the
     number of communities from the shift null.  Summaries record ``order``
-    and ``path="analysis"`` in their ``fits_``.
+    and ``path="analysis"`` in their ``fits_`` (appended with
+    ``append_fit``, otherwise the only entry; see ``_apply_reducer``).
     """
     T, d = subjects[0].shape
     if _streams(rfun, cfun, combine, groups):
@@ -450,6 +460,7 @@ def _analysis_path(
             path="analysis",
             auto_n=cfun is autofc,
             bandwidth=_bandwidth(weights_function, weights_params),
+            append_fit=append_fit,
         )
     _check_step_memory(d, T, len(subjects), n_outputs, max_memory_gb, order)
 
@@ -471,7 +482,10 @@ def _analysis_path(
         )
 
     if groups is None:
-        return _apply_reducer(analyze(subjects, events), rfun, ndims, order, "analysis")
+        return _apply_reducer(
+            analyze(subjects, events), rfun, ndims, order, "analysis",
+            append_fit=append_fit,
+        )
 
     def group_events(g):
         if isinstance(events, list):
@@ -489,7 +503,9 @@ def _analysis_path(
         else:
             pieces.append(c)
             sizes.append(None)
-    reduced = _as_list(_apply_reducer(pieces, rfun, ndims, order, "analysis"))
+    reduced = _as_list(
+        _apply_reducer(pieces, rfun, ndims, order, "analysis", append_fit=append_fit)
+    )
     out, start = [], 0
     for n in sizes:
         if n is None:
@@ -536,6 +552,7 @@ def _delta_path(
     include_zero=True,
     events=None,
     held_elements=0,
+    append_fit=False,
 ):
     """
     Feeding (delta) path of one order: per-subject correlations with the
@@ -544,8 +561,10 @@ def _delta_path(
     length is returned.  The step is checked against ``max_memory_gb`` first
     (see ``_check_step_memory``, or ``_streamed_block_elements`` for a
     streamed step).  Summaries record ``order`` and ``path="feeding"`` in
-    their ``fits_``; a ``Communities`` (or split ``WeightedStrength``) with
-    ``n=None`` gets the number of communities from the shift null.
+    their ``fits_`` (appended with ``append_fit``, otherwise the only entry;
+    see ``_apply_reducer``); a ``Communities`` (or split
+    ``WeightedStrength``) with ``n=None`` gets the number of communities
+    from the shift null.
 
     With ``weights_function=eye_weights`` (the default) the features are
     co-fluctuations; ``weights_params``, ``include_timepoints``,
@@ -582,6 +601,7 @@ def _delta_path(
                 path="feeding",
                 auto_n=True,
                 bandwidth=_bandwidth(weights_function, weights_params),
+                append_fit=append_fit,
             )
         _check_step_memory(d, T, S, n_outputs, max_memory_gb, order)
         corrs = _as_list(
@@ -597,7 +617,9 @@ def _delta_path(
                 events=events,
             )
         )
-        return _as_list(_apply_reducer(corrs, rfun, ndims, order, "feeding"))
+        return _as_list(
+            _apply_reducer(corrs, rfun, ndims, order, "feeding", append_fit=append_fit)
+        )
 
     _check_step_memory(d, T, S, n_outputs, max_memory_gb, order)
     null_budget = None
@@ -647,7 +669,9 @@ def _delta_path(
             ),
         )
     return _as_list(
-        _apply_reducer(delta, rfun, ndims, order, "feeding", null_threshold)
+        _apply_reducer(
+            delta, rfun, ndims, order, "feeding", null_threshold, append_fit=append_fit
+        )
     )
 
 
@@ -763,20 +787,61 @@ def _check_ndims_steps(ndims, steps):
             )
 
 
-def _feeding_kernel(weights_function, weights_params):
+def _known_width(rfun, d, ndims):
     """
-    ``(function, params)`` of the feeding kernel: None selects the default
-    (``_DEFAULT_FEEDING``: ``eye_weights``, or ``gaussian_weights`` with
-    ``_DEFAULT_FEEDING_PARAMS`` unless params are given).
+    Number of columns ``rfun`` returns for (T, d(d+1)/2) correlations when it
+    is known in advance: d(d+1)/2 unreduced, ``ndims`` (d when None) for a
+    model, d for a graph measure; None for a summary or a callable.
     """
+    if rfun is None:
+        return d * (d + 1) // 2
+    if _is_model(rfun):
+        return d if ndims is None else int(ndims)
+    if isinstance(rfun, str) and not _is_summary(rfun):
+        return d
+    return None
+
+
+def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfun,
+                          combine, feeding_function, ndims):
+    """
+    Raise MemoryError, before anything is computed, for a streamed step of
+    ``features`` that does not fit ``max_memory_gb`` with one row per block.
+    Input widths follow ``_known_width`` from K; where a width is not known
+    in advance, K is used (as ``estimate_memory_gb(..., streamed=True)``).
+    The steps are checked again, with their actual widths, when they run.
+    """
+    d = int(K)
+    for k in sorted(analysis):
+        if _streams(analysis[k], cfun, combine):
+            _streamed_block_elements(d, T, S, max_memory_gb, k, "analysis")
+        if k in fed and feeding_function is not eye_weights and _is_summary(feeding[k]):
+            _streamed_block_elements(d, T, S, max_memory_gb, k, "feeding")
+        width = _known_width(feeding[k], d, ndims)
+        d = int(K) if width is None else width
+
+
+def _feeding_kernel(weights_function, weights_params, default=None):
+    """
+    ``(function, params)`` of the feeding kernel: None selects the kernel
+    named by ``default`` (None: ``_DEFAULT_FEEDING``): ``"delta"`` gives
+    ``eye_weights``, ``"gaussian"`` gives ``gaussian_weights`` with
+    ``_DEFAULT_FEEDING_PARAMS`` unless params are given.  ``eye_weights``
+    (given or selected) with params raises ``ValueError``.
+    """
+    default = _DEFAULT_FEEDING if default is None else default
     if weights_function is None:
-        if _DEFAULT_FEEDING == "delta":
+        if default == "delta":
             if weights_params is not None:
                 raise ValueError(
                     "delta_weights_params needs delta_weights_function: the "
                     "default feeding kernel (eye_weights) takes no parameters."
                 )
             return eye_weights, weights_params
+        if default != "gaussian":
+            raise ValueError(
+                f"default must be 'delta' or 'gaussian'; got {default!r}."
+            )
         if weights_params is None:
             return gaussian_weights, dict(_DEFAULT_FEEDING_PARAMS)
         return gaussian_weights, weights_params
@@ -784,6 +849,12 @@ def _feeding_kernel(weights_function, weights_params):
         raise TypeError(
             "delta_weights_function must be None or a kernel function called as "
             f"f(T, params); got {type(weights_function).__name__}."
+        )
+    if weights_function is eye_weights and weights_params is not None:
+        raise ValueError(
+            "delta_weights_params is not used with delta_weights_function="
+            "eye_weights: eye_weights takes no parameters; leave "
+            "delta_weights_params as None."
         )
     return weights_function, weights_params
 
@@ -872,7 +943,9 @@ def two_path_step(
         Feeding kernel (keyword-only; see ``features``).  Default: None
         (``eye_weights``).
     delta_weights_params : dict or None
-        Parameters of the feeding kernel (keyword-only).  Default: None (the
+        Parameters of the feeding kernel (keyword-only); must be None when
+        the feeding kernel is ``eye_weights`` (given or by default), which
+        takes no parameters (``ValueError`` otherwise).  Default: None (the
         kernel's defaults).
     order : int
         The order this step computes (keyword-only), used to resolve
@@ -1061,7 +1134,7 @@ def _two_path_step(
                 )
     X_next = _analysis_path(
         subjects, max_memory_gb=max_memory_gb, n_outputs=n_outputs, order=order,
-        **analysis
+        append_fit=True, **analysis
     )
     if not feed:
         return X_next, None
@@ -1079,6 +1152,7 @@ def _two_path_step(
         include_zero=analysis.get("include_zero", True),
         events=analysis.get("events"),
         held_elements=held,
+        append_fit=True,
     )
     return X_next, D_next
 
@@ -1147,10 +1221,12 @@ def features(
     correlations come from ``autofc``, ``isfc`` or ``wisfc`` with
     ``null_combine``; every feeding step with a kernel other than
     ``eye_weights`` qualifies.  A streamed step computes its correlations a
-    block of rows at a time, twice (fit, then output), and never holds one
-    (d, d, T) array per subject; its block size is the largest that fits in
-    ``max_memory_gb``.  Other steps hold their correlations in full and then
-    call the reducer.  The summaries' weights and communities are fitted on
+    block of rows at a time, twice (fit, then output); its block size is the
+    largest that fits in ``max_memory_gb`` (when ``max_memory_gb`` is None,
+    the estimator's default: at most ``2**23`` correlations per block, a
+    tenth of that with NaN samples, and at least one row), so the full (d,
+    d, T) array of a subject is held only when one block holds all d rows.
+    Other steps hold their correlations in full and then call the reducer.  The summaries' weights and communities are fitted on
     all timepoints and all events of a step (the fit is not causal, also
     with ``include_timepoints="backward"``); ``fit`` and ``transform`` of an
     instance allow fitting on other data.
@@ -1242,7 +1318,7 @@ def features(
         per-subject events, the kernels of the distinct event sets (one T x
         T array each) are not included in the estimate of a step that holds
         its correlations.  None checks nothing (a streamed step then uses
-        one block).  Default: 4.0.
+        the estimator's default block size).  Default: 4.0.
     events : None, dict, array-like, or list
         Restricts kernels to events (keyword-only; see ``timecorr`` for one
         specification: boundaries shared by all subjects, features with T
@@ -1275,7 +1351,9 @@ def features(
         co-fluctuation code path (NaN handling and message as described
         under ``data``).  Default: None (``eye_weights``).
     delta_weights_params : dict or None
-        Parameters of the feeding kernel (keyword-only).  Default: None (the
+        Parameters of the feeding kernel (keyword-only); must be None when
+        the feeding kernel is ``eye_weights`` (given or by default), which
+        takes no parameters (``ValueError`` otherwise).  Default: None (the
         kernel function's own defaults).
 
     Returns
@@ -1338,8 +1416,14 @@ def features(
         Before a correlation step allocates its arrays, if that step's
         estimate exceeds ``max_memory_gb`` (with unreduced feeding features,
         every order is checked before anything is computed; for a streamed
-        step, if one row per block does not fit).  The message gives the
-        estimate and the largest number of features that would fit.
+        step, if one row per block does not fit).  Every streamed step is
+        also checked before anything is computed, with its input width where
+        it is known in advance (K at order 1; ``d(d+1)/2`` after an
+        unreduced feeding step, ``ndims`` or ``d`` after a model-based one,
+        ``d`` after a graph measure) and K where it is not (after a summary
+        or a callable), as ``estimate_memory_gb(..., streamed=True)`` does.
+        The message gives the estimate and the largest number of features
+        that would fit.
 
     Notes
     -----
@@ -1436,6 +1520,12 @@ def features(
                     f"that fits orders up to {order} is K={fit}. Pass a reducer "
                     "(rfun, delta_rfun), lower the order, or raise max_memory_gb."
                 )
+    if max_memory_gb is not None:
+        # streamed steps of later orders are checked before order 1 runs
+        _check_streamed_steps(
+            K, T, S, max_memory_gb, analysis_rfun, feeding_rfun, fed, cfun=cfun,
+            combine=combine, feeding_function=feeding_function, ndims=ndims,
+        )
 
     X = [subjects]
     D = [subjects]

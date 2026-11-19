@@ -13,7 +13,8 @@ fitting state, and ``_emit`` adds a block's contribution to the output.  The
 materialized ``fit`` and ``transform`` use one block holding every row.
 ``_streamed_summary`` computes the correlations of ``autofc``, ``isfc`` or
 ``wisfc`` a block of rows at a time from the data (two passes: fit, then
-output), so the (K, K, T) array is never held; ``_shift_null_threshold`` gives
+output), so the (K, K, T) array is held only when one block covers all K
+rows; ``_shift_null_threshold`` gives
 the threshold of the automatic number of communities.
 """
 
@@ -23,7 +24,22 @@ import warnings
 import numpy as np
 from sklearn.cluster import KMeans
 
-from .helpers import _warn_user, vec2mat
+from .helpers import (
+    _SUMMARY_NAMES,
+    _WCORR_NAN_PRODUCTS,
+    _corr_row_blocks,
+    _fisher_mean,
+    _kernels_message,
+    _nan_weighted_mean,
+    _subject_kernels,
+    _subject_weight_matrix,
+    _warn_user,
+    _wcorr_block_rows,
+    autofc,
+    isfc,
+    vec2mat,
+    wisfc,
+)
 
 __all__ = ["WeightedStrength", "Communities"]
 
@@ -289,9 +305,10 @@ class _Summary:
             raise ValueError(
                 f"{self._what()} needs the number of communities n: give n "
                 f"(for example {name}(n=6"
-                f"{', split=True' if name == 'WeightedStrength' else ''})); the "
-                "data-driven count (n=None) is available only inside features "
-                "and two_path_step."
+                f"{', split=True' if name == 'WeightedStrength' else ''})).  "
+                "The automatic count (n=None) is available in features and "
+                "two_path_step on the feeding path, and on the analysis path "
+                "with cfun=autofc and combine=null_combine; otherwise give n."
             )
         if needs and self.n is not None and self.n > K // 2:
             raise ValueError(
@@ -409,8 +426,13 @@ class _Summary:
             )
 
     def __call__(self, corrs):
-        """Fit to ``corrs``, then transform ``corrs`` (see ``fit`` and ``transform``)."""
-        return self.fit(corrs).transform(corrs)
+        """
+        Fit to ``corrs``, then transform ``corrs`` (see ``fit`` and
+        ``transform``); ``fits_`` then holds only this fit.
+        """
+        out = self.fit(corrs).transform(corrs)
+        del self.fits_[:-1]
+        return out
 
     def _unit_params(self, fit, unit):
         """
@@ -460,7 +482,11 @@ class WeightedStrength(_Summary):
         unit, zero diagonal), ``"mean_r"`` (list of (K, K) ``mean_t r_ij``
         when signed, otherwise None), ``"labels"`` ((K,) community of each
         node, or None), ``"n"`` (number of communities found, or None) and
-        ``"null_threshold"``.
+        ``"null_threshold"``.  ``fit`` appends one entry; calling the
+        instance (as ``reduce``, ``timecorr`` and the decoders do) leaves
+        only the entry of that call.  ``features`` clears ``fits_`` at the
+        start of a call and, like ``two_path_step``, appends one entry per
+        step the instance reduces.
 
     Notes
     -----
@@ -577,7 +603,11 @@ class Communities(_Summary):
         (list of (K, K) pair weights, one per unit), ``"mean_r"`` (list of
         (K, K) ``mean_t r_ij`` when signed, otherwise None), ``"labels"``
         ((K,)), ``"n"`` (number of communities found) and
-        ``"null_threshold"``.
+        ``"null_threshold"``.  ``fit`` appends one entry; calling the
+        instance (as ``reduce``, ``timecorr`` and the decoders do) leaves
+        only the entry of that call.  ``features`` clears ``fits_`` at the
+        start of a call and, like ``two_path_step``, appends one entry per
+        step the instance reduces.
 
     Notes
     -----
@@ -654,8 +684,22 @@ class Communities(_Summary):
                 out[:, unit["n_kept"] + col] += sgn[b]
 
 
+# the summary each name in helpers._SUMMARY_NAMES stands for
+_NAMED = {
+    "weighted_strength": lambda: WeightedStrength(),
+    "weighted_strength_split": lambda: WeightedStrength(split=True),
+    "communities": lambda: Communities(),
+}
+assert set(_NAMED) == set(_SUMMARY_NAMES)
+
+
+def _from_name(name):
+    """A new summary instance for a name in ``helpers._SUMMARY_NAMES``."""
+    return _NAMED[name]()
+
+
 # ----------------------------------------------------------------------------
-# streaming: correlations in row blocks, never the full (K, K, T) array
+# streaming: correlations in row blocks
 # ----------------------------------------------------------------------------
 
 # float64 elements held at the peak of a streamed step (see
@@ -707,8 +751,6 @@ def _block_rows_for(T, K, S, max_bytes):
 
 def _correlation_kind(cfun):
     """``"auto"``, ``"isfc"`` or ``"wisfc"`` for the supported correlation functions."""
-    from .helpers import autofc, isfc, wisfc
-
     for kind, f in (("auto", autofc), ("isfc", isfc), ("wisfc", wisfc)):
         if cfun is f:
             return kind
@@ -733,10 +775,17 @@ def _as_subjects(subjects):
     return out
 
 
-def _rows_per_block(max_block_elements, T_out, K):
-    """Rows per block for blocks of at most ``max_block_elements`` elements."""
+def _rows_per_block(max_block_elements, T_out, K, T=None, has_nan=False):
+    """
+    Rows per block for blocks of at most ``max_block_elements`` elements; for
+    None, the estimator's own block size (``helpers._wcorr_block_rows`` for
+    T input timepoints, ``T`` defaulting to ``T_out``, and K columns, with
+    its smaller blocks for data with NaN samples), at most K.
+    """
     if max_block_elements is None:
-        return K
+        T = T_out if T is None else T
+        products = _WCORR_NAN_PRODUCTS if has_nan else 1
+        return min(int(K), _wcorr_block_rows(int(T), int(K), products))
     b = int(max_block_elements) // (int(T_out) * int(K))
     if b < 1:
         raise MemoryError(
@@ -752,8 +801,6 @@ def _fisher_rows(R, Rt):
     In place, ``R = _fisher_mean([R, Rt])`` elementwise (the symmetrization of
     ``wisfc``), a part of the block at a time.
     """
-    from .helpers import _fisher_mean
-
     flat, flat_t = R.reshape(-1), Rt.reshape(-1)
     step = max(1, flat.size // _FISHER_CHUNKS)
     for k0 in range(0, flat.size, step):
@@ -771,8 +818,6 @@ def _unit_row_blocks(a, ref, kernel, symmetric, b):
     reference) and of ``C.T`` (reference versus subject), averaged in Fisher z
     space as ``_fisher_symmetrize`` does.
     """
-    from .helpers import _corr_row_blocks
-
     if symmetric:
         for i0, i1, R, cancelled, sparse in _corr_row_blocks(a, ref, kernel, True, b):
             yield i0, i1, R, cancelled, sparse
@@ -795,14 +840,9 @@ class _Units:
     """
 
     def __init__(self, subjects, kernels, cfun, grouping=None):
-        from .helpers import (
-            _nan_weighted_mean,
-            _subject_kernels,
-            _subject_weight_matrix,
-        )
-
         self.kind = _correlation_kind(cfun)
         self.subjects = _as_subjects(subjects)
+        self.has_nan = any(bool(np.isnan(x).any()) for x in self.subjects)
         S = len(self.subjects)
         if grouping is None:
             self.kernels, self.group_of = _subject_kernels(kernels, S)
@@ -868,7 +908,8 @@ def _shift_null_threshold(
     from the integers in ``[L, T - L]``, ``L = min(T // 4, max(10, 10 *
     bandwidth))``; computes the subjects' pair weights ``w`` with the given
     kernels and ``autofc`` (streamed, in blocks of at most
-    ``max_block_elements`` correlations; None: one block); and records the
+    ``max_block_elements`` correlations; None: the estimator's default block
+    size, see ``_rows_per_block``); and records the
     largest eigenvalue of ``C = Wbar - median(Wbar over i < j)`` (zero
     diagonal).  Returns the maximum over ``n_null`` repetitions.  Lags are
     drawn per repetition, subject by subject, K at a time.  NumPy's global
@@ -879,8 +920,6 @@ def _shift_null_threshold(
     ValueError
         If T < 40, or for inputs ``autofc`` rejects.
     """
-    from .helpers import autofc
-
     subjects = _as_subjects(subjects)
     T, K = subjects[0].shape
     if T < 40:
@@ -892,7 +931,7 @@ def _shift_null_threshold(
     rng = np.random.default_rng(0)
     probe = _Units(subjects, kernels, autofc)
     T_out = probe.kernels[0].shape[0]
-    b = _rows_per_block(max_block_elements, T_out, K)
+    b = _rows_per_block(max_block_elements, T_out, K, T, probe.has_nan)
     rows = np.arange(T)[:, None]
     cols = np.arange(K)
     top = []
@@ -948,7 +987,8 @@ def _streamed_summary(
         ``autofc``, ``isfc`` or ``wisfc`` (default subject weights).
     max_block_elements : int or None
         Largest block of correlations computed at once (b rows hold
-        ``b * K * T'`` elements); None: one block of K rows.  Only the size
+        ``b * K * T'`` elements); None: the estimator's default block size
+        (``_rows_per_block``).  Only the size
         of one block is checked here; the step's total memory (see
         ``_streamed_peak_elements``) is checked by the caller, which
         converts a byte budget to a block size with ``_block_rows_for``.
@@ -956,8 +996,8 @@ def _streamed_summary(
         Recorded in ``fits_``.
     auto_n : bool
         With ``summary.n`` None and a summary that needs communities, set the
-        count with ``_shift_null_threshold`` (``autofc`` only).  Default:
-        False.
+        count with ``_shift_null_threshold`` (``autofc`` only; the callers
+        in ``higher_order`` pass True for ``autofc`` only).  Default: False.
     bandwidth : float
         Kernel standard deviation for the shift null's lags.  Default: 5.0.
 
@@ -979,16 +1019,16 @@ def _streamed_summary(
         If one row of correlations (``K * T'`` elements) exceeds
         ``max_block_elements``.
     """
-    from .helpers import _kernels_message
-
     units = _Units(subjects, kernels, cfun)
     T, K = units.subjects[0].shape
     T_out = units.kernels[0].shape[0]
-    b = _rows_per_block(max_block_elements, T_out, K)
+    b = _rows_per_block(max_block_elements, T_out, K, T, units.has_nan)
 
     null_threshold = None
     if auto_n and summary._needs_communities and summary.n is None:
         if units.kind != "auto":
+            # not reached from features or two_path_step, which pass
+            # auto_n=True only with autofc
             raise ValueError(
                 "the automatic number of communities (n=None) is available for "
                 "cfun=autofc only; give n."

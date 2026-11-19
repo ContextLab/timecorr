@@ -286,7 +286,9 @@ squared correlation within each community). They are given to ``reduce`` or
 ``timecorr`` as ``rfun``, as instances or as the strings
 ``"weighted_strength"``, ``"weighted_strength_split"`` and ``"communities"``;
 ``fit`` and ``transform`` fit the weights and communities to one set of
-correlations and apply them to another, and ``fits_`` records each fit.
+correlations and apply them to another, and ``fits_`` records the fits
+(calling an instance keeps only that call's fit; ``fit`` and each step of
+``features`` and ``two_path_step`` append one).
 
 .. code-block:: python
 

@@ -317,7 +317,9 @@ def timepoint_decoder(
         Default: ``mean_combine``.
     rfun : None, str, dict, callable, or a list of these
         Reducer for orders ``k >= 1`` on both paths (see ``helpers.reduce``), or
-        one per order (entry 0 unused).  Default: None (no reduction).
+        one per order (entry 0 unused).  The summary strings and objects
+        that ``reduce`` accepts (``WeightedStrength``, ``Communities``) are
+        accepted too.  Default: None (no reduction).
     weights_fun : function, optional
         Alias of ``weights_function`` (its name in timecorr 0.2.0).  Passing
         both raises ``TypeError``.  Default: None.
@@ -736,7 +738,9 @@ def folding_levels(
         Within-group combine for ``level >= 1``.  Default (None):
         ``mean_combine``.
     rfun : None, str, dict, callable, or a list indexed by level
-        Reducer (see ``helpers.reduce``).  Default: None (no reduction).
+        Reducer (see ``helpers.reduce``).  The summary strings and objects
+        that ``reduce`` accepts (``WeightedStrength``, ``Communities``) are
+        accepted too.  Default: None (no reduction).
     weights_fun : function, optional
         Alias of ``weights_function`` (its name in timecorr 0.2.0).  Passing
         both raises ``TypeError``.  Default: None.
@@ -986,7 +990,10 @@ def folding_levels_ec(
         Within-group combine for ``level >= 1``.  Default (None):
         ``mean_combine``.
     rfun : None, str, dict, callable, or a list indexed by level
-        Reducer applied to each group separately.  Default: None.
+        Reducer applied to each group separately (see ``helpers.reduce``).
+        The summary strings and objects that ``reduce`` accepts
+        (``WeightedStrength``, ``Communities``) are accepted too.  Default:
+        None.
     weights_fun : function, optional
         Alias of ``weights_function`` (its name in timecorr 0.2.0).  Passing
         both raises ``TypeError``.  Default: None.

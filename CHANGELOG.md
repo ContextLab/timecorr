@@ -227,20 +227,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   by `reduce`, `timecorr` and `features`, as instances or as the names
   `"weighted_strength"`, `"weighted_strength_split"` and `"communities"`;
   `fit` and `transform` separate fitting from applying, and `fits_` records
-  each fit. In `features`, `n=None` sets the number of communities from a
+  the fits (calling an instance, as `reduce`, `timecorr` and the decoders
+  do, keeps only that call's fit; `fit` and each step of `features` and
+  `two_path_step` append one). The decoders accept the summaries as `rfun`.
+  In `features`, `n=None` sets the number of communities from a
   shift null (eigenvalues of the centered pair weights above those of
   data whose columns are circularly shifted by independent lags).
 - `features` and `two_path_step`: keyword-only `delta_weights_function` and
   `delta_weights_params` set the kernel of the path that feeds the next
-  order (the delta path). A kernel other than `eye_weights` gives
+  order (the delta path); `delta_weights_params` with `eye_weights` (given
+  or by default) raises `ValueError`. A kernel other than `eye_weights` gives
   kernel-weighted correlations (`autofc`) instead of co-fluctuations.
   `rfun` and `delta_rfun` accept `"auto"` (analysis path: PCA at order 1 and
   `WeightedStrength(signed=True)` above; delta path: `"communities"`) and
   dicts keyed by order. A step whose reducer is a summary, with
   `combine=null_combine` and `cfun` `autofc`, `isfc` or `wisfc`, is computed
-  in blocks of nodes (streamed) so that the `(K, K, T)` correlation array is
-  never held in memory; `estimate_memory_gb(..., streamed=True)` gives the
-  peak of a streamed step. The default order-1 reducer (PCA) still holds
+  in blocks of nodes (streamed), sized to `max_memory_gb` (the estimator's
+  default block size when it is None), so that the `(K, K, T)` correlation
+  array is held only when one block covers all K rows;
+  `estimate_memory_gb(..., streamed=True)` gives the smallest peak of a
+  streamed step, and `features` checks every streamed step against
+  `max_memory_gb` before computing anything. The default order-1 reducer (PCA) still holds
   `K(K+1)/2` columns per subject, so memory is bounded only when every step
   uses a summary (for example `rfun=tc.WeightedStrength(signed=True)`).
   The defaults of `features` are unchanged (`eye_weights` delta kernel,

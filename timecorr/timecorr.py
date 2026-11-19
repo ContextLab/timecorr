@@ -127,26 +127,22 @@ def _event_kernels(weights, resolved, n_subjects):
     return kernels
 
 
-def _per_subject_cfun(cfun, data, weights, groups):
+def _per_subject_cfun(cfun, data, kernels, groups):
     """
-    Correlations with one masked kernel per group of subjects sharing events.
+    Correlations of a custom ``cfun`` with per-subject kernels.
 
-    The built-in correlation functions take the list of kernels in one call; a
-    custom ``cfun`` is called once per group with the full data, and each subject's
-    output is taken from the call made with that subject's kernel.
+    ``kernels`` holds one masked kernel per subject (from ``_event_kernels``;
+    subjects of one group share one array) and ``groups`` the
+    ``(boundaries, subjects)`` pairs of ``distinct_event_sets``.  ``cfun`` is
+    called once per group with the full data and that group's kernel, and
+    each subject's output is taken from the call made with its kernel.  (The
+    built-in correlation functions take the list of kernels in one call and
+    do not come here.)
     """
     S = len(data)
-    if cfun in _KERNEL_LIST_CFUNS:
-        kernels = [None] * S
-        for boundaries, subjects in groups:
-            masked = _mask_for_subjects(weights, boundaries, subjects)
-            for s in subjects:
-                kernels[s] = masked
-        return cfun(data, kernels)
-
     out = [None] * S
-    for boundaries, subjects in groups:
-        result = cfun(data, _mask_for_subjects(weights, boundaries, subjects))
+    for _, subjects in groups:
+        result = cfun(data, kernels[subjects[0]])
         if not isinstance(result, list) or len(result) != S:
             raise ValueError(
                 "with per-subject events, cfun must return a list with one array per "
@@ -411,7 +407,7 @@ def timecorr(
             corrs = cfun(data, kernels)
         else:
             groups = distinct_event_sets(_restricted(resolved), len(data))
-            corrs = _per_subject_cfun(cfun, data, weights, groups)
+            corrs = _per_subject_cfun(cfun, data, kernels, groups)
         corrs = reduce(combine(corrs), rfun=rfun)
 
     else:

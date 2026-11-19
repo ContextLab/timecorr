@@ -714,6 +714,8 @@ _ZERO_VARIANCE_TOL = 1e-10
 # estimator holds a few such blocks at once, so peak extra memory stays well
 # under 1 GB regardless of the number of features.
 _WCORR_BLOCK_ELEMENTS = 2**23
+# block-sized products per row in the estimator's NaN path (one without NaN)
+_WCORR_NAN_PRODUCTS = 10
 
 # Relative round-off of removing a column's mean (a few float64 spacings).
 _ROUND_OFF = 64 * np.finfo(np.float64).eps
@@ -854,7 +856,7 @@ def _wcorr_setup(a, b, weights, autocorrelation):
         # per pair and kernel row: the number of timepoints with non-zero weight
         # where both features are observed
         state["support"] = (A > 0).astype(np.float64)
-        state["n_products"] = 10
+        state["n_products"] = _WCORR_NAN_PRODUCTS
     return state
 
 
@@ -986,10 +988,8 @@ def _corr_row_blocks(a, b, weights, symmetric, rows_per_block=None):
     ``symmetric=True`` declares that ``a`` and ``b`` are the same data (an
     autocorrelation): each block's diagonal is set to 1 (0 where undefined)
     and the entries within the block's own rows and columns are averaged with
-    their transpose.  Entries outside that square are computed once per
-    orientation, so they equal ``_wcorr``'s mirrored values up to round-off.
-    With ``symmetric=True``, entries outside a block's own square are
-    computed in the transposed orientation, so they agree with the mirrored
+    their transpose.  Entries outside that square are computed in the
+    transposed orientation, so they agree with ``_wcorr``'s mirrored
     autocorrelation output to round-off, not bit for bit.
 
     The kernel is prepared as in ``_wcorr``: NaN weights count as 0, a kernel
@@ -2170,18 +2170,15 @@ def reduce(corrs, rfun=None, ndims=None):
     if ndims is not None and not _is_model(rfun):
         raise ValueError(
             f"ndims={ndims} applies to model-based reduction only; the graph "
-            "measure or callable rfun defines its own output width.  Leave ndims "
-            "as None."
+            "measure, summary or callable rfun defines its own output width.  "
+            "Leave ndims as None."
         )
 
-    from .summaries import Communities, WeightedStrength, _Summary
+    # imported here: timecorr.summaries imports this module
+    from .summaries import _Summary, _from_name
 
     if isinstance(rfun, str) and rfun in _SUMMARY_NAMES:
-        rfun = {
-            "weighted_strength": lambda: WeightedStrength(),
-            "weighted_strength_split": lambda: WeightedStrength(split=True),
-            "communities": lambda: Communities(),
-        }[rfun]()
+        rfun = _from_name(rfun)
 
     if isinstance(rfun, _Summary):
         # a summary takes a list or a single array and returns the same kind

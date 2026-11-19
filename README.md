@@ -10,9 +10,9 @@ The toolbox accompanies Owen, Chang & Manning (2021), *Nature Communications* 12
 - **Kernels**: Gaussian, Laplace, Mexican hat, t, boxcar, uniform and delta (`eye_weights`), each two-sided or one-sided (only past or only future timepoints, with or without the timepoint itself).
 - **Higher-order features** (`tc.features`): features of every order up to a chosen order, computed through the two paths of Fig. 10 of the paper, with optional dimensionality reduction at each order.
 - **Dimensionality reduction**: hypertools / scikit-learn models (PCA, FastICA, factor analysis and others), graph measures (eigenvector centrality, PageRank centrality, strength), or your own function.
-- **Event-restricted kernels** (`events=` in `tc.timecorr` and `tc.features`, and `tc.segment`): confine the kernel to blocks of consecutive timepoints (events), given as boundary indices or found by segmenting a separate timeseries (for example a stimulus embedding) with a hidden Markov model; events may differ per subject and, in `tc.features`, per order.
+- **Event-restricted kernels** (`events=` in `tc.timecorr` and `tc.features`, and `tc.segment`): confine the kernel to blocks of consecutive timepoints (events), given as boundary indices or found by segmenting a separate timeseries (for example a stimulus embedding) with a hidden Markov model; events may differ per subject and, in `tc.features` and the correlation decoders, per order.
 - **Simulation** (`tc.simulate_data`): data with known dynamic correlations, including structure embedded at exactly one chosen correlation order.
-- **Decoding**: timepoint decoders that measure how well features of each order identify the moment a pattern came from, across groups of subjects.
+- **Decoding**: timepoint decoders that measure how well features of each order identify the moment a pattern came from, across groups of subjects. They accept `events`: the correlation decoders restrict the analysis kernel at levels 1 and above (level 0 is unchanged), and `pca_decoder` restricts its smoothing kernel; the events are supplied by the caller and used as given in every fold.
 - **Inputs**: numpy arrays, pandas DataFrames and polars DataFrames, or lists of them (one per subject).
 
 # Quick Start
@@ -142,7 +142,7 @@ The tutorials are Jupyter notebooks in `docs/tutorial/`, also rendered on Read t
 - **Using timecorr** (`timecorr_notebook.ipynb`): simulation, kernels, the vectorized format, several subjects.
 - **Synthetic data** (`synthetic_data_tutorial.ipynb`): the simulated dataset types, kernel shape and width compared against the true correlations, co-fluctuations from the delta kernel, several subjects, and a per-timepoint test across subjects.
 - **Higher-order correlations** (`higher_order_tutorial.ipynb`): the two paths of Fig. 10, `tc.features`, one-sided kernels, simulation and recovery at a chosen order, and the limits (feature counts, memory, variance-based reduction).
-- **Event-restricted kernels** (`event_kernels_tutorial.ipynb`): what restricting a kernel to events does, passing boundaries, segmenting synthetic stimulus embeddings with `tc.segment` (ordered events and recurring states), recovery of block-wise correlations compared with the unrestricted kernel and with wrong boundaries, per-subject events, and events per order in `tc.features`.
+- **Event-restricted kernels** (`event_kernels_tutorial.ipynb`): what restricting a kernel to events does, passing boundaries, segmenting synthetic stimulus embeddings with `tc.segment` (ordered events and recurring states), recovery of block-wise correlations compared with the unrestricted kernel and with wrong boundaries, per-subject events, events per order in `tc.features`, and events in the decoders.
 - **Applications** (`applications_tutorial.ipynb`): dynamic correlations in simulated neuroscience, finance, climate and social-network data.
 
 Each tutorial has an "Open in Colab" link at the top that opens the notebook in Google Colab, where its first code cell installs timecorr.

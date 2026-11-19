@@ -52,8 +52,8 @@ segmenting synthetic stimulus embeddings with ``tc.segment`` (ordered events,
 with the number of events given or chosen automatically, and recurring states);
 recovery of block-wise correlations in synthetic brain data with the
 restricted kernel, compared with the unrestricted kernel and with wrong
-boundaries; per-subject events and cross-subject correlations; and different
-events at each order in ``tc.features``.
+boundaries; per-subject events and cross-subject correlations; different
+events at each order in ``tc.features``; and events in the timepoint decoders.
 
 Applications
 ------------

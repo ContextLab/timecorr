@@ -56,7 +56,7 @@ python setup.py sdist bdist_wheel
   - `reduce` (dimensionality reduction), `format_data` (input formatting via pydata-wrangler), `mat2vec`/`vec2mat`, `smooth`, `plot_weights`
   - Re-exports of the decoders from `decoding.py`
 - **`timecorr/higher_order.py`**: the two-path pipeline: `features`, `two_path_step`, `estimate_memory_gb`.
-- **`timecorr/decoding.py`**: timepoint decoders (`timepoint_decoder`, `weighted_timepoint_decoder`, `weighted_timepoint_decoder_ec`, `pca_decoder`) and their helpers.
+- **`timecorr/decoding.py`**: timepoint decoders (`timepoint_decoder`, `weighted_timepoint_decoder`, `weighted_timepoint_decoder_ec`, `pca_decoder`) and their helpers. All four accept `events` / `events_params`, resolved once on the full subject list before the folds (per-subject entries follow their subject through the folds; segmentation does not advance NumPy's global random state): the correlation decoders restrict the analysis kernel at levels >= 1 and leave level 0 unchanged; `pca_decoder` restricts its level-0 smoothing kernel and takes one specification, not a dict by order.
 - **`timecorr/events.py`**: event-restricted kernels: parsing of `events` specifications into boundary sets (`resolve_events`, `resolve_events_by_order`, `check_boundaries`, `block_labels`), `mask_kernel` (zero weight between timepoints in different blocks), `distinct_event_sets`, and `segment` (hidden Markov model segmentation with hmmlearn: `kind="ordered"`, with `n` given or chosen automatically, or `kind="recurring"`).
 - **`timecorr/_lazy.py`**: `lazy_import`, which installs an optional dependency (hmmlearn) with pip on first use; `TIMECORR_AUTO_INSTALL=0` turns installation off.
 - **`timecorr/simulate.py`**: simulated data with known dynamic correlations (`simulate_data`, `simulate_multi_order`) and helpers for structure embedded at a chosen order (`min_features`, `carrier_reducer`, `carrier_columns`, `nested_template`).
@@ -67,7 +67,7 @@ The `timecorr` function accepts:
 - `data`: numpy array, pandas DataFrame or polars DataFrame (timepoints x features), or a list of them (one per subject)
 - `weights_function` / `weights_params`: the kernel; row `t` of the kernel matrix (`weights[t, :]`) is the kernel used at timepoint `t`
 - `include_timepoints` (`'all'`, `'backward'`/`'pre'`, `'forward'`/`'post'`), `include_zero`, `exclude_timepoints`: restrict the kernel
-- `events` / `events_params`: restrict the kernel to blocks of consecutive timepoints (boundaries, features segmented with `segment`, or a per-subject list; in `features` also a dict keyed by order)
+- `events` / `events_params`: restrict the kernel to blocks of consecutive timepoints (boundaries, features segmented with `segment`, or a per-subject list; in `features` and the correlation decoders also a dict keyed by order); also accepted by the decoders
 - `cfun`: correlation function: `isfc` (each subject versus the others), `wisfc` (weighted), `autofc` (within subject), or `None` (smoothing)
 - `combine`: how per-subject results are combined (`null_combine` keeps them separate)
 - `rfun`: dimensionality reduction applied to the vectorized correlations

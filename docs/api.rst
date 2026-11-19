@@ -92,7 +92,16 @@ starts, which ``timecorr`` accepts as ``events`` to confine its kernel to
 blocks: the kernel gives no weight to timepoints outside the current block.
 ``events`` also accepts boundary indices directly, a features array (segmented
 with ``events_params``), or a list with one entry per subject; in ``features``
-it may be a dict keyed by order. The :doc:`tutorial <tutorial/event_kernels_tutorial>`
+it may be a dict keyed by order. The decoders accept ``events`` too:
+``timepoint_decoder``, ``weighted_timepoint_decoder`` and
+``weighted_timepoint_decoder_ec`` restrict the analysis kernel at levels 1 and
+above and leave level 0 unchanged; ``pca_decoder`` restricts its level-0
+smoothing kernel and takes one specification (not a dict keyed by order). In
+the decoders the events are resolved once, on the full subject list, before the
+folds are formed; a per-subject entry stays with its subject in every fold; the
+boundaries are external information supplied by the caller, used as given in
+every fold and not estimated from held-out data; and segmentation does not
+advance NumPy's global random state. The :doc:`tutorial <tutorial/event_kernels_tutorial>`
 shows each form.
 
 .. code-block:: python

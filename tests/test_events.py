@@ -673,9 +673,28 @@ def test_list_of_different_kernels_one_warning():
     _, rec = _count_user_warnings(lambda: tc.isfc(data, kernels))
     assert len(rec) == 1
     msg = str(rec[0].message)
-    assert "fewer than 3" in msg and "0" in msg and "2" in msg
-    # subject 1's kernel has no short rows, so the message names only subjects 0 and 2
-    assert "subject 1" not in msg.lower()
+    assert "fewer than 3" in msg
+    # each kernel with a problem is prefixed by the subject that uses it; subject 1's
+    # kernel has no short rows, so the message names only subjects 0 and 2
+    assert msg.startswith("Subject 0: ")
+    assert " Subject 2: " in msg
+    assert "Subject 1" not in msg and "Subjects" not in msg
+
+
+@pytest.mark.parametrize("fn", [tc.wisfc, tc.isfc, tc.autofc])
+@pytest.mark.parametrize("n_subjects", [S, 6])
+def test_nested_list_kernel_is_one_kernel(fn, n_subjects):
+    # a T x T kernel given as a Python list of lists is one shared kernel, also when
+    # T equals the number of subjects
+    rng = np.random.RandomState(5)
+    n_time = 6
+    data = [rng.randn(n_time, 4) for _ in range(n_subjects)]
+    w = tc.gaussian_weights(n_time, {"var": 4})
+    ref = fn(data, w)
+    for given in (w.tolist(), tuple(map(tuple, w.tolist()))):
+        out = fn(data, given)
+        for s in range(n_subjects):
+            assert np.array_equal(out[s], ref[s])
 
 
 # ---------------------------------------------------------------- (d) custom cfun

@@ -1240,10 +1240,14 @@ def _subject_kernels(timepoint_weights, S):
     ``(kernels, group_of)``: the distinct kernels and, for each of the S subjects,
     the index of its kernel.  ``timepoint_weights`` is one kernel shared by every
     subject, or a list or tuple of S kernels (subject s uses item s); equal kernels
-    in a list are grouped (compared by identity, then by value).
+    in a list are grouped (compared by identity, then by value).  A list or tuple
+    is per-subject kernels only when its items are 2-D; otherwise (for example a
+    T x T kernel given as a list of lists) it is one kernel.
     """
-    if not isinstance(timepoint_weights, (list, tuple)):
-        return [timepoint_weights], [0] * S
+    if not isinstance(timepoint_weights, (list, tuple)) or not all(
+        np.ndim(w) == 2 for w in timepoint_weights
+    ):
+        return [np.asarray(timepoint_weights, dtype=np.float64)], [0] * S
     if len(timepoint_weights) != S:
         raise ValueError(
             f"timepoint_weights is a list of {len(timepoint_weights)} kernels for "

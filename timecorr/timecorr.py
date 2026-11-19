@@ -229,6 +229,10 @@ def timecorr(
         With ``cfun=None``, when some timepoints have no weighted, observed
         sample: the smoothed values there are undefined and set to 0.
 
+        With per-subject events, a user-supplied ``cfun`` is called once per
+        distinct event set (so it may warn once per set), and the smoothing
+        path (``cfun=None``) warns per subject, as it does without events.
+
     Raises
     ------
     ValueError

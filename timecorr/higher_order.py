@@ -244,27 +244,34 @@ def _largest_k(order, T, max_memory_gb, n_subjects=1, return_delta=False,
 
 
 def _check_step_memory(d, T, n_subjects, n_outputs, max_memory_gb, order=None,
-                       kernel_feeding=False):
+                       kernel_feeding=False, held_elements=0):
     """
     Raise MemoryError before an unreduced correlation step on ``n_subjects``
-    (T, d) inputs whose estimate (``_step_gb``) exceeds ``max_memory_gb``.
-    ``max_memory_gb=None`` checks nothing.  Shared by ``features``, the path
-    functions and the decoders, so all refuse the same steps.
+    (T, d) inputs whose estimate (``_step_gb``), plus ``held_elements``
+    float64 values retained by the caller (earlier outputs and fits of a
+    ``features`` run), exceeds ``max_memory_gb``.  ``max_memory_gb=None``
+    checks nothing.  Shared by ``features``, the path functions and the
+    decoders, so all refuse the same steps.
     """
     if max_memory_gb is None:
         return
     S = int(n_subjects)
     step = _step_gb(d, T, S, n_outputs, kernel_feeding)
-    if step > max_memory_gb:
-        fit = _largest_k(1, T, max_memory_gb, S, n_outputs > 1,
+    held = 8 * int(held_elements) / _BYTES_PER_GB
+    if step + held > max_memory_gb:
+        fit = _largest_k(1, T, max_memory_gb - held, S, n_outputs > 1,
                          kernel_feeding=kernel_feeding)
         where = "" if order is None else f" at order {order}"
+        retained = (
+            f", plus {held:.3g} GB of outputs and fits retained by the run"
+            if held_elements else ""
+        )
         raise MemoryError(
             f"The correlation step{where} needs about {step:.3g} GB "
-            f"({d} input features, T={T}, {S} subject{'s' if S > 1 else ''}), "
-            f"more than max_memory_gb={max_memory_gb}. The largest number of "
-            f"input features that fits one step is K={fit}. Reduce to fewer "
-            "features (ndims, rfun, delta_rfun) or raise max_memory_gb."
+            f"({d} input features, T={T}, {S} subject{'s' if S > 1 else ''})"
+            f"{retained}, more than max_memory_gb={max_memory_gb}. The largest "
+            f"number of input features that fits one step is K={fit}. Reduce "
+            "to fewer features (ndims, rfun, delta_rfun) or raise max_memory_gb."
         )
 
 
@@ -353,9 +360,18 @@ def _fits_elements(*reducers):
     return total
 
 
-def _output_elements(x):
-    """Elements of a step's output (an array or a list of arrays)."""
-    return sum(int(np.asarray(a).size) for a in _as_list(x))
+def _output_elements(*outputs):
+    """
+    Elements of outputs (arrays, or lists of arrays), each array counted once
+    even when it appears in several outputs.
+    """
+    total, seen = 0, set()
+    for out in outputs:
+        for a in _as_list(out):
+            if id(a) not in seen:
+                seen.add(id(a))
+                total += int(np.asarray(a).size)
+    return total
 
 
 def _needs_shift_null(rfun):
@@ -501,9 +517,15 @@ def _analysis_path(
     events=None,
     append_fit=False,
     kernel_feeding=False,
+    held_elements=0,
+    reducers=(),
 ):
     """
     Analysis path of one order: ``reduce(combine(timecorr(subjects, kernel, cfun)))``.
+
+    ``held_elements``: float64 values the caller retains (earlier outputs of
+    a ``features`` run), counted against ``max_memory_gb``; ``reducers``: the
+    reducer objects the caller holds, whose ``fits_`` arrays are counted too.
 
     ``subjects`` is a list of (T, d) arrays.  With ``groups=None`` all subjects
     are analyzed together and the result is what ``combine`` returns, reduced.
@@ -537,7 +559,8 @@ def _analysis_path(
         # runs: checked before the kernels are built
         budget = _budget_left(
             max_memory_gb,
-            _event_kernel_elements(T, len(subjects), events) + _fits_elements(summary),
+            held_elements + _event_kernel_elements(T, len(subjects), events)
+            + _fits_elements(summary, *reducers),
             d, T, len(subjects), order, "streamed analysis step",
         )
         kernels = _step_kernels(
@@ -557,7 +580,7 @@ def _analysis_path(
             append_fit=append_fit,
         )
     _check_step_memory(d, T, len(subjects), n_outputs, max_memory_gb, order,
-                       kernel_feeding)
+                       kernel_feeding, held_elements + _fits_elements(*reducers))
 
     def analyze(members, member_events):
         return combine(
@@ -648,6 +671,7 @@ def _delta_path(
     events=None,
     held_elements=0,
     append_fit=False,
+    retained_elements=0,
 ):
     """
     Feeding (delta) path of one order: per-subject correlations with the
@@ -706,7 +730,8 @@ def _delta_path(
                 bandwidth=_bandwidth(weights_function, weights_params),
                 append_fit=append_fit,
             )
-        _check_step_memory(d, T, S, n_outputs, max_memory_gb, order, True)
+        _check_step_memory(d, T, S, n_outputs, max_memory_gb, order, True,
+                           retained_elements)
         corrs = _as_list(
             timecorr(
                 subjects,
@@ -724,7 +749,8 @@ def _delta_path(
             _apply_reducer(corrs, rfun, ndims, order, "feeding", append_fit=append_fit)
         )
 
-    _check_step_memory(d, T, S, n_outputs, max_memory_gb, order)
+    _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
+                       held_elements=retained_elements)
     null_budget = None
     if _needs_shift_null(rfun):
         # the shift null runs while the co-fluctuations (and whatever the
@@ -1267,6 +1293,8 @@ def _two_path_step(
     feed=True,
     feeding_function=eye_weights,
     feeding_params=None,
+    retained_elements=0,
+    reducers=(),
     **analysis
 ):
     """
@@ -1277,6 +1305,10 @@ def _two_path_step(
     Both paths are checked against ``max_memory_gb`` before either computes
     anything; when both are materialized each check counts the other path's
     unreduced results (``n_outputs=2``), as the paths hold them together.
+    ``retained_elements`` (float64 values of the outputs a ``features`` run
+    keeps from earlier orders) and the ``fits_`` arrays of ``reducers`` (the
+    reducer objects the run holds), with this step's own reducers, are
+    counted against ``max_memory_gb`` by every check of both paths.
     """
     if delta_rfun is None:
         delta_rfun = analysis.get("rfun", "PCA")
@@ -1295,46 +1327,49 @@ def _two_path_step(
     analysis_rfun = analysis.get("rfun", "PCA")
     events = analysis.get("events")
     kernel_elements = _event_kernel_elements(T, S, events)
+    reducers = tuple(reducers)
+    retained = int(retained_elements)
     # the analysis results are held while the feeding path runs: before
     # anything is computed, their size where it is known in advance (an
     # unreduced, model, graph-measure or weighted-strength output; 0
     # otherwise), and their actual size once computed
     width = _known_width(analysis_rfun, d, analysis.get("ndims"))
     held = 0 if width is None else S * T * width
-    fits = _fits_elements(analysis_rfun, delta_rfun)
+    fits = _fits_elements(analysis_rfun, delta_rfun, *reducers)
     if max_memory_gb is not None:
         if analysis_streamed:
             _streamed_block_elements(
                 d, T, S,
-                _budget_left(max_memory_gb, kernel_elements + _fits_elements(analysis_rfun),
+                _budget_left(max_memory_gb, retained + kernel_elements + fits,
                              d, T, S, order, "streamed analysis step"),
                 order, "analysis",
             )
         else:
             _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
-                               kernel_feeding)
+                               kernel_feeding, retained + fits)
         if feed and feeding_streamed:
             _streamed_block_elements(
                 d, T, S,
-                _budget_left(max_memory_gb, held + kernel_elements + fits,
+                _budget_left(max_memory_gb, retained + held + kernel_elements + fits,
                              d, T, S, order, "streamed feeding step"),
                 order, "feeding",
             )
         elif feed:
             _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
-                               kernel_feeding)
+                               kernel_feeding, retained + fits)
             if _needs_shift_null(delta_rfun):
                 _budget_left(
-                    max_memory_gb, held + fits + S * T * v, d, T, S, order,
+                    max_memory_gb, retained + held + fits + S * T * v, d, T, S, order,
                     "shift null of the feeding step",
                 )
     X_next = _analysis_path(
         subjects, max_memory_gb=max_memory_gb, n_outputs=n_outputs, order=order,
-        append_fit=True, kernel_feeding=kernel_feeding, **analysis
+        append_fit=True, kernel_feeding=kernel_feeding, held_elements=retained,
+        reducers=(delta_rfun,) + reducers, **analysis
     )
     if not feed:
         return X_next, None
-    held = _output_elements(X_next) + _fits_elements(analysis_rfun, delta_rfun)
+    fits = _fits_elements(analysis_rfun, delta_rfun, *reducers)
     D_next = _delta_path(
         subjects,
         rfun=delta_rfun,
@@ -1348,8 +1383,9 @@ def _two_path_step(
         include_timepoints=analysis.get("include_timepoints", "all"),
         include_zero=analysis.get("include_zero", True),
         events=analysis.get("events"),
-        held_elements=held,
+        held_elements=retained + _output_elements(X_next) + fits,
         append_fit=True,
+        retained_elements=retained + fits,
     )
     return X_next, D_next
 
@@ -1531,11 +1567,17 @@ def features(
         (``estimate_memory_gb(..., streamed=True)``), it raises.  With
         per-subject events, the kernels of the distinct event sets (one T x
         T array each) are not included in the estimate of a step that holds
-        its correlations; a streamed step counts them, together with the
-        analysis results of the same order held while the feeding path
-        runs and the (K, K) arrays kept in summaries' ``fits_``, and is
-        checked before its kernels are built.  None checks nothing (a streamed step then uses
-        the estimator's default block size).  Default: 4.0.
+        its correlations; a streamed step counts them and is checked before
+        its kernels are built.  Every step, streamed or not, on both paths,
+        also counts what the run retains: the outputs of earlier orders
+        (``X_1 .. X_{k-1}``; ``D_1 .. D_{k-1}`` when ``return_delta=True``,
+        otherwise only the feeding features the order reads, as the others
+        are released), each array once, and the (K, K) arrays kept in the
+        ``fits_`` of the summary objects the run holds; a streamed feeding
+        step also counts the analysis results of its order.  The input data
+        and the memory of reducers and ``combine`` functions themselves are
+        not counted.  None checks nothing (a streamed step then uses the
+        estimator's default block size).  Default: 4.0.
     events : None, dict, array-like, or list
         Restricts kernels to events (keyword-only; see ``timecorr`` for one
         specification: boundaries shared by all subjects, features with T
@@ -1783,12 +1825,22 @@ def features(
 
     X = [subjects]
     D = [subjects]
+    fed_by = subjects  # the feeding features the next order reads
+    # the reducer objects the run holds (their fits_ are retained)
+    held_reducers = tuple(
+        r for r in list(analysis_rfun.values()) + list(feeding_rfun.values())
+        if isinstance(r, _Summary)
+    )
     nan_warned = [False]  # one NaN-filling warning per call
     for k in orders:
+        # the outputs kept so far (each array once; the input data are the
+        # caller's): X_1 .. X_{k-1}, and D_1 .. D_{k-1} when returned,
+        # otherwise only the feeding features this order reads
+        kept = X[1:] + (D[1:] if return_delta else ([] if k == 1 else [fed_by]))
         # the last order's feeding features feed nothing and, unless returned,
         # are not computed (unreduced, they are as large as X_order)
         x, delta = _two_path_step(
-            D[-1],
+            fed_by,
             delta_rfun=feeding_rfun[k],
             max_memory_gb=max_memory_gb,
             order=k,
@@ -1805,10 +1857,14 @@ def features(
             include_timepoints=include_timepoints,
             include_zero=include_zero,
             events=resolved[k],
+            retained_elements=_output_elements(*kept),
+            reducers=held_reducers,
         )
         X.append(x)
         if delta is not None:
-            D.append(delta)
+            fed_by = delta
+            if return_delta:
+                D.append(delta)
 
     if single:
         X = [x[0] if isinstance(x, list) else x for x in X]

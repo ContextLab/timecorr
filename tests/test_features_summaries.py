@@ -852,3 +852,58 @@ def test_default_gaussian_feeding_params_need_var(params):
     with pytest.raises(ValueError, match='default Gaussian feeding kernel needs "var"'):
         two_path_step(data, cfun=tc.autofc, delta_rfun="weighted_strength",
                       delta_weights_params=params)
+
+
+# second review, F1: storage retained by the whole run ------------------------
+
+
+def _long_run_data():
+    rng = np.random.default_rng(0)
+    return [rng.normal(size=(40, 4)) for _ in range(2)]
+
+
+LONG_RUN = dict(order=100, cfun=tc.autofc, delta_rfun="weighted_strength")
+
+
+def _retained_bytes(outputs):
+    seen, total = set(), 0
+    for out in outputs:
+        for a in (out if isinstance(out, list) else [out]):
+            if id(a) not in seen:
+                seen.add(id(a))
+                total += a.nbytes
+    return total
+
+
+def test_outputs_kept_by_the_run_are_counted_against_the_budget():
+    # every local streamed step fits 0.0003 GB, but the outputs the run keeps
+    # (X_1 .. X_100) grow past it; the run raises instead of returning them
+    data = _long_run_data()
+    with pytest.raises(MemoryError, match=r"about .* GB") as info:
+        quiet(tc.features, data, max_memory_gb=0.0003, **LONG_RUN)
+    assert "held while it runs" in str(info.value) or "retained" in str(info.value)
+    # with a budget that fits, it completes and the outputs exceed 0.0003 GB
+    X = quiet(tc.features, data, max_memory_gb=0.01, **LONG_RUN)
+    assert len(X) == 101
+    assert _retained_bytes(X[1:]) > 0.0003 * 1e9
+
+
+def test_feeding_outputs_not_returned_are_released():
+    # return_delta=False keeps only the feeding output the next order needs:
+    # the same X, and the run fits a budget that the returned D_1 .. D_k
+    # exceed.  Smallest budgets that complete (bisection, order 30): 0.000331
+    # GB without D and 0.000408 GB with D (D_1 .. D_30: 76,800 bytes)
+    data = _long_run_data()
+    common = dict(order=30, cfun=tc.autofc, delta_rfun="weighted_strength")
+    X = quiet(tc.features, data, max_memory_gb=None, **common)
+    X_d, D = quiet(tc.features, data, max_memory_gb=None, return_delta=True, **common)
+    for a, b in zip(X, X_d):
+        assert_lists_close(a, b, rtol=0, atol=0)
+    assert _retained_bytes(D[1:]) == 76_800
+    X_b = quiet(tc.features, data, max_memory_gb=0.00037, **common)
+    # smaller blocks change the round-off, which 30 orders amplify (largest
+    # relative difference measured: 1.2e-9)
+    for a, b in zip(X, X_b):
+        assert_lists_close(a, b, rtol=1e-6, atol=1e-9)
+    with pytest.raises(MemoryError):
+        quiet(tc.features, data, max_memory_gb=0.00037, return_delta=True, **common)

@@ -248,11 +248,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The other three tutorials and the existing examples were updated to run on
   this version.
 - Squared-correlation summaries (`timecorr.summaries`, exported from
-  `timecorr`): `tc.WeightedStrength(split=False, signed=False, n=None)`
-  (weighted sums of each node's squared correlations, with pair weights
-  `mean_t r_ij**2` clipped at their median; `signed=True` adds the
-  correlations weighted by `mean_t r_ij`) and `tc.Communities(n=None,
-  signed=False)` (mean squared correlation within each community of nodes,
+  `timecorr`): `tc.WeightedStrength(split=False, signed=False, n=None,
+  n_null=5, center=True)` (weighted sums of each node's squared
+  correlations, with pair weights `mean_t r_ij**2` centered on their median
+  and clipped at 0 for K >= 4 nodes, or used as they are with
+  `center=False`; with centering, coupling equal for every pair gives zero
+  magnitude columns; `signed=True` adds the correlations weighted by
+  `mean_t r_ij`) and `tc.Communities(n=None, signed=False, n_null=5)`
+  (mean squared correlation within each community of nodes,
   found by spectral k-means on the pair weights). Both are accepted as `rfun`
   by `reduce`, `timecorr` and `features`, as instances or as the names
   `"weighted_strength"`, `"weighted_strength_split"` and `"communities"`;
@@ -261,8 +264,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   do, keeps only that call's fit; `fit` and each step of `features` and
   `two_path_step` append one). The decoders accept the summaries as `rfun`.
   In `features`, `n=None` sets the number of communities from a
-  shift null (eigenvalues of the centered pair weights above those of
-  data whose columns are circularly shifted by independent lags).
+  shift null (eigenvalues of the centered pair weights above the largest
+  top eigenvalue of `n_null` surrogates whose columns are circularly
+  shifted by lags that are distinct within a subject; a recording with
+  fewer such lags than columns raises `ValueError` asking for `n`; fits
+  counted this way record `"n_null"`). The null assumes that dependence
+  between columns does not survive the shifts; if the data and surrogate
+  top eigenvalues are exchangeable, any exceedance (chance
+  `1 / (n_null + 1)`) gives at least two communities. The summaries reject
+  NaN or infinite correlations, empty inputs and a non-finite
+  `null_threshold` with `ValueError`.
 - `features` and `two_path_step`: keyword-only `delta_weights_function` and
   `delta_weights_params` set the kernel of the path that feeds the next
   order (the delta path, also called the feeding path); `delta_weights_params`
@@ -278,8 +289,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   default block size when it is None), so that the `(K, K, T)` correlation
   array is held only when one block covers all K rows;
   `estimate_memory_gb(..., streamed=True)` gives the smallest peak of a
-  streamed step, and `features` checks every streamed step against
-  `max_memory_gb` before computing anything. The default order-1 reducer (PCA)
+  streamed step, and `features` checks every streamed step whose input
+  width is known in advance against `max_memory_gb` before computing
+  anything (steps after `Communities`, whose width is found by the fit,
+  when they run); a streamed step also counts the kernels of distinct
+  per-subject event sets, the analysis results held while the feeding step
+  runs, and the arrays kept in summaries' `fits_`. The default order-1 reducer (PCA)
   still holds `K(K+1)/2` columns per subject, so memory is bounded only when
   every step uses a summary (for example `rfun=tc.WeightedStrength(signed=True)`).
   These are the defaults (see "Changed defaults of the higher-order

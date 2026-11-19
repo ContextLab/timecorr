@@ -295,7 +295,11 @@ squared correlation within each community). They are given to ``reduce`` or
 ``fit`` and ``transform`` fit the weights and communities to one set of
 correlations and apply them to another, and ``fits_`` records the fits
 (calling an instance keeps only that call's fit; ``fit`` and each step of
-``features`` and ``two_path_step`` append one).
+``features`` and ``two_path_step`` append one). ``WeightedStrength(center=False)``
+uses the pair weights without median centering (with ``center=True``, the
+default, coupling equal for every pair gives zero magnitude columns for
+K >= 4 nodes); ``n_null`` sets the number of shift-null surrogates of the
+automatic count of communities (default 5).
 
 .. code-block:: python
 

@@ -151,14 +151,14 @@ def test_unreduced_order3_recovery():
     data, truth = _simulate(order=3, K=8)
     # The order-3 step correlates 666 delta features: about 5.7 GB, above the
     # default max_memory_gb of 4.
-    step_gb = estimate_memory_gb(8, 3, T)[3]
+    step_gb = estimate_memory_gb(8, 3, T, delta_weights_function=tc.eye_weights)[3]
     assert 4.0 < step_gb < 6.0
     with pytest.raises(MemoryError):
-        tc.features(data, order=3, rfun=None, **KERNEL)
+        legacy_features(data, order=3, rfun=None, **KERNEL)
 
     tracemalloc.start()
     try:
-        X = tc.features(data, order=3, rfun=None, max_memory_gb=6.0, **KERNEL)
+        X = legacy_features(data, order=3, rfun=None, max_memory_gb=6.0, **KERNEL)
         peak_gb = tracemalloc.get_traced_memory()[1] / 1e9
     finally:
         tracemalloc.stop()

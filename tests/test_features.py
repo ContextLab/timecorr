@@ -314,24 +314,28 @@ def test_estimate_memory_gb_values():
     assert estimate_memory_gb(4, 2, 100, return_delta=True, **eye)[2] >= est[2]
 
 
+# the original pipeline's feeding kernel, which the guarded runs below use
+EYE = dict(delta_weights_function=tc.eye_weights)
+
+
 def largest_k_brute_force(order, T, limit):
     k = 1
-    while max(estimate_memory_gb(k + 1, order, T)) <= limit:
+    while max(estimate_memory_gb(k + 1, order, T, **EYE)) <= limit:
         k += 1
     return k
 
 
 def test_unreduced_memory_guard_raises_with_estimate_and_fitting_k():
     data = make_data(K=10, T=100)
-    est = estimate_memory_gb(10, 3, 100)
+    est = estimate_memory_gb(10, 3, 100, **EYE)
     assert est[2] < 1.0 < est[3]
     with pytest.raises(MemoryError) as info:
         legacy_features(data, order=3, rfun=None, max_memory_gb=1.0)
     msg = str(info.value)
     assert f"{est[3]:.3g} GB" in msg
     fit = largest_k_brute_force(3, 100, 1.0)
-    assert max(estimate_memory_gb(fit, 3, 100)) <= 1.0
-    assert max(estimate_memory_gb(fit + 1, 3, 100)) > 1.0
+    assert max(estimate_memory_gb(fit, 3, 100, **EYE)) <= 1.0
+    assert max(estimate_memory_gb(fit + 1, 3, 100, **EYE)) > 1.0
     assert f"K={fit}" in msg
 
 

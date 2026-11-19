@@ -627,6 +627,7 @@ def test_features_max_memory_gb_none_means_no_limit():
     # the reduced delta path checks each step; None skips that check too
     data = make_data(K=50, T=100)
     step = estimate_memory_gb(50, 1, 100)[1]
+    assert isinstance(step, float) and step > 0
     X = tc.features(data, order=2, rfun=None, delta_rfun="PCA",
                     max_memory_gb=None)
     assert len(X) == 3

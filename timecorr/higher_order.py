@@ -362,16 +362,25 @@ def _fits_elements(*reducers):
 
 def _output_elements(*outputs):
     """
-    Elements of outputs (arrays, or lists of arrays), each array counted once
-    even when it appears in several outputs.
+    Elements of outputs (arrays, or lists of arrays).  An array that appears
+    in several outputs is counted once; views of one base array are counted
+    by their sizes, at most the size of the base (overlapping views are not
+    counted twice beyond it; the part of a base that no view covers is not
+    counted).
     """
-    total, seen = 0, set()
+    seen, by_root = set(), {}
     for out in outputs:
         for a in _as_list(out):
-            if id(a) not in seen:
-                seen.add(id(a))
-                total += int(np.asarray(a).size)
-    return total
+            a = np.asarray(a)
+            if id(a) in seen:
+                continue
+            seen.add(id(a))
+            root = a
+            while isinstance(root.base, np.ndarray):
+                root = root.base
+            size, cap = by_root.get(id(root), (0, int(root.size)))
+            by_root[id(root)] = (size + int(a.size), cap)
+    return sum(min(size, cap) for size, cap in by_root.values())
 
 
 def _needs_shift_null(rfun):
@@ -519,6 +528,7 @@ def _analysis_path(
     kernel_feeding=False,
     held_elements=0,
     reducers=(),
+    input_elements=0,
 ):
     """
     Analysis path of one order: ``reduce(combine(timecorr(subjects, kernel, cfun)))``.
@@ -526,6 +536,9 @@ def _analysis_path(
     ``held_elements``: float64 values the caller retains (earlier outputs of
     a ``features`` run), counted against ``max_memory_gb``; ``reducers``: the
     reducer objects the caller holds, whose ``fits_`` arrays are counted too.
+    ``input_elements``: the part of ``held_elements`` that is this step's
+    input, left out of a materialized check, whose estimate (``_step_gb``)
+    already counts the input.
 
     ``subjects`` is a list of (T, d) arrays.  With ``groups=None`` all subjects
     are analyzed together and the result is what ``combine`` returns, reduced.
@@ -580,7 +593,8 @@ def _analysis_path(
             append_fit=append_fit,
         )
     _check_step_memory(d, T, len(subjects), n_outputs, max_memory_gb, order,
-                       kernel_feeding, held_elements + _fits_elements(*reducers))
+                       kernel_feeding,
+                       held_elements - input_elements + _fits_elements(*reducers))
 
     def analyze(members, member_events):
         return combine(
@@ -1318,6 +1332,7 @@ def _two_path_step(
     retained_elements=0,
     reducers=(),
     previous_communities=None,
+    input_elements=0,
     **analysis
 ):
     """
@@ -1332,6 +1347,10 @@ def _two_path_step(
     keeps from earlier orders) and the ``fits_`` arrays of ``reducers`` (the
     reducer objects the run holds), with this step's own reducers, are
     counted against ``max_memory_gb`` by every check of both paths.
+    ``input_elements``: the part of ``retained_elements`` that is this
+    step's input (the previous order's feeding features); a materialized
+    check leaves it out, as its estimate (``_step_gb``) counts the input,
+    while a streamed check, whose estimate excludes the inputs, keeps it.
     """
     if delta_rfun is None:
         delta_rfun = analysis.get("rfun", "PCA")
@@ -1357,6 +1376,8 @@ def _two_path_step(
     kernel_elements = _event_kernel_elements(T, S, events)
     reducers = tuple(reducers)
     retained = int(retained_elements)
+    # materialized checks: the step's input is already in _step_gb
+    retained_m = retained - int(input_elements)
     # the analysis results are held while the feeding path runs: before
     # anything is computed, their size where it is known in advance (an
     # unreduced, model, graph-measure or weighted-strength output; 0
@@ -1374,7 +1395,7 @@ def _two_path_step(
             )
         else:
             _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
-                               kernel_feeding, retained + fits)
+                               kernel_feeding, retained_m + fits)
         if feed and feeding_streamed:
             _streamed_block_elements(
                 d, T, S,
@@ -1384,7 +1405,7 @@ def _two_path_step(
             )
         elif feed:
             _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
-                               kernel_feeding, retained + fits)
+                               kernel_feeding, retained_m + fits)
             if _needs_shift_null(delta_rfun):
                 _budget_left(
                     max_memory_gb, retained + held + fits + S * T * v, d, T, S, order,
@@ -1393,7 +1414,8 @@ def _two_path_step(
     X_next = _analysis_path(
         subjects, max_memory_gb=max_memory_gb, n_outputs=n_outputs, order=order,
         append_fit=True, kernel_feeding=kernel_feeding, held_elements=retained,
-        reducers=(delta_rfun,) + reducers, **analysis
+        reducers=(delta_rfun,) + reducers, input_elements=int(input_elements),
+        **analysis
     )
     if not feed:
         return X_next, None
@@ -1413,7 +1435,7 @@ def _two_path_step(
         events=analysis.get("events"),
         held_elements=retained + _output_elements(X_next) + fits,
         append_fit=True,
-        retained_elements=retained + fits,
+        retained_elements=retained_m + fits,
     )
     return X_next, D_next
 
@@ -1607,9 +1629,12 @@ def features(
         also counts what the run retains: the outputs of earlier orders
         (``X_1 .. X_{k-1}``; ``D_1 .. D_{k-1}`` when ``return_delta=True``,
         otherwise only the feeding features the order reads, as the others
-        are released), each array once, and the (K, K) arrays kept in the
+        are released), each array once (views of one base array by their
+        sizes, at most the base's), and the (K, K) arrays kept in the
         ``fits_`` of the summary objects the run holds; a streamed feeding
-        step also counts the analysis results of its order.  The input data
+        step also counts the analysis results of its order.  A step that
+        holds its correlations does not count its own input (the previous
+        order's feeding features) twice: its estimate already includes it.  The input data
         and the memory of reducers and ``combine`` functions themselves are
         not counted.  None checks nothing (a streamed step then uses the
         estimator's default block size).  Default: 4.0.
@@ -1898,6 +1923,7 @@ def features(
             include_zero=include_zero,
             events=resolved[k],
             retained_elements=_output_elements(*kept),
+            input_elements=0 if k == 1 else _output_elements(fed_by),
             reducers=held_reducers,
             previous_communities=previous_communities,
         )

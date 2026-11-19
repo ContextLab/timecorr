@@ -936,3 +936,33 @@ def test_retained_fits_are_enforced_by_the_budget():
               max_memory_gb=base + 8 * retained / 2 / 1e9, **common)
     quiet(two_path_step, data, rfun=prefitted(),
           max_memory_gb=base + 8 * 2 * retained / 1e9, **common)
+
+
+# re-review: a materialized step's own input is counted once -------------------
+
+
+def test_materialized_step_input_is_not_counted_twice():
+    # order 2 of the original pipeline on 2 x (80, 10): the step estimate
+    # (0.0007104 GB) already counts its input D_1; with X_1 retained
+    # (1.28e-5 GB) the run needs 0.0007232 GB
+    rng = np.random.default_rng(0)
+    data = [rng.normal(size=(80, 10)) for _ in range(2)]
+    common = dict(order=2, rfun="PCA", delta_rfun=None,
+                  delta_weights_function=tc.eye_weights)
+    # PCA keeps 10 columns, so step 2 is a one-output step on 10 inputs
+    step = estimate_memory_gb(10, 1, 80, 2, delta_weights_function=tc.eye_weights)[1]
+    x1 = 2 * 80 * 10 * 8 / 1e9
+    assert step == pytest.approx(0.0007104) and x1 == pytest.approx(1.28e-5)
+    X = quiet(tc.features, data, max_memory_gb=0.0007296, **common)
+    assert len(X) == 3
+    with pytest.raises(MemoryError, match="retained by the run"):
+        quiet(tc.features, data, max_memory_gb=step + x1 - 1e-7, **common)
+
+
+def test_views_of_one_array_are_counted_once():
+    from timecorr.higher_order import _output_elements
+
+    a = np.zeros((10, 4))
+    assert _output_elements([a, a[:5], a[:, :2]]) == 40
+    assert _output_elements([a[:5], a[5:]]) == 40
+    assert _output_elements([a, np.zeros(3)]) == 43

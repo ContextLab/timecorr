@@ -21,7 +21,9 @@ import numbers
 import warnings
 
 import numpy as np
+from scipy.ndimage import gaussian_filter1d
 from scipy.spatial.distance import cdist
+from scipy.stats import norm
 
 from .helpers import mat2vec, vec2mat
 
@@ -1001,3 +1003,188 @@ def carrier_reducer(blocks, K=None):
         return out[0] if single else out
 
     return reducer
+
+
+def _smooth(rng, T, n, tau):
+    """``n`` standardized Gaussian-smoothed white-noise series of length ``T``.
+
+    White noise of length ``T + 8 * tau`` is filtered with a Gaussian of
+    standard deviation ``tau``, the first and last ``4 * tau`` samples are
+    dropped, and each column is standardized to mean 0 and variance 1.
+    """
+    tau = int(tau)
+    x = gaussian_filter1d(rng.standard_normal((T + 8 * tau, n)), tau, axis=0)
+    x = x[4 * tau : len(x) - 4 * tau]
+    return (x - x.mean(0)) / x.std(0)
+
+
+def simulate_nested(
+    S=2,
+    T=1000,
+    n_supergroups=6,
+    modules_per_supergroup=3,
+    nodes_per_module=6,
+    coupling="sustained",
+    shared="order2",
+    tau2=5,
+    tau3=None,
+    flip=40,
+    duty=0.1,
+    global_signal=0.0,
+    set_random_seed=None,
+):
+    """
+    Simulate nodes in modules in supergroups with nested time-varying coupling.
+
+    Each supergroup has a latent strength ``h`` (order 3), each module a
+    coupling ``g`` whose time course depends on its supergroup's ``h`` (order
+    2), and each node's activity is driven by its module's coupling (order 1).
+    With ``smooth(tau)`` a unit-variance Gaussian white noise series smoothed
+    with a Gaussian of standard deviation ``tau`` and standardized, and
+    ``Phi`` the standard normal CDF, for each subject:
+
+    - ``h_s(t) = 0.05 + 0.9 Phi(1.5 smooth(tau3))``, one per supergroup ``s``.
+    - ``a_m(t) = sqrt(h_s) u_s(t) + sqrt(1 - h_s) v_m(t)`` for module ``m`` in
+      supergroup ``s``, where ``u`` and ``v`` are ``smooth(tau2)`` series.
+    - ``g_m(t) = Phi(a_m(t))``; for ``coupling="transient"``,
+      ``g_m(t) = Phi((a_m(t) - Phi^-1(1 - duty)) / 0.25)``.
+    - ``x_i(t) = sqrt(g_m) e_i(t) f_m(t) + sqrt(1 - g_m) z_i(t) + global_signal * q(t)``
+      for node ``i`` in module ``m``, where ``f``, ``z`` and ``q`` are white
+      standard normal noise and ``e_i`` is a fixed random sign per node.  For
+      ``coupling="signflip"``, ``e_i(t)`` is a random sign redrawn every
+      ``flip`` samples, with a random module-specific phase.
+
+    Parameters
+    ----------
+    S : int
+        Number of subjects.  Default: 2.
+    T : int
+        Number of timepoints.  The smoothing needs ``T >= 8 * max(tau2,
+        tau3)``.  Default: 1000.
+    n_supergroups : int
+        Number of supergroups.  Default: 6.
+    modules_per_supergroup : int
+        Number of modules in each supergroup.  Default: 3.
+    nodes_per_module : int
+        Number of nodes in each module.  Default: 6.
+    coupling : {"sustained", "transient", "signflip"}
+        ``"sustained"``: nodes in a module share ``f`` with fixed signs.
+        ``"transient"``: ``g`` is near 0 except for roughly a fraction
+        ``duty`` of the time.  ``"signflip"``: the signs ``e_i`` change over
+        time, so the module's coupling averages to zero over the recording.
+        Default: ``"sustained"``.
+    shared : {"order2", "order1"}
+        ``"order2"``: subjects share ``h`` only.  ``"order1"``: subjects
+        share ``h``, ``u`` and ``v`` (so ``a`` and ``g``); ``f``, ``z``,
+        ``e`` and ``q`` are always private to each subject.  Default:
+        ``"order2"``.
+    tau2 : int
+        Standard deviation, in samples, of the Gaussian smoothing of ``u`` and
+        ``v``.  Default: 5.
+    tau3 : int or None
+        Standard deviation, in samples, of the smoothing of ``h``.  ``None``
+        means ``T // 8``.  Default: None.
+    flip : int
+        Number of samples between sign redraws for ``coupling="signflip"``.
+        Default: 40.
+    duty : float
+        Fraction of the time a module is coupled for ``coupling="transient"``;
+        in the open interval (0, 1).  Default: 0.1.
+    global_signal : float
+        Weight of ``q``, a series added to every node of a subject.
+        Default: 0.0.
+    set_random_seed : bool, int or None
+        ``None`` or ``False``: a fresh random seed.  ``True``: seed 123.  An
+        integer: that seed.  NumPy's global random state is not used.
+
+    Returns
+    -------
+    data : list of numpy.ndarray
+        ``S`` arrays of shape ``(T, K)``, with ``K = n_supergroups *
+        modules_per_supergroup * nodes_per_module``.
+    truth : dict
+        ``"module"``: ``(K,)`` module index of each node.  ``"supergroup"``:
+        ``(K,)`` supergroup index of each node.  ``"h"``: ``(T,
+        n_supergroups)``.  ``"g"``: a list of ``S`` arrays of shape ``(T,
+        n_supergroups * modules_per_supergroup)``.
+
+    Raises
+    ------
+    ValueError
+        For an unknown ``coupling`` or ``shared``, a size that is not a
+        positive integer, ``duty`` outside (0, 1), a non-numeric
+        ``global_signal``, or ``T < 8 * max(tau2, tau3)``.
+
+    Examples
+    --------
+    >>> import timecorr as tc
+    >>> data, truth = tc.simulate_nested(S=2, T=200, set_random_seed=0)
+    >>> len(data), data[0].shape
+    (2, (200, 108))
+    >>> truth["h"].shape, truth["g"][0].shape
+    ((200, 6), (200, 18))
+    """
+    S = _check_positive_int("S", S)
+    T = _check_positive_int("T", T)
+    n_sg = _check_positive_int("n_supergroups", n_supergroups)
+    per_sg = _check_positive_int("modules_per_supergroup", modules_per_supergroup)
+    per_mod = _check_positive_int("nodes_per_module", nodes_per_module)
+    tau2 = _check_positive_int("tau2", tau2)
+    flip = _check_positive_int("flip", flip)
+    if coupling not in ("sustained", "transient", "signflip"):
+        raise ValueError(
+            "coupling must be 'sustained', 'transient' or 'signflip'; "
+            f"got {coupling!r}."
+        )
+    if shared not in ("order2", "order1"):
+        raise ValueError(f"shared must be 'order2' or 'order1'; got {shared!r}.")
+    if not isinstance(duty, numbers.Real) or not 0 < duty < 1:
+        raise ValueError(f"duty must be in the open interval (0, 1); got {duty!r}.")
+    if not isinstance(global_signal, numbers.Real) or isinstance(global_signal, bool):
+        raise ValueError(f"global_signal must be a number; got {global_signal!r}.")
+    tau3 = max(T // 8, 1) if tau3 is None else _check_positive_int("tau3", tau3)
+    if T < 8 * max(tau2, tau3):
+        raise ValueError(
+            f"T must be at least 8 * max(tau2, tau3) = {8 * max(tau2, tau3)} for "
+            f"the smoothing; got T={T}."
+        )
+    rng = _make_rng(set_random_seed)
+
+    n_mod = n_sg * per_sg
+    K = n_mod * per_mod
+    module = np.repeat(np.arange(n_mod), per_mod)
+    supergroup = module // per_sg
+    sg_of_module = np.repeat(np.arange(n_sg), per_sg)
+
+    h = norm.cdf(1.5 * _smooth(rng, T, n_sg, tau3)) * 0.9 + 0.05
+    if shared == "order1":
+        uv = (_smooth(rng, T, n_sg, tau2), _smooth(rng, T, n_mod, tau2))
+
+    data, gs = [], []
+    for _ in range(S):
+        u, v = uv if shared == "order1" else (
+            _smooth(rng, T, n_sg, tau2),
+            _smooth(rng, T, n_mod, tau2),
+        )
+        hm = h[:, sg_of_module]
+        a = np.sqrt(hm) * u[:, sg_of_module] + np.sqrt(1 - hm) * v
+        if coupling == "transient":
+            g = norm.cdf((a - norm.ppf(1 - duty)) / 0.25)
+        else:
+            g = norm.cdf(a)
+        if coupling == "signflip":
+            phase = rng.integers(0, flip, n_mod)
+            block = (np.arange(T)[:, None] + phase[None, :]) // flip
+            signs = rng.choice([-1.0, 1.0], (block.max() + 1, K))
+            e = signs[block[:, module], np.arange(K)[None, :]]
+        else:
+            e = np.tile(rng.choice([-1.0, 1.0], K), (T, 1))
+        f = rng.standard_normal((T, n_mod))
+        z = rng.standard_normal((T, K))
+        q = rng.standard_normal((T, 1))
+        gk = g[:, module]
+        data.append(
+            np.sqrt(gk) * e * f[:, module] + np.sqrt(1 - gk) * z + global_signal * q
+        )
+        gs.append(g)
+    return data, {"module": module, "supergroup": supergroup, "h": h, "g": gs}

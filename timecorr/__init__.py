@@ -45,5 +45,6 @@ from .simulate import (
     nested_template,
     simulate_data,
     simulate_multi_order,
+    simulate_nested,
 )
 from .timecorr import timecorr

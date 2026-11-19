@@ -733,3 +733,121 @@ def test_carrier_columns_k_defaults_like_carrier_reducer():
     blocks = [[0, 1], [2, 3]]
     np.testing.assert_array_equal(tc.carrier_columns(blocks, 1),
                                   tc.carrier_columns(blocks, 1, 4))
+
+
+# ------------------------------------------------------------ simulate_nested
+
+
+def _mean_abs_corr(x, module):
+    c = np.abs(np.corrcoef(x.T))
+    same = module[:, None] == module[None, :]
+    off = ~np.eye(len(module), dtype=bool)
+    return c[same & off].mean(), c[~same].mean()
+
+
+def test_nested_shapes_and_truth_keys():
+    data, truth = tc.simulate_nested(S=3, T=200, set_random_seed=1)
+    assert len(data) == 3
+    assert all(d.shape == (200, 108) and d.dtype == float for d in data)
+    assert set(truth) == {"module", "supergroup", "h", "g"}
+    assert truth["h"].shape == (200, 6)
+    assert len(truth["g"]) == 3
+    assert all(g.shape == (200, 18) for g in truth["g"])
+    assert truth["module"].shape == (108,)
+    np.testing.assert_array_equal(np.bincount(truth["module"]), np.full(18, 6))
+    np.testing.assert_array_equal(truth["supergroup"], truth["module"] // 3)
+
+
+def test_nested_custom_sizes():
+    data, truth = tc.simulate_nested(
+        S=1, T=100, n_supergroups=2, modules_per_supergroup=2, nodes_per_module=3,
+        set_random_seed=0,
+    )
+    assert data[0].shape == (100, 12)
+    assert truth["h"].shape == (100, 2)
+    assert truth["g"][0].shape == (100, 4)
+
+
+@pytest.mark.parametrize("coupling", ["sustained", "signflip", "transient"])
+def test_nested_seed_reproducible_and_global_state_untouched(coupling):
+    np.random.seed(7)
+    before = np.random.get_state()
+    a, ta = tc.simulate_nested(T=150, coupling=coupling, set_random_seed=5)
+    b, tb = tc.simulate_nested(T=150, coupling=coupling, set_random_seed=5)
+    after = np.random.get_state()
+    assert before[0] == after[0]
+    np.testing.assert_array_equal(before[1], after[1])
+    assert before[2:] == after[2:]
+    for x, y in zip(a, b):
+        np.testing.assert_array_equal(x, y)
+    np.testing.assert_array_equal(ta["h"], tb["h"])
+    c, _ = tc.simulate_nested(T=150, coupling=coupling, set_random_seed=6)
+    assert not np.array_equal(a[0], c[0])
+
+
+def test_nested_ranges():
+    _, truth = tc.simulate_nested(T=400, set_random_seed=2)
+    assert truth["h"].min() >= 0.05 and truth["h"].max() <= 0.95
+    for g in truth["g"]:
+        assert g.min() >= 0 and g.max() <= 1
+
+
+def test_nested_shared_order2():
+    data, truth = tc.simulate_nested(T=300, shared="order2", set_random_seed=3)
+    assert not np.array_equal(truth["g"][0], truth["g"][1])
+    assert not np.array_equal(data[0], data[1])
+
+
+def test_nested_shared_order1():
+    data, truth = tc.simulate_nested(T=300, shared="order1", set_random_seed=3)
+    np.testing.assert_array_equal(truth["g"][0], truth["g"][1])
+    assert not np.array_equal(data[0], data[1])
+
+
+def test_nested_sustained_coupling_within_module():
+    data, truth = tc.simulate_nested(S=1, T=4000, set_random_seed=4)
+    within, across = _mean_abs_corr(data[0], truth["module"])
+    assert within > 0.2
+    assert across < 0.05
+
+
+def test_nested_signflip_has_no_whole_recording_structure():
+    data, truth = tc.simulate_nested(S=1, T=4000, coupling="signflip", set_random_seed=4)
+    within, across = _mean_abs_corr(data[0], truth["module"])
+    assert within < 0.08
+    assert across < 0.05
+
+
+def test_nested_transient_is_mostly_off():
+    _, truth = tc.simulate_nested(T=1000, coupling="transient", set_random_seed=4)
+    assert np.mean([g.mean() for g in truth["g"]]) < 0.25
+
+
+def test_nested_global_signal_adds_across_module_correlation():
+    data, truth = tc.simulate_nested(S=1, T=4000, global_signal=0.5, set_random_seed=4)
+    _, across = _mean_abs_corr(data[0], truth["module"])
+    assert across > 0.1
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"coupling": "bogus"}, "coupling"),
+        ({"shared": "bogus"}, "shared"),
+        ({"S": 0}, "S"),
+        ({"T": 0}, "T"),
+        ({"n_supergroups": 0}, "n_supergroups"),
+        ({"modules_per_supergroup": -1}, "modules_per_supergroup"),
+        ({"nodes_per_module": 0}, "nodes_per_module"),
+        ({"tau2": 0}, "tau2"),
+        ({"flip": 0}, "flip"),
+        ({"duty": 0.0}, "duty"),
+        ({"duty": 1.0}, "duty"),
+        ({"T": 39, "tau2": 5}, "T"),
+        ({"T": 100, "tau3": 20}, "T"),
+        ({"global_signal": "x"}, "global_signal"),
+    ],
+)
+def test_nested_errors(kwargs, match):
+    with pytest.raises(ValueError, match=match):
+        tc.simulate_nested(**{"set_random_seed": 0, **kwargs})

@@ -255,6 +255,7 @@ Simulation
 
    simulate_data
    simulate_multi_order
+   simulate_nested
    min_features
    carrier_reducer
    carrier_columns

@@ -55,11 +55,12 @@ python setup.py sdist bdist_wheel
   - Combine functions (`null_combine`, `corrmean_combine`, `mean_combine`, `tstat_combine`)
   - `reduce` (dimensionality reduction), `format_data` (input formatting via pydata-wrangler), `mat2vec`/`vec2mat`, `smooth`, `plot_weights`
   - Re-exports of the decoders from `decoding.py`
-- **`timecorr/higher_order.py`**: the two-path pipeline: `features`, `two_path_step`, `estimate_memory_gb`.
+- **`timecorr/higher_order.py`**: the two-path pipeline: `features`, `two_path_step`, `estimate_memory_gb` (`streamed=True` for the peak of a streamed step). Keyword-only `delta_weights_function` / `delta_weights_params` set the kernel of the delta (feeding) path (default `eye_weights`: co-fluctuations; another kernel gives `autofc` correlations). `rfun` / `delta_rfun` accept `"auto"` (analysis: PCA at order 1, `WeightedStrength(signed=True)` above; delta: `"communities"`) and dicts keyed by order. Steps with a summary reducer, `null_combine` and `autofc`/`isfc`/`wisfc` are streamed in blocks of nodes. Defaults are unchanged (`rfun="PCA"`, `delta_rfun=None`, `eye_weights`).
+- **`timecorr/summaries.py`**: squared-correlation summaries `WeightedStrength` (weighted sums of squared correlations per node; `signed`, `split`) and `Communities` (mean squared correlation within communities found by spectral k-means; `n=None` in `features` uses a shift null), with `fit`/`transform`/`fits_`, and the streaming engine used by `features`.
 - **`timecorr/decoding.py`**: timepoint decoders (`timepoint_decoder`, `weighted_timepoint_decoder`, `weighted_timepoint_decoder_ec`, `pca_decoder`) and their helpers. All four accept `events` / `events_params`, resolved once on the full subject list before the folds (per-subject entries follow their subject through the folds; segmentation does not advance NumPy's global random state): the correlation decoders restrict the analysis kernel at levels >= 1 and leave level 0 unchanged; `pca_decoder` restricts its level-0 smoothing kernel and takes one specification, not a dict by order.
 - **`timecorr/events.py`**: event-restricted kernels: parsing of `events` specifications into boundary sets (`resolve_events`, `resolve_events_by_order`, `check_boundaries`, `block_labels`), `mask_kernel` (zero weight between timepoints in different blocks), `distinct_event_sets`, and `segment` (hidden Markov model segmentation with hmmlearn: `kind="ordered"`, with `n` given or chosen automatically, or `kind="recurring"`).
 - **`timecorr/_lazy.py`**: `lazy_import`, which installs an optional dependency (hmmlearn) with pip on first use; `TIMECORR_AUTO_INSTALL=0` turns installation off.
-- **`timecorr/simulate.py`**: simulated data with known dynamic correlations (`simulate_data`, `simulate_multi_order`) and helpers for structure embedded at a chosen order (`min_features`, `carrier_reducer`, `carrier_columns`, `nested_template`).
+- **`timecorr/simulate.py`**: simulated data with known dynamic correlations (`simulate_data`, `simulate_multi_order`) and helpers for structure embedded at a chosen order (`min_features`, `carrier_reducer`, `carrier_columns`, `nested_template`), and `simulate_nested` (nodes in modules in supergroups; returns `(data, truth)` with the order-2 signal `truth["h"]`).
 
 ### Key Concepts
 
@@ -70,7 +71,7 @@ The `timecorr` function accepts:
 - `events` / `events_params`: restrict the kernel to blocks of consecutive timepoints (boundaries, features segmented with `segment`, or a per-subject list; in `features` and the correlation decoders also a dict keyed by order); also accepted by the decoders
 - `cfun`: correlation function: `isfc` (each subject versus the others), `wisfc` (weighted), `autofc` (within subject), or `None` (smoothing)
 - `combine`: how per-subject results are combined (`null_combine` keeps them separate)
-- `rfun`: dimensionality reduction applied to the vectorized correlations
+- `rfun`: dimensionality reduction applied to the vectorized correlations (a model name, a graph measure, a summary such as `tc.WeightedStrength(signed=True)` or `"communities"`, or a callable)
 
 The estimator (`wcorr`) is a kernel-weighted Pearson correlation; a true delta kernel (`eye_weights`) gives co-fluctuations (products of z-scored series).
 
@@ -80,11 +81,11 @@ The estimator (`wcorr`) is a kernel-weighted Pearson correlation; a true delta k
 2. The weights function builds the T x T kernel; the include/exclude options restrict it
 3. The correlation function computes moment-by-moment correlations, vectorized with `mat2vec`
 4. The combine function merges subjects; the reduction function reduces the number of features
-5. `features` repeats this per order: the analysis path gives `X_k` from the delta features `D_{k-1}`, and the delta path (`eye_weights`, `autofc`) gives `D_k`
+5. `features` repeats this per order: the analysis path gives `X_k` from the delta features `D_{k-1}`, and the delta path (`autofc` with `eye_weights` by default, or the kernel in `delta_weights_function`) gives `D_k`
 
 ## Testing Framework
 
-- Uses `pytest`; tests are in `tests/` (one file per area: estimator, kernels, formatting, reduce, features, decoders, simulate, higher-order recovery, events (`test_events.py`), segmentation and on-demand installation (`test_segment.py`), recovery with event-restricted kernels (`test_events_recovery.py`), plus coverage files)
+- Uses `pytest`; tests are in `tests/` (one file per area: estimator, kernels, formatting, reduce, features, decoders, simulate, higher-order recovery, events (`test_events.py`), segmentation and on-demand installation (`test_segment.py`), recovery with event-restricted kernels (`test_events_recovery.py`), summaries and their streaming (`test_summaries.py`, `test_summaries_streaming.py`), the feeding path and reducer grammar in `features` (`test_features_summaries.py`), order-2 recovery on `simulate_nested` data (`test_nested_recovery.py`; its T 3000, isfc and K 702 cases are slow), plus coverage files)
 - Tests run real computations on simulated data; no mocks
 - `pytest.ini` registers the `slow` marker for long-running integration tests (continuous integration runs them)
 - Docstring examples are tested with `pytest --doctest-modules timecorr/`

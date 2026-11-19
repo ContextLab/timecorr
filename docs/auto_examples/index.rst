@@ -125,6 +125,23 @@ the decoding scripts take up to about a minute each and are shown without output
 
 .. raw:: html
 
+    <div class="sphx-glr-thumbcontainer" tooltip="simulate_nested places 108 nodes in 18 modules of 6 nodes, grouped in 6 supergroups of 3 modules.  Each supergroup has a slowly varying strength h (``truth[&quot;h&quot;]``, one column per supergroup) that sets how strongly its modules&#x27; couplings move together over time, so h is carried by the correlations among the modules&#x27; time-varying couplings: an order-2 signal. The two subjects share only h; their modules&#x27; couplings, signs and noise are private.">
+
+.. only:: html
+
+  .. image:: /auto_examples/images/thumb/sphx_glr_plot_nested_recovery_thumb.png
+    :alt:
+
+  :doc:`/auto_examples/plot_nested_recovery`
+
+.. raw:: html
+
+      <div class="sphx-glr-thumbnail-title">Recover an order-2 signal from nested data</div>
+    </div>
+
+
+.. raw:: html
+
     <div class="sphx-glr-thumbcontainer" tooltip="A kernel can be restricted to the past or to the future of each timepoint. direction=&quot;backward&quot; keeps only the timepoints at or before t; direction=&quot;forward&quot; keeps only those at or after t; include_zero=False also leaves out t itself. Every kernel function accepts these arguments, tc.one_sided applies them to any kernel matrix, and tc.timecorr applies them through include_timepoints (&quot;backward&quot; or &quot;forward&quot;) and include_zero.">
 
 .. only:: html
@@ -173,6 +190,7 @@ the decoding scripts take up to about a minute each and are shown without output
    /auto_examples/decode_by_level
    /auto_examples/calculate_dynamic_correlations
    /auto_examples/plot_simulate_data
+   /auto_examples/plot_nested_recovery
    /auto_examples/plot_one_sided_kernels
    /auto_examples/plot_higher_order_recovery
 

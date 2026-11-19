@@ -84,6 +84,22 @@ print(round(r, 2))  # 0.9
 
 `tc.carrier_reducer` keeps, at each order, only the features that carry the simulated structure, so the estimate at order 2 is the 4 x 4 correlation matrix among the block products. See the [higher-order tutorial](https://github.com/ContextLab/timecorr/blob/master/docs/tutorial/higher_order_tutorial.ipynb) for recovery at each order and for the limits of variance-based reduction.
 
+## Squared-correlation summaries and the feeding kernel
+
+```python
+# 108 nodes in 18 modules in 6 supergroups; the subjects share only the order-2 signal h
+data, truth = tc.simulate_nested(S=2, T=1000, set_random_seed=0)
+comm = tc.Communities()  # number of communities set by a shift null
+X = tc.features(data, order=2, cfun=tc.autofc, weights_params={"var": 33 ** 2},
+                rfun="auto",           # PCA at order 1, WeightedStrength(signed=True) at order 2
+                delta_rfun=comm,       # "auto" gives a new Communities()
+                delta_weights_function=tc.gaussian_weights,  # kernel of the path feeding order 2
+                delta_weights_params={"var": 25})
+print(comm.fits_[0]["n"], X[2][0].shape)  # 18 (1000, 36)
+```
+
+`tc.WeightedStrength` and `tc.Communities` summarize each subject's correlations by weighted sums of squared correlations per node or by the mean squared correlation within each community of nodes; they are accepted wherever `rfun` is. `delta_weights_function` and `delta_weights_params` set the kernel of the path that feeds the next order (default `eye_weights`, co-fluctuations). The defaults of `tc.features` are unchanged. In the gallery example `plot_nested_recovery.py` (this call, seed 0), a ridge map from subject A's order-2 features to `h`, applied to subject B, gives a mean correlation of 0.74 with `h` over the 6 supergroups. A step reduced by a summary (with `cfun` `autofc`, `isfc` or `wisfc` and `combine=tc.null_combine`) is computed in blocks of nodes; memory is bounded only when every step uses a summary, since the default order-1 reducer (PCA) holds `K(K+1)/2` columns per subject; with `rfun=tc.WeightedStrength(signed=True)` the order-1 step is also computed in blocks.
+
 # Usage
 
 ## Data

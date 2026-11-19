@@ -217,6 +217,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   examples for one-sided kernels and recovery of simulated structure by order.
   The other three tutorials and the existing examples were updated to run on
   this version.
+- Squared-correlation summaries (`timecorr.summaries`, exported from
+  `timecorr`): `tc.WeightedStrength(split=False, signed=False, n=None)`
+  (weighted sums of each node's squared correlations, with pair weights
+  `mean_t r_ij**2` clipped at their median; `signed=True` adds the
+  correlations weighted by `mean_t r_ij`) and `tc.Communities(n=None,
+  signed=False)` (mean squared correlation within each community of nodes,
+  found by spectral k-means on the pair weights). Both are accepted as `rfun`
+  by `reduce`, `timecorr` and `features`, as instances or as the names
+  `"weighted_strength"`, `"weighted_strength_split"` and `"communities"`;
+  `fit` and `transform` separate fitting from applying, and `fits_` records
+  each fit. In `features`, `n=None` sets the number of communities from a
+  shift null (eigenvalues of the centered pair weights above those of
+  data whose columns are circularly shifted by independent lags).
+- `features` and `two_path_step`: keyword-only `delta_weights_function` and
+  `delta_weights_params` set the kernel of the path that feeds the next
+  order (the delta path). A kernel other than `eye_weights` gives
+  kernel-weighted correlations (`autofc`) instead of co-fluctuations.
+  `rfun` and `delta_rfun` accept `"auto"` (analysis path: PCA at order 1 and
+  `WeightedStrength(signed=True)` above; delta path: `"communities"`) and
+  dicts keyed by order. A step whose reducer is a summary, with
+  `combine=null_combine` and `cfun` `autofc`, `isfc` or `wisfc`, is computed
+  in blocks of nodes (streamed) so that the `(K, K, T)` correlation array is
+  never held in memory; `estimate_memory_gb(..., streamed=True)` gives the
+  peak of a streamed step. The default order-1 reducer (PCA) still holds
+  `K(K+1)/2` columns per subject, so memory is bounded only when every step
+  uses a summary (for example `rfun=tc.WeightedStrength(signed=True)`).
+  The defaults of `features` are unchanged (`eye_weights` delta kernel,
+  `rfun="PCA"`, `delta_rfun=None`); the new behavior is reached with explicit
+  arguments.
+- `tc.simulate_nested`: nodes in modules in supergroups, with an order-2
+  signal `h` (per supergroup) that sets the time course of each module's
+  coupling; returns `(data, truth)` with the modules, supergroups, `h` and
+  the couplings `g`. Options for sign-flipping and transient coupling, a
+  global signal, and coupling shared across subjects (`shared="order1"`).
+- `tests/test_nested_recovery.py`: decoding of `h` from order-2 features
+  across subjects on `simulate_nested` data, with controls from an
+  independent `h`, the raw data and the order-1 features; recovery of the
+  modules by `Communities`; the automatic community count on autocorrelated
+  noise; and a streamed run at K = 702 (marked slow).
 
 ### Fixed
 

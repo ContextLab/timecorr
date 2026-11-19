@@ -75,6 +75,28 @@ The building blocks are in ``timecorr.higher_order``:
    X = tc.features(subjects, order=2, weights_params={"var": 10})
    # X[0]: the data; X[1], X[2]: one (100, 5) array per subject (PCA-reduced)
 
+The keyword-only arguments ``delta_weights_function`` and
+``delta_weights_params`` set the kernel of the delta (feeding) path; with a
+kernel other than ``eye_weights`` the features passed to the next order are
+kernel-weighted correlations (``autofc``) instead of co-fluctuations.
+``rfun`` and ``delta_rfun`` accept ``"auto"`` (analysis path: PCA at order 1
+and ``WeightedStrength(signed=True)`` above; delta path: ``"communities"``,
+with the number of communities set by a shift null) and dicts keyed by order.
+Steps reduced by a summary (with ``null_combine`` and ``cfun`` ``autofc``,
+``isfc`` or ``wisfc``) are computed in blocks of nodes, without holding the
+``(K, K, T)`` correlation array. The defaults are unchanged; this call uses
+the Gaussian feeding kernel and the summaries:
+
+.. code-block:: python
+
+   data, truth = tc.simulate_nested(S=2, T=1000, set_random_seed=0)
+   X = tc.features(data, order=2, cfun=tc.autofc,
+                   weights_params={"var": 33 ** 2},
+                   rfun="auto", delta_rfun="auto",
+                   delta_weights_function=tc.gaussian_weights,
+                   delta_weights_params={"var": 25})
+   # X[2]: one (1000, 2 * c) array per subject, c = number of communities
+
 .. currentmodule:: timecorr
 
 Events

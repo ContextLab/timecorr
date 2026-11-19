@@ -16,6 +16,7 @@ from scipy.optimize import minimize
 
 from .helpers import (
     _weights_alias,
+    eye_weights,
     format_data,
     isfc,
     laplace_params,
@@ -173,6 +174,7 @@ def _decoder_delta_chain(data, level, rfun=None, max_memory_gb=None):
                 max_memory_gb=max_memory_gb,
                 order=k,
                 nan_warned=nan_warned,
+                weights_function=eye_weights,
             )
         )
     return D
@@ -821,7 +823,7 @@ def folding_levels(
     )
     raw = _delta_path(
         subjects, rfun=rfun[level], max_memory_gb=max_memory_gb, n_outputs=2,
-        order=level,
+        order=level, weights_function=eye_weights,
     )
     return in_smooth, out_smooth, raw[:n_in], raw[n_in:]
 

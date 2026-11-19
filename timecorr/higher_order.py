@@ -11,11 +11,23 @@ At each order ``k >= 1`` the previous order's feeding features ``D_{k-1}``
   delta_rfun[k])``, whose output is passed to the next order.
 
 The feeding path is called the delta path in argument names (``delta_rfun``,
-``return_delta``, ``delta_weights_function``) for historical reasons.  With
-the default feeding kernel, ``eye_weights``, the feeding features are
-unblurred co-fluctuations (products of z-scored series), so temporal blur is
-applied once, at the order being analyzed.  With another feeding kernel they
-are kernel-weighted correlations.
+``return_delta``, ``delta_weights_function``) for historical reasons: in the
+original pipeline its kernel is ``eye_weights``, which gives unblurred
+co-fluctuations (products of z-scored series), so temporal blur is applied
+once, at the order being analyzed.
+
+Defaults: ``rfun="auto"`` (``"PCA"`` at order 1,
+``WeightedStrength(signed=True)`` at orders 2 and above),
+``delta_rfun="auto"`` (``Communities()``, with the number of communities
+counted with a shift null) and a Gaussian feeding kernel with variance 25
+(standard deviation 5 samples), so the feeding features are kernel-weighted
+correlations summarized by community.  The feeding kernel is shaped by
+``include_timepoints``, ``include_zero`` and the events of each order, as
+the analysis kernel is.  The default feeding reducer needs at least 4
+features and 40 timepoints (``ValueError`` otherwise);
+``delta_rfun="weighted_strength"`` takes any number of features and
+timepoints.  The original two-path pipeline (Owen, Chang & Manning, 2021,
+Fig. 10) is ``rfun="PCA", delta_rfun=None, delta_weights_function=eye_weights``.
 
 A step whose reducer is a squared-correlation summary (``WeightedStrength``
 or ``Communities``) and whose correlations come from ``autofc``, ``isfc`` or
@@ -55,6 +67,7 @@ from .events import (
     resolve_events_by_order,
 )
 from .summaries import (
+    Communities,
     WeightedStrength,
     _block_rows_for,
     _from_name,
@@ -68,11 +81,11 @@ from .timecorr import _event_kernels, _shaped_kernel, timecorr
 _BYTES_PER_GB = 1e9
 
 # The feeding kernel used when delta_weights_function is None (read by
-# _feeding_kernel): "delta" (eye_weights, co-fluctuations) or "gaussian"
-# (gaussian_weights with _DEFAULT_FEEDING_PARAMS unless delta_weights_params
-# is given).  With "delta", delta_weights_params without delta_weights_function
-# raises ValueError, since eye_weights takes no parameters.
-_DEFAULT_FEEDING = "delta"
+# _feeding_kernel): "gaussian" (gaussian_weights with _DEFAULT_FEEDING_PARAMS
+# unless delta_weights_params is given) or "delta" (eye_weights,
+# co-fluctuations; delta_weights_params then raises ValueError, since
+# eye_weights takes no parameters).
+_DEFAULT_FEEDING = "gaussian"
 _DEFAULT_FEEDING_PARAMS = {"var": 25}
 # kernel standard deviation assumed by the shift null for kernels without a
 # "var" parameter
@@ -86,10 +99,13 @@ _STREAMED_CFUNS = (autofc, isfc, wisfc)
 _WORKSPACE_BLOCKS = 6
 
 
-def _step_gb(d, T, n_subjects=1, n_outputs=1):
+def _step_gb(d, T, n_subjects=1, n_outputs=1, kernel_feeding=False):
     """
     Peak memory (GB) of one unreduced correlation step on ``n_subjects`` (T, d)
     inputs that holds ``n_outputs`` (T, d(d+1)/2) results per subject.
+    ``kernel_feeding``: the feeding path (``n_outputs=2``) uses a kernel other
+    than ``eye_weights``, so it has block temporaries of its own while both
+    paths' results are held.
     """
     d, T, S = int(d), int(T), int(n_subjects)
     v = d * (d + 1) // 2
@@ -99,14 +115,26 @@ def _step_gb(d, T, n_subjects=1, n_outputs=1):
         + S * T * v  # the analysis path's vectorized results, every subject
         + 3 * S * T * d  # the inputs (and the copies made while formatting)
         + 3 * T * T  # the kernel, its working copy and its absolute value
-        # the analysis path's block temporaries, or (when the delta path is
-        # computed too: it has no block temporaries) the delta results
-        + max(_WORKSPACE_BLOCKS * block, (n_outputs - 1) * S * T * v)
+        + _workspace(_WORKSPACE_BLOCKS * block, (n_outputs - 1) * S * T * v,
+                     kernel_feeding)
     )
     return elements * 8 / _BYTES_PER_GB
 
 
-def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=False):
+def _workspace(blocks, feeding, kernel_feeding):
+    """
+    Elements held besides the correlation array, inputs, kernels and the
+    analysis results: block temporaries (``blocks``) and the feeding results
+    (``feeding``).  With ``eye_weights`` the feeding path has no block
+    temporaries and runs after the analysis path's are freed, so the peak
+    holds the larger of the two; with another kernel the feeding path's own
+    block temporaries are held together with its results.
+    """
+    return blocks + feeding if kernel_feeding else max(blocks, feeding)
+
+
+def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=False,
+                       *, delta_weights_function=None):
     """
     Estimate the peak memory of each order of an unreduced or streamed pipeline.
 
@@ -114,11 +142,13 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
     every order, starting from ``K``.  The correlation step at order ``k``
     allocates one ``(d_{k-1}, d_{k-1}, T)`` array at a time, holds a
     ``(T, d_k)`` vectorized result for every subject (two per subject once
-    the delta path has run too), and the analysis path uses block temporaries
-    of bounded size, all in float64.  The estimate is the peak of
-    ``tc.features(..., rfun=None)`` with the default ``combine``
-    (``null_combine``) for data without NaNs; other ``combine`` functions and
-    reducers allocate more.  With per-subject events, the kernels of the
+    the delta path has run too), and the analysis path (and the delta path,
+    unless its kernel is ``eye_weights``) uses block temporaries of bounded
+    size, all in float64.  The estimate is the peak of
+    ``tc.features(..., rfun=None, delta_rfun=None)`` with the same
+    ``delta_weights_function`` and the default ``combine`` (``null_combine``)
+    for data without NaNs; other ``combine`` functions and reducers allocate
+    more.  With per-subject events, the kernels of the
     distinct event sets (one T x T array each) are not included in the
     estimate.
 
@@ -146,6 +176,12 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
         ``streamed=True``.  Default: False.
     streamed : bool, optional
         If True, estimate streamed steps (see above).  Default: False.
+    delta_weights_function : function or None, optional
+        The feeding (delta) kernel of the run (keyword-only), as in
+        ``features``: None (the default Gaussian kernel) or any kernel other
+        than ``eye_weights`` counts the feeding path's block temporaries;
+        ``eye_weights`` (the original pipeline's co-fluctuations) does not.
+        Not used with ``streamed=True``.  Default: None.
 
     Returns
     -------
@@ -157,6 +193,10 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
     --------
     >>> from timecorr.higher_order import estimate_memory_gb
     >>> [round(x, 3) for x in estimate_memory_gb(100, 2, 200, n_subjects=3)]
+    [0.0, 0.163, 102.484]
+    >>> import timecorr as tc
+    >>> [round(x, 3) for x in estimate_memory_gb(100, 2, 200, n_subjects=3,
+    ...                                          delta_weights_function=tc.eye_weights)]
     [0.0, 0.139, 102.484]
     >>> [round(x, 3) for x in estimate_memory_gb(100, 2, 200, 3, streamed=True)]
     [0.0, 0.014, 0.014]
@@ -166,21 +206,26 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
     if streamed:
         step = 8 * _streamed_peak_elements(T, K, n_subjects, 1) / _BYTES_PER_GB
         return [0.0] + [step] * int(order)
+    kernel_feeding = delta_weights_function is not eye_weights
     estimates = [0.0]
     d = K
     for k in range(1, int(order) + 1):
         both_paths = k < order or return_delta
-        estimates.append(_step_gb(d, T, n_subjects, 2 if both_paths else 1))
+        estimates.append(
+            _step_gb(d, T, n_subjects, 2 if both_paths else 1, kernel_feeding)
+        )
         d = d * (d + 1) // 2
     return estimates
 
 
 def _largest_k(order, T, max_memory_gb, n_subjects=1, return_delta=False,
-               streamed=False):
+               streamed=False, kernel_feeding=False):
     """Largest K whose estimates up to ``order`` all fit (0 if none)."""
+    feeding = gaussian_weights if kernel_feeding else eye_weights
 
     def fits(k):
-        est = estimate_memory_gb(k, order, T, n_subjects, return_delta, streamed)
+        est = estimate_memory_gb(k, order, T, n_subjects, return_delta, streamed,
+                                 delta_weights_function=feeding)
         return max(est) <= max_memory_gb
 
     if not fits(1):
@@ -197,7 +242,8 @@ def _largest_k(order, T, max_memory_gb, n_subjects=1, return_delta=False,
     return lo
 
 
-def _check_step_memory(d, T, n_subjects, n_outputs, max_memory_gb, order=None):
+def _check_step_memory(d, T, n_subjects, n_outputs, max_memory_gb, order=None,
+                       kernel_feeding=False):
     """
     Raise MemoryError before an unreduced correlation step on ``n_subjects``
     (T, d) inputs whose estimate (``_step_gb``) exceeds ``max_memory_gb``.
@@ -207,9 +253,10 @@ def _check_step_memory(d, T, n_subjects, n_outputs, max_memory_gb, order=None):
     if max_memory_gb is None:
         return
     S = int(n_subjects)
-    step = _step_gb(d, T, S, n_outputs)
+    step = _step_gb(d, T, S, n_outputs, kernel_feeding)
     if step > max_memory_gb:
-        fit = _largest_k(1, T, max_memory_gb, S, n_outputs > 1)
+        fit = _largest_k(1, T, max_memory_gb, S, n_outputs > 1,
+                         kernel_feeding=kernel_feeding)
         where = "" if order is None else f" at order {order}"
         raise MemoryError(
             f"The correlation step{where} needs about {step:.3g} GB "
@@ -415,6 +462,7 @@ def _analysis_path(
     order=None,
     events=None,
     append_fit=False,
+    kernel_feeding=False,
 ):
     """
     Analysis path of one order: ``reduce(combine(timecorr(subjects, kernel, cfun)))``.
@@ -462,7 +510,8 @@ def _analysis_path(
             bandwidth=_bandwidth(weights_function, weights_params),
             append_fit=append_fit,
         )
-    _check_step_memory(d, T, len(subjects), n_outputs, max_memory_gb, order)
+    _check_step_memory(d, T, len(subjects), n_outputs, max_memory_gb, order,
+                       kernel_feeding)
 
     def analyze(members, member_events):
         return combine(
@@ -603,7 +652,7 @@ def _delta_path(
                 bandwidth=_bandwidth(weights_function, weights_params),
                 append_fit=append_fit,
             )
-        _check_step_memory(d, T, S, n_outputs, max_memory_gb, order)
+        _check_step_memory(d, T, S, n_outputs, max_memory_gb, order, True)
         corrs = _as_list(
             timecorr(
                 subjects,
@@ -729,12 +778,44 @@ def _order_map(value, name, max_order):
 
 def _resolve_auto(value, k, path):
     """``"auto"``: PCA at order 1 and ``WeightedStrength(signed=True)`` above
-    on the analysis path, ``"communities"`` on the feeding path."""
+    on the analysis path, ``Communities()`` on the feeding path (marked with
+    ``_from_auto`` so that ``_check_auto_feeding`` can name the
+    alternatives)."""
     if not _is_auto(value):
         return value
     if path == "feeding":
-        return "communities"
+        summary = Communities()
+        summary._from_auto = True
+        return summary
     return "PCA" if k == 1 else WeightedStrength(signed=True)
+
+
+# smallest input of the default feeding reducer (communities with the
+# automatic count): K >= 4 features, T >= 40 timepoints for the shift null
+_AUTO_FEEDING_MIN_K = 4
+_AUTO_FEEDING_MIN_T = 40
+
+
+def _check_auto_feeding(delta_rfun, d, T, order):
+    """
+    Raise ``ValueError`` naming the alternatives when the feeding reducer
+    resolved from ``delta_rfun="auto"`` (communities) cannot be fitted to
+    (T, d) inputs: fewer than 4 features or fewer than 40 timepoints.
+    """
+    if not getattr(delta_rfun, "_from_auto", False):
+        return
+    if d >= _AUTO_FEEDING_MIN_K and T >= _AUTO_FEEDING_MIN_T:
+        return
+    at = "" if order is None else f" at order {order}"
+    raise ValueError(
+        f'The default feeding reducer (delta_rfun="auto": communities, counted '
+        f"with a shift null){at} needs at least {_AUTO_FEEDING_MIN_K} features "
+        f"and {_AUTO_FEEDING_MIN_T} timepoints; got {d} feature"
+        f"{'' if d == 1 else 's'} and T = {T}.  Pass "
+        'delta_rfun="weighted_strength" (any number of features and '
+        "timepoints), or the original pipeline's settings "
+        'rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights.'
+    )
 
 
 def _resolve_reducers(rfun, delta_rfun, orders, max_order):
@@ -824,27 +905,23 @@ def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfu
 def _feeding_kernel(weights_function, weights_params, default=None):
     """
     ``(function, params)`` of the feeding kernel: None selects the kernel
-    named by ``default`` (None: ``_DEFAULT_FEEDING``): ``"delta"`` gives
-    ``eye_weights``, ``"gaussian"`` gives ``gaussian_weights`` with
-    ``_DEFAULT_FEEDING_PARAMS`` unless params are given.  ``eye_weights``
-    (given or selected) with params raises ``ValueError``.
+    named by ``default`` (None: ``_DEFAULT_FEEDING``): ``"gaussian"`` gives
+    ``gaussian_weights`` with ``_DEFAULT_FEEDING_PARAMS`` unless params are
+    given, ``"delta"`` gives ``eye_weights``.  ``eye_weights`` (given or
+    selected) with params raises ``ValueError``.
     """
     default = _DEFAULT_FEEDING if default is None else default
     if weights_function is None:
-        if default == "delta":
-            if weights_params is not None:
-                raise ValueError(
-                    "delta_weights_params needs delta_weights_function: the "
-                    "default feeding kernel (eye_weights) takes no parameters."
-                )
-            return eye_weights, weights_params
-        if default != "gaussian":
+        if default not in ("delta", "gaussian"):
             raise ValueError(
                 f"default must be 'delta' or 'gaussian'; got {default!r}."
             )
-        if weights_params is None:
+        if default == "delta":
+            weights_function = eye_weights
+        elif weights_params is None:
             return gaussian_weights, dict(_DEFAULT_FEEDING_PARAMS)
-        return gaussian_weights, weights_params
+        else:
+            return gaussian_weights, weights_params
     if not callable(weights_function):
         raise TypeError(
             "delta_weights_function must be None or a kernel function called as "
@@ -864,8 +941,8 @@ def two_path_step(
     weights_function=gaussian_weights,
     weights_params=None,
     cfun=isfc,
-    rfun="PCA",
-    delta_rfun=None,
+    rfun="auto",
+    delta_rfun="auto",
     ndims=None,
     combine=null_combine,
     include_timepoints="all",
@@ -900,11 +977,14 @@ def two_path_step(
         Reducer for the analysis path: any reducer ``helpers.reduce`` accepts
         (including the summaries ``WeightedStrength`` and ``Communities``),
         ``"auto"``, or an order map (see ``features``); ``"auto"`` and order
-        maps are resolved with ``order``.  Default: "PCA".
+        maps are resolved with ``order`` (``"auto"``: ``"PCA"`` at order 1,
+        ``WeightedStrength(signed=True)`` at orders 2 and above).  Default:
+        "auto".
     delta_rfun : None, str, dict, or callable
         Reducer for the feeding (delta) path, as ``rfun``; ``"auto"`` is
-        ``"communities"``.  Default (None): the same as ``rfun`` at this
-        order.
+        ``Communities()`` (at least 4 features and 40 timepoints; see
+        ``features``), None is the same as ``rfun`` at this order.  Default:
+        "auto".
     ndims : int, optional
         Output width of model-based reduction (a model name or dict) on
         either path (see ``helpers.reduce``); it is not passed to a graph
@@ -941,12 +1021,14 @@ def two_path_step(
         (keyword-only; see ``timecorr``).  Default: None.
     delta_weights_function : function or None
         Feeding kernel (keyword-only; see ``features``).  Default: None
-        (``eye_weights``).
+        (``gaussian_weights``).
     delta_weights_params : dict or None
-        Parameters of the feeding kernel (keyword-only); must be None when
-        the feeding kernel is ``eye_weights`` (given or by default), which
-        takes no parameters (``ValueError`` otherwise).  Default: None (the
-        kernel's defaults).
+        Parameters of the feeding kernel (keyword-only).  With
+        ``delta_weights_function=None`` they are the parameters of
+        ``gaussian_weights`` (None: ``{"var": 25}``); with a given function,
+        None means that function's own defaults; with ``eye_weights``, which
+        takes no parameters, they must be None (``ValueError`` otherwise).
+        Default: None.
     order : int
         The order this step computes (keyword-only), used to resolve
         ``"auto"`` and order maps (whose keys may be any positive integers
@@ -981,7 +1063,8 @@ def two_path_step(
         samples, some pairs of features have fewer than 3 observed samples with
         non-zero kernel weight (those correlations are undefined and set to 0);
         and timepoints with zero kernel-weighted variance in every feature
-        (their correlations are set to 0).  Never with ``eye_weights``.
+        (their correlations are set to 0).  Never for a feeding path with
+        ``eye_weights``.
     UserWarning
         From the summaries (see ``WeightedStrength`` and ``Communities``).
 
@@ -996,8 +1079,12 @@ def two_path_step(
         neither a model configuration (with a ``'model'`` key) nor an order
         map, or an order map with a key that is not a positive integer or a
         value that is not a reducer; if ``ndims`` is not a positive integer,
-        or is given with a summary on either path; for a ``Communities`` (or
-        split ``WeightedStrength``) without ``n`` where the number of
+        or is given with a summary on either path (with the defaults, at
+        orders 2 and above); if the default feeding reducer
+        (``delta_rfun="auto"``) gets fewer than 4 features or fewer than 40
+        timepoints (the message names ``delta_rfun="weighted_strength"`` and
+        the original pipeline's settings); for a ``Communities`` (or split
+        ``WeightedStrength``) without ``n`` where the number of
         communities cannot be counted automatically (analysis path with a
         ``cfun`` other than ``autofc`` or a ``combine`` other than
         ``null_combine``; T < 40); and as in ``timecorr`` (subjects of
@@ -1014,26 +1101,36 @@ def two_path_step(
 
     Examples
     --------
-    >>> import numpy as np
+    >>> import timecorr as tc
     >>> from timecorr.higher_order import two_path_step
-    >>> rng = np.random.RandomState(0)
-    >>> data = [rng.randn(40, 4) for _ in range(3)]
-    >>> X1, D1 = two_path_step(data, weights_params={"var": 10})
+    >>> data, truth = tc.simulate_nested(S=2, T=300, n_supergroups=2,
+    ...                                  modules_per_supergroup=3,
+    ...                                  nodes_per_module=4, set_random_seed=0)
+
+    With the defaults, order 1 gives PCA-reduced correlations and one feeding
+    column per community (6 modules of 4 nodes here):
+
+    >>> X1, D1 = two_path_step(data, cfun=tc.autofc, weights_params={"var": 100})
     >>> len(X1), X1[0].shape, len(D1), D1[0].shape
-    (3, (40, 4), 3, (40, 4))
+    (2, (300, 24), 2, (300, 6))
 
-    Restrict the analysis kernel to two events (timepoints 0-19 and 20-39):
+    At order 2 the default analysis reducer is signed weighted strength (two
+    columns per input feature):
 
-    >>> X1, D1 = two_path_step(data, weights_params={"var": 10}, events=[20])
-    >>> X1[0].shape
-    (40, 4)
-
-    ``"auto"`` at order 2 is signed weighted strength (two columns per node):
-
-    >>> X2, D2 = two_path_step(D1, weights_params={"var": 10}, rfun="auto",
+    >>> X2, D2 = two_path_step(D1, cfun=tc.autofc, weights_params={"var": 100},
     ...                        delta_rfun="weighted_strength", order=2)
     >>> X2[0].shape, D2[0].shape
-    ((40, 8), (40, 4))
+    ((300, 12), (300, 6))
+
+    The original pipeline's settings (co-fluctuations on the feeding path,
+    PCA on both paths), with the analysis kernel restricted to two events
+    (timepoints 0-149 and 150-299):
+
+    >>> X1, D1 = two_path_step(data, weights_params={"var": 100}, events=[150],
+    ...                        rfun="PCA", delta_rfun=None,
+    ...                        delta_weights_function=tc.eye_weights)
+    >>> X1[0].shape, D1[0].shape
+    ((300, 24), (300, 24))
     """
     if (
         not isinstance(order, numbers.Integral)
@@ -1102,13 +1199,16 @@ def _two_path_step(
     """
     if delta_rfun is None:
         delta_rfun = analysis.get("rfun", "PCA")
+    T, d = subjects[0].shape
+    if feed:
+        _check_auto_feeding(delta_rfun, d, T, order)
     analysis_streamed = _streams(
         analysis.get("rfun", "PCA"), analysis.get("cfun", isfc),
         analysis.get("combine", null_combine),
     )
     feeding_streamed = feeding_function is not eye_weights and _is_summary(delta_rfun)
     n_outputs = 2 if feed and not (analysis_streamed or feeding_streamed) else 1
-    T, d = subjects[0].shape
+    kernel_feeding = feed and feeding_function is not eye_weights
     S = len(subjects)
     v = d * (d + 1) // 2
     # unreduced analysis results are held while the feeding path runs
@@ -1119,14 +1219,16 @@ def _two_path_step(
         if analysis_streamed:
             _streamed_block_elements(d, T, S, max_memory_gb, order, "analysis")
         else:
-            _check_step_memory(d, T, S, n_outputs, max_memory_gb, order)
+            _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
+                               kernel_feeding)
         if feed and feeding_streamed:
             feeding_budget = _budget_left(
                 max_memory_gb, held, d, T, S, order, "streamed feeding step"
             )
             _streamed_block_elements(d, T, S, feeding_budget, order, "feeding")
         elif feed:
-            _check_step_memory(d, T, S, n_outputs, max_memory_gb, order)
+            _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
+                               kernel_feeding)
             if _needs_shift_null(delta_rfun):
                 _budget_left(
                     max_memory_gb, held + S * T * v, d, T, S, order,
@@ -1134,7 +1236,7 @@ def _two_path_step(
                 )
     X_next = _analysis_path(
         subjects, max_memory_gb=max_memory_gb, n_outputs=n_outputs, order=order,
-        append_fit=True, **analysis
+        append_fit=True, kernel_feeding=kernel_feeding, **analysis
     )
     if not feed:
         return X_next, None
@@ -1182,8 +1284,8 @@ def features(
     weights_function=gaussian_weights,
     weights_params=None,
     cfun=isfc,
-    rfun="PCA",
-    delta_rfun=None,
+    rfun="auto",
+    delta_rfun="auto",
     ndims=None,
     combine=null_combine,
     include_timepoints="all",
@@ -1200,21 +1302,35 @@ def features(
     Compute features of every order from 0 to ``order`` with the two-path pipeline.
 
     Order 1 is the dynamic correlations of the data; order ``k`` is the
-    dynamic correlations of the order-``(k-1)`` feeding features.  With the
-    default feeding kernel (``eye_weights``) the feeding features are
-    co-fluctuations, so the order-``k`` features (without reduction) are
-    correlations among products of up to ``2**(k-1)`` of the original
-    features.
+    dynamic correlations of the order-``(k-1)`` feeding features.
 
     ``X_0 = D_0 = data``.  For ``k >= 1``,
     ``X_k = reduce(combine(timecorr(D_{k-1}, analysis kernel, cfun)), rfun[k])``
     and ``D_k = reduce(timecorr(D_{k-1}, feeding kernel, autofc),
-    delta_rfun[k])``.  With ``eye_weights`` as the feeding kernel, each
-    order's features are blurred by the analysis kernel exactly once (Owen,
-    Chang & Manning, 2021, Fig. 10).  The path that gives ``D_k`` is the
-    feeding path; its arguments are named ``delta_*`` for historical
-    reasons.  Reductions of lists are fit jointly across subjects, so all
-    subjects share one space.
+    delta_rfun[k])``.  The path that gives ``D_k`` is the feeding path; its
+    arguments are named ``delta_*`` for historical reasons.  Reductions of
+    lists are fit jointly across subjects, so all subjects share one space.
+
+    With the defaults, the feeding kernel is a Gaussian with variance 25
+    (standard deviation 5 samples), each ``D_k`` holds one column per
+    community of features (``Communities()``: the mean squared correlation
+    within the community over time, with the number of communities counted
+    with a shift null), ``X_1`` is reduced with PCA and ``X_k`` for ``k >=
+    2`` with ``WeightedStrength(signed=True)`` (two columns per input
+    feature).  The default feeding reducer needs at least 4 features and 40
+    timepoints at every order whose feeding step is computed (orders below
+    ``order``, and ``order`` itself with ``return_delta=True``); otherwise
+    ``ValueError`` names the alternatives: ``delta_rfun="weighted_strength"``
+    (one column per feature, any number of features and timepoints) or the
+    original pipeline.
+
+    The original two-path pipeline (Owen, Chang & Manning, 2021, Fig. 10) is
+    ``rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights``:
+    the feeding features are then co-fluctuations (products of z-scored
+    series), each order's features are blurred by the analysis kernel
+    exactly once, and the order-``k`` features (without reduction) are
+    correlations among products of up to ``2**(k-1)`` of the original
+    features.
 
     A step whose reducer is a summary (``WeightedStrength`` or
     ``Communities``, as an object or a name) is streamed when its
@@ -1273,14 +1389,14 @@ def features(
         an order map raises ``ValueError``.  Reducers are resolved once per
         call, before anything is computed.  Summary names and ``"auto"``
         create new summary objects in every call; to read ``fits_``, pass an
-        object.  Default: "PCA".
+        object.  Default: "auto".
     delta_rfun : None, str, dict, or callable
         Feeding-path reducer, with the same forms as ``rfun``; here
         ``"auto"`` is ``"communities"`` at every order.  None (also as an
         order map value) is the same as ``rfun`` at that order.  A
         delta-kernel co-fluctuation matrix ``z z^T`` has rank one, so with
         ``eye_weights`` eigenvector centrality equals ``|z| / ||z||`` and the
-        graph measures carry no network structure.  Default: None.
+        graph measures carry no network structure.  Default: "auto".
     ndims : int, optional
         Output width of model-based reduction (a model name or dict) on
         either path; it is not passed to a graph measure or a callable, which
@@ -1349,13 +1465,16 @@ def features(
         ``delta_weights_function(T, delta_weights_params)`` and shaped like
         the analysis kernel (``include_timepoints``, ``include_zero``,
         events).  ``eye_weights`` gives co-fluctuations by the
-        co-fluctuation code path (NaN handling and message as described
-        under ``data``).  Default: None (``eye_weights``).
+        co-fluctuation code path of the original pipeline (NaN handling and
+        message as described under ``data``).  Default: None
+        (``gaussian_weights``).
     delta_weights_params : dict or None
-        Parameters of the feeding kernel (keyword-only); must be None when
-        the feeding kernel is ``eye_weights`` (given or by default), which
-        takes no parameters (``ValueError`` otherwise).  Default: None (the
-        kernel function's own defaults).
+        Parameters of the feeding kernel (keyword-only).  With
+        ``delta_weights_function=None`` they are the parameters of
+        ``gaussian_weights`` (None: ``{"var": 25}``, standard deviation 5
+        samples); with a given function, None means that function's own
+        defaults; with ``eye_weights``, which takes no parameters, they must
+        be None (``ValueError`` otherwise).  Default: None.
 
     Returns
     -------
@@ -1379,8 +1498,8 @@ def features(
         NaN samples, some pairs of features have fewer than 3 observed samples
         with non-zero kernel weight (those correlations are undefined and set
         to 0); and timepoints with zero kernel-weighted variance in every
-        feature (their correlations are set to 0).  Never with
-        ``eye_weights``.
+        feature (their correlations are set to 0).  Never for a feeding path
+        with ``eye_weights``.
     UserWarning
         Once per call, when NaN co-fluctuations (``eye_weights``) are set to
         0 before a model-based, graph-measure or summary reduction.
@@ -1398,7 +1517,11 @@ def features(
         a value that is not a reducer (all are checked before anything is
         computed, even when a reducer would not be called); if ``ndims`` is
         not a positive integer, or is given with a summary on a computed
-        step; for a ``Communities`` (or split ``WeightedStrength``) without
+        step (with the defaults, whenever ``order >= 2``); if the default
+        feeding reducer (``delta_rfun="auto"``) gets fewer than 4 features
+        or fewer than 40 timepoints at a computed feeding step (the message
+        names ``delta_rfun="weighted_strength"`` and the original pipeline's
+        settings); for a ``Communities`` (or split ``WeightedStrength``) without
         ``n`` where the number of communities cannot be counted (analysis
         steps with a ``cfun`` other than ``autofc`` or a ``combine`` other
         than ``null_combine``; T < 40) and for K < 4 nodes; for a malformed
@@ -1444,32 +1567,49 @@ def features(
     --------
     >>> import numpy as np
     >>> import timecorr as tc
-    >>> rng = np.random.RandomState(0)
-    >>> data = [rng.randn(50, 5) for _ in range(3)]
-    >>> X = tc.features(data, order=2, weights_params={"var": 10})
-    >>> len(X), len(X[2]), X[2][0].shape
-    (3, 3, (50, 5))
-    >>> X, D = tc.features(data[0], order=1, rfun=None, return_delta=True)
-    >>> X[1].shape, D[1].shape
-    ((50, 15), (50, 15))
+    >>> data, truth = tc.simulate_nested(S=2, T=300, n_supergroups=2,
+    ...                                  modules_per_supergroup=3,
+    ...                                  nodes_per_module=4, set_random_seed=0)
 
-    Restrict the order-2 analysis kernel to two events (timepoints 0-24 and
-    25-49); ``X_1`` is unrestricted:
+    With the defaults, ``X_1`` is PCA-reduced (24 columns for 24 nodes),
+    ``D_1`` has one column per community (6 modules) and ``X_2`` is signed
+    weighted strength of ``D_1`` (two columns per community):
 
-    >>> X = tc.features(data, order=2, weights_params={"var": 10}, events={2: [25]})
+    >>> X = tc.features(data, order=2, cfun=tc.autofc, weights_params={"var": 100})
+    >>> len(X), len(X[2]), X[1][0].shape, X[2][0].shape
+    (3, 2, (300, 24), (300, 12))
+
+    Restrict the order-2 kernels to two events (timepoints 0-149 and
+    150-299); ``X_1`` is unrestricted:
+
+    >>> X = tc.features(data, order=2, cfun=tc.autofc, weights_params={"var": 100},
+    ...                 events={2: [150]})
     >>> X[2][0].shape
-    (50, 5)
+    (300, 12)
 
-    A Gaussian feeding kernel (sd 5 samples) with weighted strength on the
-    feeding path, PCA at order 1 and signed weighted strength (two columns
-    per node) at order 2 (``rfun="auto"``):
+    Weighted strength on the feeding path (one column per feature; any
+    number of features and timepoints):
 
-    >>> X = tc.features(data, order=2, cfun=tc.autofc, weights_params={"var": 10},
-    ...                 rfun="auto", delta_rfun="weighted_strength",
-    ...                 delta_weights_function=tc.gaussian_weights,
-    ...                 delta_weights_params={"var": 25})
+    >>> rng = np.random.RandomState(0)
+    >>> small = [rng.randn(50, 3) for _ in range(3)]
+    >>> X = tc.features(small, order=2, cfun=tc.autofc, weights_params={"var": 10},
+    ...                 delta_rfun="weighted_strength")
     >>> X[1][0].shape, X[2][0].shape
-    ((50, 5), (50, 10))
+    ((50, 3), (50, 6))
+
+    The original pipeline (co-fluctuations on the feeding path, PCA at every
+    order), and the same feeding kernel without reduction (order 1 then has
+    K(K+1)/2 = 6 columns):
+
+    >>> X = tc.features(small, order=2, weights_params={"var": 10},
+    ...                 rfun="PCA", delta_rfun=None,
+    ...                 delta_weights_function=tc.eye_weights)
+    >>> len(X), len(X[2]), X[2][0].shape
+    (3, 3, (50, 3))
+    >>> X, D = tc.features(small[0], order=1, rfun=None, delta_rfun=None,
+    ...                    delta_weights_function=tc.eye_weights, return_delta=True)
+    >>> X[1].shape, D[1].shape
+    ((50, 6), (50, 6))
     """
     if (
         not isinstance(order, numbers.Integral)
@@ -1510,10 +1650,13 @@ def features(
 
     if delta_unreduced and max_memory_gb is not None:
         # widths are known in advance: refuse before computing anything
-        estimates = estimate_memory_gb(K, order, T, S, return_delta)
+        estimates = estimate_memory_gb(
+            K, order, T, S, return_delta, delta_weights_function=feeding_function
+        )
         for k in range(1, order + 1):
             if estimates[k] > max_memory_gb:
-                fit = _largest_k(order, T, max_memory_gb, S, return_delta)
+                fit = _largest_k(order, T, max_memory_gb, S, return_delta,
+                                 kernel_feeding=feeding_function is not eye_weights)
                 raise MemoryError(
                     f"Unreduced features at order {k} need about {estimates[k]:.3g} GB "
                     f"(K={K}, T={T}, {S} subject{'s' if S > 1 else ''}), more than "

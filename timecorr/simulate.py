@@ -866,8 +866,10 @@ def carrier_columns(blocks, level, K=None):
 
     Order-0 carriers are a block's own columns.  Order-``k`` carriers are the
     products of adjacent pairs of order-``(k-1)`` carriers.  For a run without
-    reduction (``tc.features(..., rfun=None, return_delta=True)``), this gives
-    the columns of ``D[level]`` that hold them.  At ``level = log2(m)`` each
+    reduction with co-fluctuations on the delta path (``tc.features(...,
+    rfun=None, delta_rfun=None, delta_weights_function=tc.eye_weights,
+    return_delta=True)``), this gives the columns of ``D[level]`` that hold
+    them.  At ``level = log2(m)`` each
     block has one carrier, whose series is the block's product (of z-scored
     lower carriers).
 
@@ -922,7 +924,9 @@ def carrier_reducer(blocks, K=None):
     """
     Build a delta-path reducer that keeps only the block carriers.
 
-    Pass the result as ``delta_rfun`` (with ``rfun=None``) to
+    Pass the result as ``delta_rfun`` (with ``rfun=None`` and
+    ``delta_weights_function=tc.eye_weights``, the original pipeline's
+    co-fluctuations, whose products the carriers are) to
     ``timecorr.features`` for data from ``simulate_data(order=n)``.  At each
     order the reducer keeps the products of adjacent pairs of the previous
     order's carriers, block by block, so order ``k`` sees ``p * m / 2**k``
@@ -967,6 +971,7 @@ def carrier_reducer(blocks, K=None):
     ...                                T=60, K=8, order=2)
     >>> X, D = tc.features(data, order=2, cfun=tc.autofc, rfun=None,
     ...                    delta_rfun=tc.carrier_reducer(truth["blocks"]),
+    ...                    delta_weights_function=tc.eye_weights,
     ...                    return_delta=True, weights_params={"var": 25})
     >>> D[1].shape, X[2].shape
     ((60, 4), (60, 10))

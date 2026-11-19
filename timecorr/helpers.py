@@ -2013,8 +2013,8 @@ def reduce(corrs, rfun=None, ndims=None):
         - One of the graph measures ``'eigenvector_centrality'``,
           ``'pagerank_centrality'``, or ``'strength'`` (strings only), computed
           per node for each timepoint.  A delta-kernel co-fluctuation matrix
-          ``z z^T`` has rank one, so on the delta path of ``features``
-          eigenvector centrality equals ``|z| / ||z||`` and the graph measures
+          ``z z^T`` has rank one, so on the delta path of ``features`` with
+          ``delta_weights_function=eye_weights`` eigenvector centrality equals ``|z| / ||z||`` and the graph measures
           carry no network structure.
         - A squared-correlation summary (see ``timecorr.summaries``): a
           ``WeightedStrength`` or ``Communities`` instance, or the strings

@@ -243,14 +243,23 @@ def _largest_k(order, T, max_memory_gb, n_subjects=1, return_delta=False,
     return lo
 
 
+# named in the MemoryError of a features step that holds its correlations
+# although a summary reducer would stream it
+_STREAM_HINT = (
+    " A summary reducer streams the analysis step in blocks of rows: "
+    "rfun=tc.WeightedStrength(signed=True), or a dict by order such as "
+    "rfun={1: tc.WeightedStrength(signed=True)} for order 1 only."
+)
+
+
 def _check_step_memory(d, T, n_subjects, n_outputs, max_memory_gb, order=None,
-                       kernel_feeding=False, held_elements=0):
+                       kernel_feeding=False, held_elements=0, hint=""):
     """
     Raise MemoryError before an unreduced correlation step on ``n_subjects``
     (T, d) inputs whose estimate (``_step_gb``), plus ``held_elements``
     float64 values retained by the caller (earlier outputs and fits of a
     ``features`` run), exceeds ``max_memory_gb``.  ``max_memory_gb=None``
-    checks nothing.  Shared by ``features``, the path functions and the
+    checks nothing.  ``hint`` is appended to the message.  Shared by ``features``, the path functions and the
     decoders, so all refuse the same steps.
     """
     if max_memory_gb is None:
@@ -272,6 +281,7 @@ def _check_step_memory(d, T, n_subjects, n_outputs, max_memory_gb, order=None,
             f"{retained}, more than max_memory_gb={max_memory_gb}. The largest "
             f"number of input features that fits one step is K={fit}. Reduce "
             "to fewer features (ndims, rfun, delta_rfun) or raise max_memory_gb."
+            + hint
         )
 
 
@@ -1395,8 +1405,14 @@ def _two_path_step(
                 order, "analysis",
             )
         else:
+            # a summary would stream the step when cfun and combine allow it
+            streamable = _streams(
+                "weighted_strength", analysis.get("cfun", isfc),
+                analysis.get("combine", null_combine),
+            )
             _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
-                               kernel_feeding, retained_m + fits)
+                               kernel_feeding, retained_m + fits,
+                               _STREAM_HINT if streamable else "")
         if feed and feeding_streamed:
             _streamed_block_elements(
                 d, T, S,
@@ -1763,7 +1779,12 @@ def features(
         ``Communities``, whose width is found by the fit, the steps whose
         width follows from it are checked when they run.
         The message gives the estimate and the largest number of features
-        that would fit.
+        that would fit; for an analysis step that holds its correlations
+        although a summary would stream it (for example the default
+        order-1 PCA step, with ``cfun`` ``isfc``, ``wisfc`` or ``autofc``
+        and ``combine=null_combine``), it also names
+        ``rfun=tc.WeightedStrength(signed=True)`` and the order map
+        ``rfun={1: tc.WeightedStrength(signed=True)}``.
 
     Notes
     -----

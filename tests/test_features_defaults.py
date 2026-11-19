@@ -238,3 +238,37 @@ def test_default_feeding_needs_k_distinct_shift_lags():
     X = quiet(tc.features, [a[:, :21] for a in x], order=1, return_delta=True,
               weights_params={"var": 10})
     assert len(X) == 2
+
+
+# wave 4, D6: the MemoryError of a default order-1 step names streaming --------
+
+
+def noise(S, shape, seed):
+    """S subjects of independent standard normal noise of the given shape."""
+    rng = np.random.default_rng(seed)
+    return [rng.normal(size=shape) for _ in range(S)]
+
+
+def test_default_order_one_memory_error_names_a_streamed_reducer():
+    # the default order-1 analysis step (PCA) holds its correlations; under a
+    # budget between its estimate and that of a streamed step, the error
+    # names the summary reducers that stream it, and both suggestions run
+    from timecorr.higher_order import estimate_memory_gb
+
+    K, T, S = 60, 400, 2
+    x = noise(S, (T, K), 8)
+    materialized = estimate_memory_gb(K, 1, T, S)[1]
+    streamed = estimate_memory_gb(K, 1, T, S, streamed=True)[1]
+    budget = (materialized + 2 * streamed) / 2
+    assert 2 * streamed < budget < materialized
+    with pytest.raises(MemoryError) as info:
+        tc.features(x, order=1, max_memory_gb=budget)
+    message = str(info.value)
+    assert "rfun=tc.WeightedStrength(signed=True)" in message
+    assert "rfun={1: tc.WeightedStrength(signed=True)}" in message
+    X = tc.features(x, order=1, max_memory_gb=budget,
+                    rfun=tc.WeightedStrength(signed=True))
+    assert X[1][0].shape == (T, 2 * K)
+    X = tc.features(x, order=1, max_memory_gb=budget,
+                    rfun={1: tc.WeightedStrength(signed=True)})
+    assert X[1][0].shape == (T, 2 * K)

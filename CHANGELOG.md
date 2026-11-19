@@ -304,7 +304,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   per-subject event sets, the analysis results held while the feeding step
   runs, and the arrays kept in summaries' `fits_`. The default order-1 reducer (PCA)
   still holds `K(K+1)/2` columns per subject, so memory is bounded only when
-  every step uses a summary (for example `rfun=tc.WeightedStrength(signed=True)`).
+  every step uses a summary (for example `rfun=tc.WeightedStrength(signed=True)`);
+  the `MemoryError` of an analysis step that holds its correlations although
+  a summary would stream it names `rfun=tc.WeightedStrength(signed=True)`
+  and `rfun={1: tc.WeightedStrength(signed=True)}`.
   These are the defaults (see "Changed defaults of the higher-order
   pipeline" above).
 - `tc.simulate_nested`: nodes in modules in supergroups, with an order-2
@@ -391,7 +394,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies and packaging
 
-- Python 3.10 or later; continuous integration on Python 3.10 to 3.13.
+- Python 3.10 or later; continuous integration on Python 3.10 to 3.13 (the
+  tests marked slow run in a separate job on Python 3.12).
 - Added `pydata-wrangler`; `hypertools>=0.8`; `numpy`, `pandas` and
   `matplotlib` are listed explicitly.
 - Removed `nose`, `sphinx` and `duecredit` from the install requirements.

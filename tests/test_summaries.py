@@ -504,6 +504,8 @@ def test_fits_n_is_number_found():
         comm(v)
     labels = comm.fits_[-1]["labels"]
     assert comm.fits_[-1]["n"] == len(np.unique(labels))
+    # n=2 was requested; identical embeddings give one community
+    assert comm.fits_[-1]["n"] == 1
 
 
 def test_split_flag_drives_communities():

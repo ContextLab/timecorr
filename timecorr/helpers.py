@@ -2042,8 +2042,9 @@ def reduce(corrs, rfun=None, ndims=None):
     -------
     numpy.ndarray or list of numpy.ndarray
         The reduced (or original) matrices, in the same container type as
-        ``corrs`` (a summary returns a list for a tuple of arrays): (T, ndims) for model-based reduction, (T, K) for a graph
-        measure, (T, c) for a summary, whatever the callable returns otherwise.
+        ``corrs`` (a summary returns a list for a tuple of arrays): (T, ndims)
+        for model-based reduction, (T, K) for a graph measure, (T, c) for a
+        summary, whatever the callable returns otherwise.
 
     Raises
     ------

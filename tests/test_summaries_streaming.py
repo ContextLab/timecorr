@@ -322,3 +322,35 @@ def test_streamed_peak_memory(cfun):
     )
     assert streamed < 1.25 * 8 * sm._streamed_peak_elements(T, K, S, b)
     assert streamed < 0.25 * materialized
+
+
+def _traced_peak(f):
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        f()
+        return tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+@pytest.mark.parametrize("cfun", [tc.autofc, tc.isfc], ids=["autofc", "isfc"])
+def test_streamed_peak_below_one_correlation_array_at_larger_k(cfun):
+    # what streaming exists for: at K 150 with one row per block (and NaN
+    # samples, the estimator's most expensive path) the step holds less than
+    # one (K, K, T) array
+    # (measured: 10.0 MB autofc, 13.2 MB isfc; one array 36.0 MB; formula 18.8 MB)
+    T, K, S, b = 200, 150, 2, 1
+    rng = np.random.default_rng(5)
+    data = [rng.standard_normal((T, K)) for _ in range(S)]
+    for d in data:
+        d[rng.random(d.shape) < 0.03] = np.nan
+    w = tc.gaussian_weights(T, {"var": 25})
+    streamed = _traced_peak(
+        lambda: sm._streamed_summary(
+            data, w, tc.WeightedStrength(signed=True), cfun,
+            max_block_elements=b * K * T,
+        )
+    )
+    assert streamed < K * K * T * 8
+    assert streamed < 1.25 * 8 * sm._streamed_peak_elements(T, K, S, b)

@@ -585,16 +585,14 @@ class Communities(_Summary):
     otherwise).  When no eigenvalue exceeds ``null_threshold``, a
     ``UserWarning`` says there is no community structure and one community
     holds every node (one column: the mean squared correlation).  A signal
-    shared by every node raises the number of eigenvalues above a threshold,
-    so the count from ``null_threshold`` can exceed the number of
-    communities: in simulations with 18 modules and a global signal, the
-    count from the shift null used by ``features`` was 20 to 25.  The shift
-    null's false-positive rate is measured, not guaranteed: on independent
-    autocorrelated noise, about 10% of recordings gave one eigenvalue above
-    it.  ``fits_[-1]["n"]`` is the number of communities the clustering
-    found.  Calling the instance fits to the given units and transforms the same units; the
-    communities come from the data being summarized.  ``fit`` and
-    ``transform`` separate the two.  The correlations must be finite (NaN
+    shared by every node raises the number of eigenvalues above a
+    threshold, so the count from the shift null can exceed the number of
+    modules.  On data without community structure, usually (not always) no
+    eigenvalue exceeds the shift null; the null's false-positive rate is
+    not controlled.  ``fits_[-1]["n"]`` is the number of communities the
+    clustering found.  Calling the instance fits to the given units and
+    transforms the same units; the communities come from the data being
+    summarized.  ``fit`` and ``transform`` separate the two.  The correlations must be finite (NaN
     raises ``ValueError``).
 
     Examples
@@ -796,14 +794,22 @@ class _Units:
     mean of the subjects that ``wisfc`` correlates it with).
     """
 
-    def __init__(self, subjects, kernels, cfun):
-        from .helpers import _nan_weighted_mean, _subject_kernels, _subject_weight_matrix
+    def __init__(self, subjects, kernels, cfun, grouping=None):
+        from .helpers import (
+            _nan_weighted_mean,
+            _subject_kernels,
+            _subject_weight_matrix,
+        )
 
         self.kind = _correlation_kind(cfun)
         self.subjects = _as_subjects(subjects)
         S = len(self.subjects)
-        self.kernels, self.group_of = _subject_kernels(kernels, S)
-        self.kernels = [np.asarray(k, dtype=np.float64) for k in self.kernels]
+        if grouping is None:
+            self.kernels, self.group_of = _subject_kernels(kernels, S)
+            self.kernels = [np.asarray(k, dtype=np.float64) for k in self.kernels]
+        else:
+            # (kernels, group_of) of another _Units with the same subjects' kernels
+            self.kernels, self.group_of = grouping
         if self.kind == "auto":
             self.weights = None
             self.stacked = None
@@ -895,7 +901,9 @@ def _shift_null_threshold(
         for x in subjects:
             lags = rng.integers(L, T - L, size=K, endpoint=True)
             shifted.append(x[(rows - lags[None, :]) % T, cols])
-        units = _Units(shifted, kernels, autofc)
+        units = _Units(
+            shifted, kernels, autofc, grouping=(probe.kernels, probe.group_of)
+        )
         states = _accumulate_units(units, K, T_out, False, b)
         del units, shifted
         wbar = np.mean([_pair_weights(s["sum_r2"], s["T"]) for s in states], axis=0)
@@ -940,7 +948,10 @@ def _streamed_summary(
         ``autofc``, ``isfc`` or ``wisfc`` (default subject weights).
     max_block_elements : int or None
         Largest block of correlations computed at once (b rows hold
-        ``b * K * T'`` elements); None: one block of K rows.
+        ``b * K * T'`` elements); None: one block of K rows.  Only the size
+        of one block is checked here; the step's total memory (see
+        ``_streamed_peak_elements``) is checked by the caller, which
+        converts a byte budget to a block size with ``_block_rows_for``.
     order, path : optional
         Recorded in ``fits_``.
     auto_n : bool
@@ -965,7 +976,8 @@ def _streamed_summary(
         For an unsupported ``cfun``, the summary's fitting errors, or
         ``auto_n`` with a ``cfun`` other than ``autofc``.
     MemoryError
-        If one row block does not fit in ``max_block_elements``.
+        If one row of correlations (``K * T'`` elements) exceeds
+        ``max_block_elements``.
     """
     from .helpers import _kernels_message
 

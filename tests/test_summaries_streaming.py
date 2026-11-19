@@ -354,3 +354,65 @@ def test_streamed_peak_below_one_correlation_array_at_larger_k(cfun):
     )
     assert streamed < K * K * T * 8
     assert streamed < 1.25 * 8 * sm._streamed_peak_elements(T, K, S, b)
+
+
+# ----------------------------------------------------------------------------
+# shift-null lags and the number of surrogates (review items 3 and 4)
+# ----------------------------------------------------------------------------
+
+
+def test_shift_lags_are_distinct_within_a_subject():
+    rng = np.random.default_rng(0)
+    for T, K, L in [(40, 21, 10), (40, 5, 10), (600, 108, 50), (300, 24, 50)]:
+        for _ in range(20):
+            lags = sm._shift_lags(rng, T, K, L)
+            assert lags.shape == (K,)
+            assert len(np.unique(lags)) == K
+            assert lags.min() >= L and lags.max() <= T - L
+
+
+def test_shift_null_too_short_for_the_columns_raises():
+    # T 40: L 10, so 21 distinct lags in [10, 30]
+    rng = np.random.default_rng(1)
+    w = tc.gaussian_weights(40, {"var": 9})
+    data = [rng.standard_normal((40, 22)) for _ in range(2)]
+    with pytest.raises(ValueError, match="too short for the shift null"):
+        sm._shift_null_threshold(data, w)
+    with pytest.raises(ValueError, match="number of communities n"):
+        sm._shift_null_threshold(data, w)
+    sm._shift_null_threshold([d[:, :21] for d in data], w)
+
+
+@pytest.mark.parametrize("make", [
+    lambda m: tc.Communities(n_null=m),
+    lambda m: tc.WeightedStrength(split=True, n_null=m),
+], ids=["communities", "ws-split"])
+def test_n_null_is_used_and_recorded(make):
+    data, _ = _nested_auto(3, 2, 4, 0)
+    K = data[0].shape[1]
+    w = tc.gaussian_weights(600, {"var": 25})
+    thresholds = {}
+    for m in (1, 5, 9):
+        summary = make(m)
+        assert summary.n_null == m
+        sm._streamed_summary(
+            data, w, summary, tc.autofc, max_block_elements=K * K * 600, auto_n=True,
+            bandwidth=5.0,
+        )
+        fit = summary.fits_[-1]
+        assert fit["n_null"] == m
+        thresholds[m] = fit["null_threshold"]
+        assert fit["null_threshold"] == sm._shift_null_threshold(
+            data, w, n_null=m, bandwidth=5.0
+        )
+    # the first surrogates are the same draws, so the maximum can only grow
+    assert thresholds[1] <= thresholds[5] <= thresholds[9]
+    assert make(5).n_null == 5 and tc.Communities().n_null == 5
+
+
+@pytest.mark.parametrize("bad", [0, -1, 2.5, True, "5", None])
+def test_bad_n_null_raises(bad):
+    with pytest.raises(ValueError, match="n_null must be a positive integer"):
+        tc.Communities(n_null=bad)
+    with pytest.raises(ValueError, match="n_null must be a positive integer"):
+        tc.WeightedStrength(split=True, n_null=bad)

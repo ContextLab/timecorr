@@ -193,6 +193,16 @@ def _check_n(n):
     return int(n)
 
 
+def _check_n_null(n_null):
+    if (
+        not isinstance(n_null, numbers.Integral)
+        or isinstance(n_null, bool)
+        or n_null < 1
+    ):
+        raise ValueError(f"n_null must be a positive integer; got {n_null!r}.")
+    return int(n_null)
+
+
 def _as_units(corrs, name):
     """List of float (T, K(K+1)/2) arrays, K, and whether a single array was given."""
     single = not isinstance(corrs, (list, tuple))
@@ -249,9 +259,10 @@ class _Summary:
 
     _needs_communities = False
 
-    def __init__(self, n=None, signed=False):
+    def __init__(self, n=None, signed=False, n_null=5):
         self.n = _check_n(n)
         self.signed = bool(signed)
+        self.n_null = _check_n_null(n_null)
         self.fits_ = []
 
     # -- fitting ------------------------------------------------------------
@@ -329,11 +340,14 @@ class _Summary:
                 f"(K = {K} nodes); give n <= {K // 2}."
             )
 
-    def _fit_states(self, states, K, *, order=None, path=None, null_threshold=None):
+    def _fit_states(self, states, K, *, order=None, path=None, null_threshold=None,
+                    n_null=None):
         """
         Finish a fit from one accumulated state per unit (``_new_state`` /
         ``_accumulate``): pair weights, mean correlations, communities; appends
-        the record to ``fits_``.  ``_check_fit`` must have passed.
+        the record to ``fits_``.  ``_check_fit`` must have passed.  ``n_null``:
+        the number of surrogates of a shift null that gave ``null_threshold``
+        (recorded as ``"n_null"``; None records nothing).
         """
         weights, means = [], []
         for state in states:
@@ -360,17 +374,18 @@ class _Summary:
             _check_labels(labels, self._what())
             n = int(len(np.unique(labels)))
 
-        self.fits_.append(
-            {
-                "order": order,
-                "path": path,
-                "weights": weights,
-                "mean_r": means if self.signed else None,
-                "labels": labels,
-                "n": n,
-                "null_threshold": null_threshold,
-            }
-        )
+        record = {
+            "order": order,
+            "path": path,
+            "weights": weights,
+            "mean_r": means if self.signed else None,
+            "labels": labels,
+            "n": n,
+            "null_threshold": null_threshold,
+        }
+        if n_null is not None:
+            record["n_null"] = int(n_null)
+        self.fits_.append(record)
 
     # -- output -------------------------------------------------------------
 
@@ -486,6 +501,10 @@ class WeightedStrength(_Summary):
         Number of communities for ``split=True`` (unused otherwise), at most
         K // 2.  ``n=None`` with ``split=True`` needs ``null_threshold`` in ``fit``.
         Default: None.
+    n_null : int
+        Number of shift-null surrogates when ``features`` or
+        ``two_path_step`` count the communities of ``split=True`` with
+        ``n=None`` (see ``Communities``); a positive integer.  Default: 5.
 
     Attributes
     ----------
@@ -495,7 +514,9 @@ class WeightedStrength(_Summary):
         unit, zero diagonal), ``"mean_r"`` (list of (K, K) ``mean_t r_ij``
         when signed, otherwise None), ``"labels"`` ((K,) community of each
         node, or None), ``"n"`` (number of communities found, or None) and
-        ``"null_threshold"``.  ``fit`` appends one entry; calling the
+        ``"null_threshold"``; a fit whose number of communities came from
+        the shift null also has ``"n_null"`` (the number of surrogates).
+        ``fit`` appends one entry; calling the
         instance (as ``reduce``, ``timecorr`` and the decoders do) leaves
         only the entry of that call.  ``features`` clears ``fits_`` at the
         start of a call and, like ``two_path_step``, appends one entry per
@@ -528,8 +549,8 @@ class WeightedStrength(_Summary):
     (300, 24)
     """
 
-    def __init__(self, split=False, signed=False, n=None):
-        super().__init__(n=n, signed=signed)
+    def __init__(self, split=False, signed=False, n=None, n_null=5):
+        super().__init__(n=n, signed=signed, n_null=n_null)
         self.split = bool(split)
 
     @property
@@ -537,7 +558,10 @@ class WeightedStrength(_Summary):
         return bool(self.split)
 
     def __repr__(self):
-        return f"WeightedStrength(split={self.split}, signed={self.signed}, n={self.n})"
+        return (
+            f"WeightedStrength(split={self.split}, signed={self.signed}, n={self.n}, "
+            f"n_null={self.n_null})"
+        )
 
     def _what(self):
         return "WeightedStrength(split=True)"
@@ -608,6 +632,11 @@ class Communities(_Summary):
     signed : bool
         If True, as many more columns: ``mean over i != j in g of
         sign(mean_t r_ij) r_ij(t)``.  Default: False.
+    n_null : int
+        Number of surrogates of the shift null that sets ``null_threshold``
+        when ``features`` or ``two_path_step`` count the communities
+        (``n=None``); the threshold is the largest of their top
+        eigenvalues.  A positive integer.  Default: 5.
 
     Attributes
     ----------
@@ -616,7 +645,9 @@ class Communities(_Summary):
         (list of (K, K) pair weights, one per unit), ``"mean_r"`` (list of
         (K, K) ``mean_t r_ij`` when signed, otherwise None), ``"labels"``
         ((K,)), ``"n"`` (number of communities found) and
-        ``"null_threshold"``.  ``fit`` appends one entry; calling the
+        ``"null_threshold"``; a fit whose number of communities came from
+        the shift null also has ``"n_null"`` (the number of surrogates).
+        ``fit`` appends one entry; calling the
         instance (as ``reduce``, ``timecorr`` and the decoders do) leaves
         only the entry of that call.  ``features`` clears ``fits_`` at the
         start of a call and, like ``two_path_step``, appends one entry per
@@ -632,7 +663,19 @@ class Communities(_Summary):
     threshold, so the count from the shift null can exceed the number of
     modules.  On data without community structure, usually (not always) no
     eigenvalue exceeds the shift null; the null's false-positive rate is
-    not controlled.  ``fits_[-1]["n"]`` is the number of communities the
+    not controlled.  If the top eigenvalue of the data and those of the
+    ``n_null`` surrogates are exchangeable, the chance that it exceeds
+    the largest of them is ``1 / (n_null + 1)`` (1/6 at the default 5),
+    and any exceedance gives at least two communities; the automatic
+    count is a heuristic, and ``n`` can be given instead.  The shift null
+    circularly shifts each column of each subject by its own lag (the K
+    lags of a subject are distinct, drawn without replacement from
+    ``[L, T - L]``; a recording with fewer than K such lags raises
+    ``ValueError`` asking for ``n``).  It assumes that dependence between
+    columns does not survive a relative shift of the sizes drawn; strongly
+    autocorrelated signals can violate this.  With events, whole columns
+    are shifted across event boundaries while the event masks stay
+    fixed.  ``fits_[-1]["n"]`` is the number of communities the
     clustering found.  Calling the instance fits to the given units and
     transforms the same units; the communities come from the data being
     summarized.  ``fit`` and ``transform`` separate the two.  The
@@ -656,11 +699,11 @@ class Communities(_Summary):
 
     _needs_communities = True
 
-    def __init__(self, n=None, signed=False):
-        super().__init__(n=n, signed=signed)
+    def __init__(self, n=None, signed=False, n_null=5):
+        super().__init__(n=n, signed=signed, n_null=n_null)
 
     def __repr__(self):
-        return f"Communities(n={self.n}, signed={self.signed})"
+        return f"Communities(n={self.n}, signed={self.signed}, n_null={self.n_null})"
 
     def _what(self):
         return "Communities"
@@ -910,6 +953,23 @@ def _accumulate_units(units, K, T_out, signed, b, masks=None):
     return states
 
 
+def _shift_lags(rng, T, K, L):
+    """
+    K distinct circular lags drawn without replacement from the integers in
+    ``[L, T - L]`` with the generator ``rng``.  Raise ``ValueError`` when
+    there are fewer than K such integers.
+    """
+    n_lags = int(T) - 2 * int(L) + 1
+    if n_lags < K:
+        raise ValueError(
+            f"the recording is too short for the shift null with this many "
+            f"columns: T = {T} gives {max(n_lags, 0)} distinct lags in "
+            f"[{L}, {T - L}] for K = {K} columns; give the number of "
+            "communities n."
+        )
+    return int(L) + rng.choice(n_lags, size=int(K), replace=False)
+
+
 def _shift_null_threshold(
     subjects, kernels, n_null=5, bandwidth=5.0, max_block_elements=None
 ):
@@ -917,9 +977,10 @@ def _shift_null_threshold(
     Threshold of the automatic number of communities (``autofc`` steps).
 
     Each repetition circularly shifts every column of every subject's data by
-    an independent lag, drawn with ``numpy.random.default_rng(0)`` uniformly
-    from the integers in ``[L, T - L]``, ``L = min(T // 4, max(10, 10 *
-    bandwidth))``; computes the subjects' pair weights ``w`` with the given
+    a lag drawn with ``numpy.random.default_rng(0)`` from the integers in
+    ``[L, T - L]``, ``L = min(T // 4, max(10, 10 * bandwidth))``, without
+    replacement within a subject (``_shift_lags``: the K columns of a subject
+    get K distinct lags); computes the subjects' pair weights ``w`` with the given
     kernels and ``autofc`` (streamed, in blocks of at most
     ``max_block_elements`` correlations; None: the estimator's default block
     size, see ``_rows_per_block``); and records the
@@ -928,10 +989,19 @@ def _shift_null_threshold(
     drawn per repetition, subject by subject, K at a time.  NumPy's global
     random state is not used.
 
+    The null assumes that dependence between columns does not survive a
+    relative shift of the sizes drawn: distinct lags differ by at least 1
+    sample, not by at least L, and strongly autocorrelated signals can stay
+    dependent at such shifts, which violates the assumption.  With events
+    (event-masked kernels), whole columns are shifted across event
+    boundaries while the event masks stay fixed.
+
     Raises
     ------
     ValueError
-        If T < 40, or for inputs ``autofc`` rejects.
+        If T < 40, if ``[L, T - L]`` holds fewer than K integers (the
+        recording is too short for the shift null with this many columns),
+        or for inputs ``autofc`` rejects.
     """
     subjects = _as_subjects(subjects)
     T, K = subjects[0].shape
@@ -941,6 +1011,9 @@ def _shift_null_threshold(
             "number of communities n."
         )
     L = int(min(T // 4, max(10, 10 * float(bandwidth))))
+    n_null = _check_n_null(n_null)
+    if T - 2 * L + 1 < K:
+        _shift_lags(None, T, K, L)  # raises the ValueError that asks for n
     rng = np.random.default_rng(0)
     probe = _Units(subjects, kernels, autofc)
     T_out = probe.kernels[0].shape[0]
@@ -948,10 +1021,10 @@ def _shift_null_threshold(
     rows = np.arange(T)[:, None]
     cols = np.arange(K)
     top = []
-    for _ in range(int(n_null)):
+    for _ in range(n_null):
         shifted = []
         for x in subjects:
-            lags = rng.integers(L, T - L, size=K, endpoint=True)
+            lags = _shift_lags(rng, T, K, L)
             shifted.append(x[(rows - lags[None, :]) % T, cols])
         units = _Units(
             shifted, kernels, autofc, grouping=(probe.kernels, probe.group_of)
@@ -1050,6 +1123,7 @@ def _streamed_summary(
         null_threshold = _shift_null_threshold(
             units.subjects,
             kernels,
+            n_null=summary.n_null,
             bandwidth=bandwidth,
             max_block_elements=max_block_elements,
         )
@@ -1060,7 +1134,8 @@ def _streamed_summary(
     states = _accumulate_units(units, K, T_out, summary.signed, b, masks)
     message = _kernels_message(units.kernels, units.group_of, masks[0], masks[1])
     summary._fit_states(
-        states, K, order=order, path=path, null_threshold=null_threshold
+        states, K, order=order, path=path, null_threshold=null_threshold,
+        n_null=None if null_threshold is None else summary.n_null,
     )
     del states
 

@@ -367,6 +367,9 @@ def _apply_reducer(corrs, rfun, ndims, order=None, path=None, null_threshold=Non
     if summary is None:
         return _reduce(corrs, rfun, ndims)
     summary.fit(corrs, order=order, path=path, null_threshold=null_threshold)
+    if null_threshold is not None:
+        # the threshold came from the shift null with the summary's n_null
+        summary.fits_[-1]["n_null"] = summary.n_null
     out = summary.transform(corrs)
     if not append_fit:
         del summary.fits_[:-1]
@@ -712,6 +715,7 @@ def _delta_path(
         null_threshold = _shift_null_threshold(
             subjects,
             eye_weights(T),
+            n_null=summary.n_null,
             bandwidth=_DEFAULT_BANDWIDTH,
             max_block_elements=_streamed_block_elements(
                 d, T, S, null_budget, order, "feeding"
@@ -1087,7 +1091,8 @@ def two_path_step(
         ``WeightedStrength``) without ``n`` where the number of
         communities cannot be counted automatically (analysis path with a
         ``cfun`` other than ``autofc`` or a ``combine`` other than
-        ``null_combine``; T < 40); and as in ``timecorr`` (subjects of
+        ``null_combine``; T < 40; fewer distinct shift-null lags than
+        features); and as in ``timecorr`` (subjects of
         different shapes, non-numeric columns, an unknown
         ``include_timepoints``, an all-zero kernel, a malformed ``events``
         specification, a dict ``events``, or events that leave no kernel row
@@ -1524,7 +1529,8 @@ def features(
         settings); for a ``Communities`` (or split ``WeightedStrength``) without
         ``n`` where the number of communities cannot be counted (analysis
         steps with a ``cfun`` other than ``autofc`` or a ``combine`` other
-        than ``null_combine``; T < 40) and for K < 4 nodes; for a malformed
+        than ``null_combine``; T < 40; fewer distinct shift-null lags than
+        features) and for K < 4 nodes; for a malformed
         ``events`` specification or ``events_params`` (including dict keys
         outside ``1..order``), and when the events of an order leave no
         kernel row with 3 or more non-zero weights; and as in ``timecorr``
@@ -1559,9 +1565,12 @@ def features(
     (see ``Communities``) on the feeding path and on analysis steps with
     ``cfun=autofc`` and ``combine=null_combine``; the null uses the step's
     kernel (with its events), and circular shifts of at least
-    ``min(T // 4, max(10, 10 * sd))`` samples, where sd is the kernel's
+    ``L = min(T // 4, max(10, 10 * sd))`` samples, where sd is the kernel's
     standard deviation (``sqrt(var)`` for kernels with a ``"var"``
-    parameter, otherwise 5).
+    parameter, otherwise 5), distinct within a subject (drawn without
+    replacement from ``[L, T - L]``; fewer than d such lags for d input
+    features raises ``ValueError`` asking for ``n``), and the summary's
+    ``n_null`` surrogates.
 
     Examples
     --------

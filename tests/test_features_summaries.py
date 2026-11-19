@@ -703,3 +703,28 @@ def test_order_map_missing_order_uses_auto_on_the_feeding_path():
     for k in (1, 2):
         assert_lists_close(D[k], D_ref[k], rtol=0, atol=0)
         assert_lists_close(X[k], X_ref[k], rtol=0, atol=0)
+
+
+# review items 3 and 4: the shift null in the pipeline -----------------------
+
+
+@pytest.mark.parametrize("feeding", ["gaussian", "eye"])
+def test_n_null_reaches_the_shift_null_of_the_feeding_path(feeding):
+    data, _ = nested()
+    kw = FEED if feeding == "gaussian" else dict(delta_weights_function=tc.eye_weights)
+    thresholds = []
+    for m in (1, 7):
+        comm = tc.Communities(n_null=m)
+        quiet(tc.features, data, order=1, cfun=tc.autofc, weights_params=WIDE,
+              rfun="PCA", delta_rfun=comm, return_delta=True, **kw)
+        assert comm.fits_[0]["n_null"] == m
+        thresholds.append(comm.fits_[0]["null_threshold"])
+    assert thresholds[0] <= thresholds[1]
+
+
+def test_too_few_shift_lags_for_the_features_raises():
+    # T 40 gives 21 distinct lags in [10, 30]; 24 features need 24
+    data, _ = nested(T=40)
+    with pytest.raises(ValueError, match="too short for the shift null"):
+        quiet(tc.features, data, order=1, cfun=tc.autofc, weights_params=WIDE,
+              rfun="PCA", delta_rfun=tc.Communities(), return_delta=True, **FEED)

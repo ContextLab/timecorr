@@ -680,3 +680,88 @@ def test_non_finite_null_threshold_raises():
         with pytest.raises(ValueError, match="null_threshold"):
             tc.Communities().fit(v, null_threshold=threshold)
     tc.Communities().fit(v, null_threshold=0.0)
+
+
+# ----------------------------------------------------------------------------
+# median centering of the pair weights (review item 8)
+# ----------------------------------------------------------------------------
+
+
+def _equicorrelated(K, T=200):
+    """Exact correlations with every off-diagonal entry equal to rho(t) (a
+    time-varying common correlation), vectorized with mat2vec, and rho."""
+    t = np.arange(T)
+    rho = 0.45 + 0.35 * np.sin(2 * np.pi * t / 80)
+    M = np.empty((K, K, T))
+    M[:] = rho
+    M[np.arange(K), np.arange(K), :] = 1
+    return tc.mat2vec(M), rho
+
+
+def test_center_true_erases_coupling_shared_by_every_pair():
+    v, rho = _equicorrelated(6)
+    ws = tc.WeightedStrength()
+    assert ws.center is True
+    with pytest.warns(UserWarning, match="constant over time"):
+        out = ws(v)
+    np.testing.assert_allclose(out, 0, atol=1e-12)
+
+
+@pytest.mark.parametrize("K", [3, 4, 6])
+def test_center_false_keeps_coupling_shared_by_every_pair(K):
+    v, rho = _equicorrelated(K)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = tc.WeightedStrength(center=False)(v)
+        signed = tc.WeightedStrength(center=False, signed=True)(v)
+    assert out.shape == (len(rho), K) and signed.shape == (len(rho), 2 * K)
+    for c in range(K):
+        assert np.corrcoef(out[:, c], rho)[0, 1] > 0.8
+    # uncentered: a_ij = w_ij, so the column is sum_j w_ij r_ij(t)**2
+    w = np.mean(rho**2)
+    np.testing.assert_allclose(out, (K - 1) * w * rho[:, None] ** 2 * np.ones(K), rtol=1e-10)
+
+
+def test_center_applies_from_four_nodes():
+    # K = 3 is never centered, so center=True and center=False agree; from
+    # K = 4 on the equal pair weights are centered to 0
+    v3, _ = _equicorrelated(3)
+    np.testing.assert_allclose(tc.WeightedStrength()(v3),
+                               tc.WeightedStrength(center=False)(v3), rtol=1e-12)
+    v4, _ = _equicorrelated(4)
+    with pytest.warns(UserWarning, match="constant over time"):
+        centered = tc.WeightedStrength()(v4)
+    np.testing.assert_allclose(centered, 0, atol=1e-12)
+    assert np.ptp(tc.WeightedStrength(center=False)(v4), axis=0).min() > 0
+
+
+def test_center_false_matches_the_uncentered_formula(nested):
+    _, _, corrs = nested
+    out = tc.WeightedStrength(center=False, signed=True)(corrs)
+    for o, v in zip(out, corrs):
+        M = _offdiag(v)
+        a = _pair_weights(M)
+        np.fill_diagonal(a, 0)
+        mean_r = M.mean(axis=2)
+        expected = np.hstack([np.einsum("ij,ijt->ti", a, M**2),
+                              np.einsum("ij,ijt->ti", mean_r, M)])
+        np.testing.assert_allclose(o, expected, atol=1e-10, rtol=0)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_center_on_simulated_equicorrelated_data(seed):
+    # x_i(t) = sqrt(rho(t)) g(t) + sqrt(1 - rho(t)) e_i(t): every pair has
+    # correlation rho(t).  Estimated pair weights are nearly tied, so centered
+    # magnitudes are small (measured 2-3% of the uncentered ones on seeds 0-4)
+    # and the uncentered columns track rho (measured min corr .893 on seeds 0-4)
+    rng = np.random.default_rng(seed)
+    T, K = 1000, 8
+    rho = 0.45 + 0.35 * np.sin(2 * np.pi * np.arange(T) / 250)
+    x = (np.sqrt(rho)[:, None] * rng.standard_normal(T)[:, None]
+         + np.sqrt(1 - rho)[:, None] * rng.standard_normal((T, K)))
+    c = tc.timecorr(x, cfun=tc.autofc, rfun=None, weights_params={"var": 100})
+    centered = tc.WeightedStrength()(c)
+    plain = tc.WeightedStrength(center=False)(c)
+    for i in range(K):
+        assert np.corrcoef(plain[:, i], rho)[0, 1] > 0.8
+    assert np.mean(np.abs(centered)) < 0.1 * np.mean(np.abs(plain))

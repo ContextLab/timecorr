@@ -91,13 +91,14 @@ def _mean_r(sum_r, T):
     return m
 
 
-def _clip_weights(w):
+def _clip_weights(w, center=True):
     """
     Clipped weights ``a_ij = max(w_ij - m, 0)``, ``m`` = median of ``w_ij``
-    over i < j; for K < 4 the weights are returned unclipped.  Zero diagonal.
+    over i < j; for K < 4, or with ``center=False``, the weights are returned
+    unclipped.  Zero diagonal.
     """
     K = w.shape[0]
-    if K < 4:
+    if K < 4 or not center:
         a = np.array(w, dtype=float)
     else:
         a = np.maximum(w - np.median(w[np.triu_indices(K, 1)]), 0)
@@ -483,8 +484,9 @@ class WeightedStrength(_Summary):
 
     For a unit with off-diagonal correlations ``r_ij(t)``: pair weights
     ``w_ij = mean_t r_ij(t)**2``; ``m`` = median of ``w_ij`` over i < j;
-    clipped weights ``a_ij = max(w_ij - m, 0)`` (for K = 2 or 3, ``a_ij =
-    w_ij``).  Column i is ``c_i(t) = sum_{j != i} a_ij r_ij(t)**2``.
+    clipped weights ``a_ij = max(w_ij - m, 0)`` (for K = 2 or 3, or with
+    ``center=False``, ``a_ij = w_ij``).  Column i is ``c_i(t) = sum_{j != i}
+    a_ij r_ij(t)**2``.
 
     Parameters
     ----------
@@ -505,6 +507,10 @@ class WeightedStrength(_Summary):
         Number of shift-null surrogates when ``features`` or
         ``two_path_step`` count the communities of ``split=True`` with
         ``n=None`` (see ``Communities``); a positive integer.  Default: 5.
+    center : bool
+        If True, the pair weights are centered on their median and clipped
+        at 0 (``a_ij = max(w_ij - m, 0)``) for K >= 4; if False, they are
+        used as they are (``a_ij = w_ij``) for any K.  Default: True.
 
     Attributes
     ----------
@@ -526,6 +532,11 @@ class WeightedStrength(_Summary):
     -----
     Output columns: K magnitude columns (2K with ``split``: own, then other),
     then, when signed, K signed columns (2K with ``split``: own, then other).
+    With ``center=True``, coupling that is the same for every pair (all pair
+    weights equal) gives magnitude columns that are 0 at every timepoint for
+    K >= 4, while K < 4 is never centered; ``center=False`` keeps such
+    coupling and loses the robustness to a signal shared by all nodes that
+    was measured with centering.
     Calling the instance fits to the given units and transforms the same
     units: the weights (and communities) come from the data being summarized.
     ``fit`` and ``transform`` separate the two.  The summary of a unit
@@ -549,9 +560,10 @@ class WeightedStrength(_Summary):
     (300, 24)
     """
 
-    def __init__(self, split=False, signed=False, n=None, n_null=5):
+    def __init__(self, split=False, signed=False, n=None, n_null=5, center=True):
         super().__init__(n=n, signed=signed, n_null=n_null)
         self.split = bool(split)
+        self.center = bool(center)
 
     @property
     def _needs_communities(self):
@@ -560,7 +572,7 @@ class WeightedStrength(_Summary):
     def __repr__(self):
         return (
             f"WeightedStrength(split={self.split}, signed={self.signed}, n={self.n}, "
-            f"n_null={self.n_null})"
+            f"n_null={self.n_null}, center={self.center})"
         )
 
     def _what(self):
@@ -571,7 +583,7 @@ class WeightedStrength(_Summary):
 
     def _unit_params(self, fit, unit):
         p = super()._unit_params(fit, unit)
-        p["a"] = _clip_weights(p["w"])
+        p["a"] = _clip_weights(p["w"], self.center)
         if fit["labels"] is not None and self.split:
             labels = fit["labels"]
             p["own"] = labels[:, None] == labels[None, :]

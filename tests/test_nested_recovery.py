@@ -50,7 +50,7 @@ simulated in its own call).  Controls from the inputs (sustained, T 1000,
 24 seeds): decode from the raw data .023 +- .011 (sd .056); from the
 order-1 features (``order1_score``: ``features(order=1)``, PCA fitted on
 the two subjects) .001 +- .046 (sd .228), asserted on 16 seeds
-(30000-30015; measured -.098 +- .064) because 4 seeds were too few (4-seed
+(30000-30015; measured -.098, standard error .064, sd .256) because 4 seeds were too few (4-seed
 mean -.28 when the order-1 features came from the 6-subject call).
 Adjusted Rand index of the order-1 communities against the modules: 1.000
 on all seeds (sustained, sign-flip, T 3000), .956 +- .005 with global
@@ -60,8 +60,18 @@ community (no eigenvalue above the null) on 7 of 8.  The T 3000 and isfc
 rows used 12 seeds to keep the development run near 15 minutes (6
 processes); the T 1000 rows used 24.
 
-Assertions run on the fixed seeds 30000-30003: mean score above half the
-development mean and |mean control| below 0.15.
+Assertions run on the fixed seeds 30000-30003 (30000-30007 for the T 3000
+cases): mean score above half the development mean and |mean control| below
+0.15.  The T 3000 control has a development standard deviation of about .17
+per seed (12 seeds, 4 control subjects each), so its standard error is about
+.085 at 4 seeds and .061 at 8 seeds.  Measured on 30000-30007: communities
+score .858 +- .016, control -.104 +- .046 (sd .131); weighted strength score
+.819 +- .029, control -.092 +- .056 (sd .158).
+
+K 702 (slow, 2 seeds, one control subject, ``max_memory_gb=4``, OMP 2, run
+alongside other jobs): seed 30000 score .825 (control -.014), peak resident
+memory growth 1.09 GB, wall 250 s; seed 30001 score .741 (control .320),
+growth 1.09 GB, wall 263 s.
 """
 
 import multiprocessing
@@ -80,6 +90,8 @@ import timecorr as tc
 STEP = 10
 DEV_SEED = 20000
 TEST_SEEDS = (30000, 30001, 30002, 30003)
+# T 3000 cases: the control varies more over seeds (sd about .17), so 8 seeds
+TEST_SEEDS_T3000 = tuple(range(30000, 30008))
 CONTROL_OFFSET = 1_000_000
 N_CONTROLS = 4
 
@@ -248,7 +260,8 @@ def _t3000(name):
 
 @pytest.mark.parametrize("name", [_t3000(n) for n in CASES])
 def test_order2_signal_is_decoded(name):
-    rows = [_cached_case(name, s) for s in TEST_SEEDS]
+    seeds = TEST_SEEDS if CASES[name][0]["T"] <= 1000 else TEST_SEEDS_T3000
+    rows = [_cached_case(name, s) for s in seeds]
     score = np.mean([r["score"] for r in rows])
     control = np.mean([r["control"] for r in rows])
     assert score > DEV_MEAN[name] / 2, (score, DEV_MEAN[name])

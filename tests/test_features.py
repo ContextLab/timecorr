@@ -643,6 +643,13 @@ def test_features_max_memory_gb_none_means_no_limit():
         legacy_features(data, order=3, rfun=None, max_memory_gb=1.0)
     X = legacy_features(data, order=2, rfun=None, max_memory_gb=None)
     assert X[2].shape == (100, 55 * 56 // 2)
+    # the same order-2 workload raises under a limit below its estimate and
+    # completes with None
+    limit = estimate_memory_gb(10, 2, 100, **EYE)[2] / 2
+    with pytest.raises(MemoryError):
+        legacy_features(data, order=2, rfun=None, max_memory_gb=limit)
+    X_none = legacy_features(data, order=2, rfun=None, max_memory_gb=None)
+    assert X_none[2].shape == (100, 55 * 56 // 2)
     # the reduced delta path checks each step; None skips that check too
     data = make_data(K=50, T=100)
     step = estimate_memory_gb(50, 1, 100)[1]
@@ -650,6 +657,9 @@ def test_features_max_memory_gb_none_means_no_limit():
     X = legacy_features(data, order=2, rfun=None, delta_rfun="PCA",
                         max_memory_gb=None)
     assert len(X) == 3
+    with pytest.raises(MemoryError):
+        legacy_features(data, order=2, rfun=None, delta_rfun="PCA",
+                        max_memory_gb=step / 2)
 
 
 def test_max_memory_gb_none_is_documented_alike_everywhere():

@@ -416,3 +416,51 @@ def test_bad_n_null_raises(bad):
         tc.Communities(n_null=bad)
     with pytest.raises(ValueError, match="n_null must be a positive integer"):
         tc.WeightedStrength(split=True, n_null=bad)
+
+
+def _reference_null_tops(data, kernel, n_null, bandwidth):
+    """Top eigenvalues of the shift-null surrogates, recomputed here from the
+    documented procedure: numpy.random.default_rng(0); per repetition, per
+    subject, K lags without replacement from [L, T - L]; circular shifts;
+    autofc pair weights mean_t r_ij**2 (zero diagonal), mean over subjects,
+    minus their median over i < j (zero diagonal); largest eigenvalue."""
+    T, K = data[0].shape
+    L = int(min(T // 4, max(10, 10 * bandwidth)))
+    rng = np.random.default_rng(0)
+    rows, cols = np.arange(T)[:, None], np.arange(K)
+    tops = []
+    for _ in range(n_null):
+        shifted = []
+        for x in data:
+            lags = L + rng.choice(T - 2 * L + 1, size=K, replace=False)
+            shifted.append(x[(rows - lags[None, :]) % T, cols])
+        weights = []
+        for v in tc.autofc(shifted, kernel):
+            M = tc.vec2mat(v)
+            w = (M**2).mean(axis=2)
+            np.fill_diagonal(w, 0)
+            weights.append(w)
+        wbar = np.mean(weights, axis=0)
+        C = wbar - np.median(wbar[np.triu_indices(K, 1)])
+        np.fill_diagonal(C, 0)
+        tops.append(np.linalg.eigvalsh(C)[-1])
+    return np.array(tops)
+
+
+def test_n_null_matches_an_independent_surrogate_loop():
+    data, _ = _nested_auto(3, 2, 4, 0)
+    K = data[0].shape[1]
+    w = tc.gaussian_weights(600, {"var": 25})
+    tops = _reference_null_tops(data, w, 9, 5.0)
+    # these data give a larger maximum over 9 surrogates than over 1
+    assert tops.max() > tops[0]
+    for m in (1, 9):
+        expected = tops[:m].max()
+        assert sm._shift_null_threshold(data, w, n_null=m, bandwidth=5.0) == pytest.approx(
+            expected, rel=1e-9)
+        comm = tc.Communities(n_null=m)
+        sm._streamed_summary(data, w, comm, tc.autofc, max_block_elements=K * K * 600,
+                             auto_n=True, bandwidth=5.0)
+        assert comm.fits_[-1]["null_threshold"] == pytest.approx(expected, rel=1e-9)
+    assert sm._shift_null_threshold(data, w, n_null=1, bandwidth=5.0) != pytest.approx(
+        sm._shift_null_threshold(data, w, n_null=9, bandwidth=5.0), rel=1e-9)

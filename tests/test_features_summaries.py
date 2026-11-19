@@ -907,3 +907,32 @@ def test_feeding_outputs_not_returned_are_released():
         assert_lists_close(a, b, rtol=1e-6, atol=1e-9)
     with pytest.raises(MemoryError):
         quiet(tc.features, data, max_memory_gb=0.00037, return_delta=True, **common)
+
+
+def test_retained_fits_are_enforced_by_the_budget():
+    # two_path_step keeps the fits_ a summary object already holds; 50
+    # earlier fits of a 24-node summary on 2 units retain 57,600 values,
+    # counted against the budget of the step
+    data, _ = nested(T=200)
+    corrs = tc.timecorr(data, cfun=tc.autofc, weights_params=WIDE)
+    S_, T_, K_ = 2, 200, 24
+    need = estimate_memory_gb(K_, 1, T_, S_, streamed=True)[1]
+    # the step alone: one streamed row per block, the analysis output held
+    # while the feeding step runs, and this step's own fit
+    base = need + 8 * (S_ * T_ * K_ + 2 * S_ * K_ * K_) / 1e9
+    retained = 50 * S_ * K_ * K_
+    common = dict(cfun=tc.autofc, weights_params=WIDE, delta_rfun="weighted_strength",
+                  order=2)
+
+    def prefitted():
+        ws = tc.WeightedStrength()
+        for _ in range(50):
+            ws.fit(corrs)
+        return ws
+
+    quiet(two_path_step, data, rfun=tc.WeightedStrength(), max_memory_gb=base, **common)
+    with pytest.raises(MemoryError, match="held while it runs"):
+        quiet(two_path_step, data, rfun=prefitted(),
+              max_memory_gb=base + 8 * retained / 2 / 1e9, **common)
+    quiet(two_path_step, data, rfun=prefitted(),
+          max_memory_gb=base + 8 * 2 * retained / 1e9, **common)

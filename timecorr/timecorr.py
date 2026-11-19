@@ -62,6 +62,71 @@ def _mask_for_subjects(weights, boundaries, subjects):
         raise ValueError(f"per-subject events of subjects {subjects}: {err}") from err
 
 
+def _temporal_filter(T, k):
+    """Band of half-width |k| around the diagonal (k >= 0), or its complement."""
+    k = np.round(k)
+    filt = np.eye(T)
+    for i in np.arange(1, np.min([np.abs(k) + 1, T])):
+        filt = filt + np.eye(T, k=np.abs(i)) + np.eye(T, k=-np.abs(i))
+    if k < 0:
+        return 1 - filt
+    else:
+        return filt
+
+
+def _shaped_kernel(
+    T,
+    weights_function,
+    weights_params,
+    include_timepoints="all",
+    include_zero=True,
+    exclude_timepoints=None,
+):
+    """
+    The T x T kernel of ``timecorr`` before the events restriction:
+    ``weights_function(T, weights_params)`` shaped by ``include_timepoints``,
+    ``include_zero`` and ``exclude_timepoints``.
+    """
+    weights = weights_function(T, weights_params)
+
+    include_timepoints = include_timepoints.lower()
+    if include_timepoints == "all":
+        if not include_zero:
+            weights = weights.copy()
+            np.fill_diagonal(weights, 0)
+    elif include_timepoints in ("backward", "pre"):
+        weights = one_sided(weights, "backward", include_zero)
+    elif include_timepoints in ("forward", "post"):
+        weights = one_sided(weights, "forward", include_zero)
+    else:
+        raise ValueError(
+            f"Invalid option for include_timepoints: '{include_timepoints}'.  "
+            "Must be one of: 'all', 'backward', 'pre', 'forward', or 'post'."
+        )
+
+    if not (exclude_timepoints is None):
+        weights = np.multiply(_temporal_filter(T, exclude_timepoints), weights)
+    return weights
+
+
+def _event_kernels(weights, resolved, n_subjects):
+    """
+    ``weights`` restricted to the RESOLVED events as ``timecorr`` restricts
+    it: one masked kernel when every subject has the same events, otherwise
+    a list of ``n_subjects`` kernels (subjects that share events share one
+    array).
+    """
+    groups = distinct_event_sets(_restricted(resolved), n_subjects)
+    if len(groups) == 1:
+        return mask_kernel(weights, groups[0][0])
+    kernels = [None] * n_subjects
+    for boundaries, subjects in groups:
+        masked = _mask_for_subjects(weights, boundaries, subjects)
+        for s in subjects:
+            kernels[s] = masked
+    return kernels
+
+
 def _per_subject_cfun(cfun, data, weights, groups):
     """
     Correlations with one masked kernel per group of subjects sharing events.
@@ -321,40 +386,19 @@ def timecorr(
     (3, (100, 15))
     """
 
-    def temporal_filter(T, k):
-        k = np.round(k)
-        filt = np.eye(T)
-        for i in np.arange(1, np.min([np.abs(k) + 1, T])):
-            filt = filt + np.eye(T, k=np.abs(i)) + np.eye(T, k=-np.abs(i))
-        if k < 0:
-            return 1 - filt
-        else:
-            return filt
-
     # NaN samples are kept; both the correlation functions and the smoothing
     # path (cfun=None) give them no weight.
     data = format_data(data, fill_nan=False)
     T = data[0].shape[0]
 
-    weights = weights_function(T, weights_params)
-
-    include_timepoints = include_timepoints.lower()
-    if include_timepoints == "all":
-        if not include_zero:
-            weights = weights.copy()
-            np.fill_diagonal(weights, 0)
-    elif include_timepoints in ("backward", "pre"):
-        weights = one_sided(weights, "backward", include_zero)
-    elif include_timepoints in ("forward", "post"):
-        weights = one_sided(weights, "forward", include_zero)
-    else:
-        raise ValueError(
-            f"Invalid option for include_timepoints: '{include_timepoints}'.  "
-            "Must be one of: 'all', 'backward', 'pre', 'forward', or 'post'."
-        )
-
-    if not (exclude_timepoints is None):
-        weights = np.multiply(temporal_filter(T, exclude_timepoints), weights)
+    weights = _shaped_kernel(
+        T,
+        weights_function,
+        weights_params,
+        include_timepoints,
+        include_zero,
+        exclude_timepoints,
+    )
 
     # event restriction: applied after the include/exclude options; subjects that
     # share events share one masked kernel

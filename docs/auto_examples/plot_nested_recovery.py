@@ -1,0 +1,95 @@
+# -*- coding: utf-8 -*-
+"""
+===========================================
+Recover an order-2 signal from nested data
+===========================================
+
+``simulate_nested`` places 108 nodes in 18 modules of 6 nodes, grouped in 6
+supergroups of 3 modules.  Each supergroup has a slowly varying strength
+``h`` (``truth["h"]``, one column per supergroup) that sets how strongly its
+modules' couplings move together over time, so ``h`` is carried by the
+correlations among the modules' time-varying couplings: an order-2 signal.
+The two subjects share only ``h``; their modules' couplings, signs and noise
+are private.
+
+``tc.features(order=2)`` is called with its defaults: a Gaussian kernel with
+a standard deviation of 5 timepoints on the path that feeds order 2 (the
+delta path, also called the feeding path) and the squared-correlation
+summaries: at order 1 the delta path is summarized by ``Communities()``
+(communities found from the subjects' squared correlations, with their
+number set by a shift null), and at order 2 the analysis path by
+``WeightedStrength(signed=True)``.  A ``Communities`` object is passed as
+``delta_rfun`` only to read its fit; the default ``delta_rfun="auto"``
+creates the same summary.
+
+A ridge map from subject A's order-2 features to ``h`` (every 10th timepoint,
+z-scored columns, penalty equal to the mean eigenvalue of the Gram matrix) is
+applied to subject B's features.  The left panel shows the decoded and true
+``h`` of one supergroup; the right panel shows the communities found at
+order 1 against the simulated modules.  The printed correlations are raw
+scores for one seed (seed 0), without a control; the development values over
+seeds, with controls from subjects with an independent ``h``, are in the
+docstring of ``tests/test_nested_recovery.py``.
+
+"""
+# Code source: Contextual Dynamics Laboratory
+# License: MIT
+
+import warnings
+
+import numpy as np
+from matplotlib import pyplot as plt
+
+import timecorr as tc
+
+T = 1000
+data, truth = tc.simulate_nested(S=2, T=T, set_random_seed=0)
+h = truth["h"]
+
+communities = tc.Communities()  # n=None: number of communities from a shift null
+sd = 33  # analysis kernel: Gaussian with a standard deviation of 33 timepoints
+with warnings.catch_warnings():
+    warnings.simplefilter("ignore")
+    X = tc.features(
+        data,
+        order=2,
+        cfun=tc.autofc,
+        weights_params={"var": sd**2},
+        delta_rfun=communities,  # the default, Communities(), kept to read its fit
+    )
+labels = communities.fits_[0]["labels"]
+print("communities found at order 1:", communities.fits_[0]["n"])
+print("order-2 features per subject:", X[2][0].shape)
+
+
+def zscore(x):
+    return (x - x.mean(0)) / (x.std(0) + 1e-12)
+
+
+# ridge map fitted on subject A (every 10th timepoint), applied to subject B
+step = 10
+A, B, y = zscore(X[2][0][::step]), zscore(X[2][1][::step]), h[::step]
+G = A @ A.T
+alpha = np.linalg.solve(G + np.trace(G) / len(G) * np.eye(len(G)), y - y.mean(0))
+decoded = B @ (A.T @ alpha)
+r = [np.corrcoef(decoded[:, c], y[:, c])[0, 1] for c in range(h.shape[1])]
+print("correlation of decoded and true h, per supergroup:", np.round(r, 2))
+print("mean (raw score, one seed):", round(float(np.mean(r)), 2))
+
+fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11, 4), gridspec_kw={"width_ratios": [2, 1]})
+t = np.arange(0, T, step)
+ax1.plot(t, zscore(y[:, 0]), color="k", label="true h (supergroup 1)")
+ax1.plot(t, zscore(decoded[:, 0]), color="C1", label="decoded from subject B")
+ax1.set_xlabel("timepoint")
+ax1.set_ylabel("z-score")
+ax1.set_title(f"Order-2 signal, r = {r[0]:.2f}")
+ax1.legend(frameon=False)
+
+counts = np.zeros((truth["module"].max() + 1, labels.max() + 1))
+np.add.at(counts, (truth["module"], labels), 1)
+ax2.imshow(counts, cmap="Greys", aspect="auto")
+ax2.set_xlabel("community found at order 1")
+ax2.set_ylabel("simulated module")
+ax2.set_title("Nodes per module and community")
+plt.tight_layout()
+plt.show()

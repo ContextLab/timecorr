@@ -4,10 +4,17 @@
 Optimized weights by level for decoding
 =======================================
 
-In this example, we load in some example data, and find optimal level weights for decoding.
+In this example, we load the ``weights`` example dataset from hypertools (36
+subjects, 300 timepoints, 100 features) and decode timepoints from a weighted
+mix of the decoding matrices of orders 0, 1 and 2 with
+``weighted_timepoint_decoder``.
 
-NOTE: This example currently has compatibility issues with the weighted_timepoint_decoder function.
-For a working example, please see the enhanced version in docs/auto_examples/decode_by_weighted_level.py
+In each fold, one group of subjects is held out. The other subjects form the
+training group, which is split in two halves; the weights of the orders
+(non-negative, summing to one) are fit to the half-versus-half decoding
+matrices and then used to decode the held-out group. Orders are added one at a
+time, so the results show the decoding after mixing order 0, orders 0-1, and
+orders 0-2.
 
 """
 # Code source: Lucy Owen
@@ -16,56 +23,31 @@ For a working example, please see the enhanced version in docs/auto_examples/dec
 import hypertools as hyp
 import numpy as np
 
-# load timecorr and other packages
 import timecorr as tc
 
-print("Weighted Timepoint Decoding Example")
-print("=" * 40)
-print("NOTE: This example currently has compatibility issues.")
-print(
-    "Please see docs/auto_examples/decode_by_weighted_level.py for a working version."
-)
-print("=" * 40)
+# load example data: a list with one (timepoints, features) array per subject
+data = hyp.load("weights")
+print(f"{len(data)} subjects, each {data[0].shape} (timepoints, features)")
 
-# load example data
-data = hyp.load("weights").get_data()
-
-# Convert to numpy array format required by weighted_timepoint_decoder
-data_array = np.array(data)
-print(f"Data shape: {data_array.shape} (subjects, timepoints, features)")
-
-# define your weights parameters
+# define the kernel
 width = 10
 laplace = {"name": "Laplace", "weights": tc.laplace_weights, "params": {"scale": width}}
 
-# set your number of levels
-# if integer, returns decoding accuracy, error, and rank for specified level
-level = 2
+# the group splits are random: seed the global NumPy random state to repeat them
+np.random.seed(0)
 
-print(f"\nAttempting weighted timepoint decoding at level {level}...")
-
-try:
-    # run timecorr with specified functions for calculating correlations, as well as combining and reducing
-    results = tc.weighted_timepoint_decoder(
-        data_array,
-        level=level,
-        combine=tc.corrmean_combine,
-        cfun=tc.isfc,
-        rfun="eigenvector_centrality",
-        weights_fun=laplace["weights"],
-        weights_params=laplace["params"],
-    )
-
-    # returns optimal weighting for mu for all levels up to 2 as well as decoding results for each fold
-    print("✓ SUCCESS: Weighted decoding results:")
-    print(results)
-
-except Exception as e:
-    print(f"✗ ERROR: {e}")
-    print("This function has compatibility issues with the current version.")
-
-print("\n" + "=" * 60)
-print(
-    "RECOMMENDATION: Use the enhanced version in docs/auto_examples/decode_by_weighted_level.py"
+# corrmean_combine averages the groups' correlations (orders 1 and 2) in Fisher
+# z space; order-0 activations are always averaged with mean_combine
+results = tc.weighted_timepoint_decoder(
+    data,
+    level=2,
+    combine=tc.corrmean_combine,
+    cfun=tc.isfc,
+    rfun="eigenvector_centrality",
+    weights_fun=laplace["weights"],
+    weights_params=laplace["params"],
 )
-print("which uses synthetic data and includes comprehensive error handling.")
+
+# one row per fold and step; level_<k> is the weight given to order k
+print(results)
+print(results.groupby("level")[["accuracy", "error", "level_0", "level_1", "level_2"]].mean())

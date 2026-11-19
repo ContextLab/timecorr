@@ -5,18 +5,15 @@ This module tests all uncovered functions and edge cases to ensure
 numerical accuracy and robustness.
 """
 
-import warnings
 
 # Configure matplotlib to use non-interactive backend for testing
 import matplotlib
 import numpy as np
 import pandas as pd
 import pytest
-from scipy.linalg import toeplitz
 
 matplotlib.use("Agg")  # Use non-interactive backend
 
-import timecorr as tc
 from timecorr.helpers import *
 from timecorr.simulate import *
 from timecorr.timecorr import timecorr
@@ -155,15 +152,17 @@ class TestCorrelationFunctions:
         """Test wcorr handles NaN weights."""
         weights_nan = self.weights.copy()
         weights_nan[0, :] = np.nan
-        corrs = wcorr(self.data_single, self.data_single, weights_nan)
+        with pytest.warns(UserWarning, match="fewer than 3 non-zero kernel weights"):
+            corrs = wcorr(self.data_single, self.data_single, weights_nan)
         assert corrs.shape == (self.K, self.K, self.T)
         assert not np.any(np.isnan(corrs))  # Should handle NaNs gracefully
 
     def test_wcorr_zero_weights(self):
         """Test wcorr with zero weights."""
         weights_zero = np.zeros_like(self.weights)
-        corrs = wcorr(self.data_single, self.data_single, weights_zero)
-        assert corrs.shape == (self.K, self.K, self.T)
+        # An all-zero kernel defines no correlation at any timepoint.
+        with pytest.raises(ValueError):
+            wcorr(self.data_single, self.data_single, weights_zero)
 
     def test_autofc(self):
         """Test autofc function."""
@@ -351,7 +350,7 @@ class TestStatisticalFunctions:
         # Test with inf
         z_inf = np.array([np.inf, -np.inf])
         r_inf = z2r(z_inf)
-        assert r_inf[0] == 0  # inf becomes 0 (clamped)
+        assert r_inf[0] == 1  # inf becomes 1 (tanh(inf))
         assert r_inf[1] == -1  # -inf becomes -1
 
         # Test with nan
@@ -499,9 +498,21 @@ class TestUtilityFunctions:
     """Test utility functions."""
 
     def test_weighted_mean_default(self):
-        """Test weighted_mean with default parameters."""
-        # Skip this test due to broadcasting bug in weighted_mean function
-        pytest.skip("weighted_mean has broadcasting issues")
+        """Test weighted_mean with default parameters (equal weights, last axis)."""
+        x = np.random.RandomState(0).randn(3, 4)
+        result = weighted_mean(x)
+        assert result.shape == (3,)
+        assert np.allclose(result, x.mean(axis=1), atol=1e-15, rtol=0)
+        result0 = weighted_mean(x, axis=0)
+        assert result0.shape == (4,)
+        assert np.allclose(result0, x.mean(axis=0), atol=1e-15, rtol=0)
+
+    def test_weighted_mean_does_not_modify_weights(self):
+        x = np.random.RandomState(1).randn(3, 4)
+        weights = np.array([2.0, np.nan, 1.0])
+        result = weighted_mean(x, axis=0, weights=weights)
+        assert np.allclose(result, (2 * x[0] + x[2]) / 3, atol=1e-15, rtol=0)
+        assert weights[0] == 2.0 and np.isnan(weights[1]) and weights[2] == 1.0
 
     def test_weighted_mean_custom_weights(self):
         """Test weighted_mean with custom weights."""
@@ -556,13 +567,16 @@ class TestUtilityFunctions:
         """Test plot_weights function."""
         weights = gaussian_weights(10)
 
-        # Just test that it doesn't crash
-        try:
-            plot_weights(weights)
-            plot_weights(weights, t=3, title="Test", xlab="Time", ylab="Weight")
-        except Exception:
-            # Plotting might fail in headless environment, that's ok
-            pass
+        import matplotlib.pyplot as plt
+
+        fig, ax = plt.subplots()
+        assert plot_weights(weights, ax=ax) is ax  # default row: round(T / 2)
+        plot_weights(weights, t=3, title="Test", xlab="Time", ylab="Weight", ax=ax)
+        assert np.allclose(ax.lines[0].get_ydata(), weights[5, :])
+        assert np.allclose(ax.lines[1].get_ydata(), weights[3, :])
+        assert ax.get_title() == "Test"
+        assert ax.get_xlabel() == "Time" and ax.get_ylabel() == "Weight"
+        plt.close(fig)
 
 
 class TestSimulationFunctions:
@@ -677,11 +691,13 @@ class TestTimecorrEdgeCases:
         data = np.random.randn(12, 4)
 
         # Test include pre
-        result_pre = timecorr(data, include_timepoints="pre")
+        with pytest.warns(UserWarning, match="fewer than 3 non-zero kernel weights"):
+            result_pre = timecorr(data, include_timepoints="pre")
         assert isinstance(result_pre, np.ndarray)
 
         # Test include post
-        result_post = timecorr(data, include_timepoints="post")
+        with pytest.warns(UserWarning, match="fewer than 3 non-zero kernel weights"):
+            result_post = timecorr(data, include_timepoints="post")
         assert isinstance(result_post, np.ndarray)
 
         # Test exclude positive
@@ -712,9 +728,12 @@ class TestErrorConditions:
         small_data = np.random.randn(2, 2)
         weights = gaussian_weights(2)
 
-        # Should not crash
-        result = wcorr(small_data, small_data, weights)
+        # Should not crash.  Each of the 2 kernel rows has 2 non-zero weights,
+        # fewer than 3, so both timepoints are undefined (R12) and warned about.
+        with pytest.warns(UserWarning, match="2 of 2 timepoints have fewer than 3"):
+            result = wcorr(small_data, small_data, weights)
         assert result.shape == (2, 2, 2)
+        assert np.all(result == 0)
 
     def test_mismatched_dimensions(self):
         """Test functions with mismatched input dimensions."""
@@ -722,11 +741,11 @@ class TestErrorConditions:
         data_b = np.random.randn(5, 4)  # Different number of features
         weights = gaussian_weights(5)
 
-        # wcorr should handle different feature dimensions
-        # But the autocorrelation check fails with mismatched shapes
-        # This is expected behavior, so we test that it raises an error
+        # wcorr handles different feature dimensions
+        assert wcorr(data_a, data_b, weights).shape == (3, 4, 5)
+        # but not different numbers of timepoints
         with pytest.raises(ValueError):
-            wcorr(data_a, data_b, weights)
+            wcorr(data_a, np.random.randn(6, 4), weights)
 
 
 if __name__ == "__main__":

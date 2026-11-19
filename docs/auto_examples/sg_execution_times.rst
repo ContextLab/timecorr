@@ -6,7 +6,7 @@
 
 Computation times
 =================
-**00:00.232** total execution time for 6 files **from auto_examples**:
+**00:04.392** total execution time for 9 files **from auto_examples**:
 
 .. container::
 
@@ -32,11 +32,20 @@ Computation times
    * - Example
      - Time
      - Mem (MB)
-   * - :ref:`sphx_glr_auto_examples_plot_simulate_data.py` (``plot_simulate_data.py``)
-     - 00:00.153
+   * - :ref:`sphx_glr_auto_examples_plot_nested_recovery.py` (``plot_nested_recovery.py``)
+     - 00:03.090
+     - 0.0
+   * - :ref:`sphx_glr_auto_examples_plot_higher_order_recovery.py` (``plot_higher_order_recovery.py``)
+     - 00:00.781
      - 0.0
    * - :ref:`sphx_glr_auto_examples_plot_explore_kernels.py` (``plot_explore_kernels.py``)
-     - 00:00.079
+     - 00:00.284
+     - 0.0
+   * - :ref:`sphx_glr_auto_examples_plot_one_sided_kernels.py` (``plot_one_sided_kernels.py``)
+     - 00:00.150
+     - 0.0
+   * - :ref:`sphx_glr_auto_examples_plot_simulate_data.py` (``plot_simulate_data.py``)
+     - 00:00.087
      - 0.0
    * - :ref:`sphx_glr_auto_examples_calculate_dynamic_correlations.py` (``calculate_dynamic_correlations.py``)
      - 00:00.000

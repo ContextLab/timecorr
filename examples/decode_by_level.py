@@ -4,10 +4,16 @@
 Decode by level
 =============================
 
-In this example, we load in some example data, and decode by level of higher order correlation.
+In this example, we load the ``weights`` example dataset from hypertools (36
+subjects, 300 timepoints, 100 features) and decode the timepoint from features
+of orders 0, 1 and 2 with ``timepoint_decoder``.
 
-NOTE: This example currently has compatibility issues with the timepoint_decoder function.
-For a working example, please see the enhanced version in docs/auto_examples/decode_by_level.py
+The subjects are split into two groups. For each order, each group's features
+are averaged across the group's subjects, and each timepoint of one group is
+assigned the timepoint of the other group whose features are most correlated
+with it. Order 0 is the data; order ``k >= 1`` is the dynamic inter-subject
+correlations (ISFC) of the order ``k - 1`` co-fluctuations, reduced here to one
+value per feature with eigenvector centrality.
 
 """
 # Code source: Lucy Owen
@@ -16,81 +22,33 @@ For a working example, please see the enhanced version in docs/auto_examples/dec
 import hypertools as hyp
 import numpy as np
 
-# load timecorr and other packages
 import timecorr as tc
 
-print("Timepoint Decoding Example")
-print("=" * 30)
-print("NOTE: This example currently has compatibility issues.")
-print("Please see docs/auto_examples/decode_by_level.py for a working version.")
-print("=" * 30)
+# load example data: a list with one (timepoints, features) array per subject
+data = hyp.load("weights")
+print(f"{len(data)} subjects, each {data[0].shape} (timepoints, features)")
 
-# load example data
-data = hyp.load("weights").get_data()
-
-# Convert to numpy array format required by timepoint_decoder
-# timepoint_decoder expects a numpy array with shape (n_subjects, T, K)
-data_array = np.array(data)
-print(f"Data shape: {data_array.shape} (subjects, timepoints, features)")
-
-# define your weights parameters
+# define the kernel
 width = 10
 laplace = {"name": "Laplace", "weights": tc.laplace_weights, "params": {"scale": width}}
 
-# set your number of levels
-# if integer, returns decoding accuracy, error, and rank for specified level
-level = 2
+# the group split is random: seed the global NumPy random state to repeat it
+np.random.seed(0)
 
-print(f"\nAttempting timepoint decoding at level {level}...")
-
-try:
-    # run timecorr with specified functions for calculating correlations, as well as combining and reducing
-    results = tc.timepoint_decoder(
-        data_array,
-        level=level,
-        combine=tc.corrmean_combine,
-        cfun=tc.isfc,
-        rfun="eigenvector_centrality",
-        weights_fun=laplace["weights"],
-        weights_params=laplace["params"],
-    )
-
-    # returns only decoding results for level 2
-    print("✓ SUCCESS: Level 2 decoding results:")
-    print(results)
-
-except Exception as e:
-    print(f"✗ ERROR: {e}")
-    print("This function has compatibility issues with the current version.")
-
-# set your number of levels
-# if list or array of integers, returns decoding accuracy, error, and rank for all levels
-levels = np.arange(int(level) + 1)
-
-print(f"\nAttempting multi-level decoding for levels {levels}...")
-
-try:
-    # run timecorr with specified functions for calculating correlations, as well as combining and reducing
-    results = tc.timepoint_decoder(
-        data_array,
-        level=levels,
-        combine=tc.corrmean_combine,
-        cfun=tc.isfc,
-        rfun="eigenvector_centrality",
-        weights_fun=laplace["weights"],
-        weights_params=laplace["params"],
-    )
-
-    # returns decoding results for all levels up to level 2
-    print("✓ SUCCESS: Multi-level decoding results:")
-    print(results)
-
-except Exception as e:
-    print(f"✗ ERROR: {e}")
-    print("This function has compatibility issues with the current version.")
-
-print("\n" + "=" * 60)
-print(
-    "RECOMMENDATION: Use the enhanced version in docs/auto_examples/decode_by_level.py"
+# decode with features of orders 0, 1 and 2 (every order up to the highest is
+# computed; the results for each listed order are returned)
+# corrmean_combine averages the groups' correlations (orders 1 and 2) in Fisher
+# z space; order-0 activations are always averaged with mean_combine
+results = tc.timepoint_decoder(
+    data,
+    level=[0, 1, 2],
+    combine=tc.corrmean_combine,
+    cfun=tc.isfc,
+    rfun="eigenvector_centrality",
+    weights_fun=laplace["weights"],
+    weights_params=laplace["params"],
 )
-print("which uses synthetic data and includes comprehensive error handling.")
+
+# one row per fold and order; chance accuracy is 1 / 300
+print(results)
+print(results.groupby("level")[["accuracy", "error", "rank"]].mean())

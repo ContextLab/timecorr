@@ -1,151 +1,78 @@
 .. _tutorial:
 
-Tutorials and Examples
-======================
+Tutorials
+=========
 
-The timecorr package provides comprehensive tutorials to help you get started with dynamic correlation analysis. These tutorials cover everything from basic concepts to advanced applications across multiple domains.
-
-Getting Started
----------------
-
-If you're new to timecorr, we recommend starting with the synthetic data tutorial to understand the core concepts and functionality.
-
-Core Tutorials
---------------
+The tutorials are Jupyter notebooks in the ``docs/tutorial/`` folder of the
+repository. The pages below show them with the output of a full run. Each
+tutorial has an "Open in Colab" link at the top that opens the notebook in
+Google Colab, where its first code cell installs timecorr.
 
 .. toctree::
-   :maxdepth: 2
-   :caption: Fundamental Concepts
+   :maxdepth: 1
 
-   tutorial/synthetic_data_tutorial
-   tutorial/applications_tutorial
    tutorial/timecorr_notebook
+   tutorial/synthetic_data_tutorial
+   tutorial/higher_order_tutorial
+   tutorial/event_kernels_tutorial
+   tutorial/applications_tutorial
 
-Synthetic Data Tutorial
-^^^^^^^^^^^^^^^^^^^^^^^
+Using timecorr
+--------------
 
-Learn the fundamentals of timecorr using synthetic datasets:
+``timecorr_notebook.ipynb``: simulating data, computing dynamic correlations
+with different kernels, the vectorized format (``mat2vec`` / ``vec2mat``),
+several subjects (ISFC), and reducing correlations with ``rfun``.
 
-* Generate different types of synthetic data (random, block, ramping, constant)
-* Explore various kernel functions and their effects on correlation estimates
-* Understand dynamic correlations and higher-order correlation analysis
-* Perform multi-subject analysis with ISFC and WISFC methods
-* Conduct statistical testing and significance assessment
+Synthetic data
+--------------
 
-**Location**: ``docs/tutorial/synthetic_data_tutorial.ipynb``
+``synthetic_data_tutorial.ipynb``: the four ways a simulated correlation
+template can change over time (constant, block, ramping, random); the kernels,
+and how their shape and width affect recovery of the template; the delta kernel
+and co-fluctuations; several subjects who share a template; and a test, across
+subjects, of each timepoint's correlation.
 
-Applications Tutorial
-^^^^^^^^^^^^^^^^^^^^
+Higher-order correlations
+-------------------------
 
-Discover real-world applications across multiple research domains:
+``higher_order_tutorial.ipynb``: the two paths of Fig. 10 of Owen, Chang &
+Manning (2021) and ``tc.features`` with the original pipeline's settings
+(co-fluctuations on the path that feeds the next order); one-sided kernels; simulating data whose
+structure exists only at a chosen order and recovering it; and the limits of the
+approach (the number of features an order needs, the memory of unreduced runs,
+and how much of the structure variance-based reduction keeps at orders 2 and 3,
+as measured there); and the defaults of ``tc.features`` (a Gaussian kernel and
+squared-correlation summaries on the path that feeds the next order) on
+``simulate_nested`` data.
 
-* **Neuroscience**: Brain network dynamics and functional connectivity patterns
-* **Economics**: Market correlations and financial network analysis  
-* **Climate Science**: Environmental variable relationships over time
-* **Social Sciences**: Social network dynamics and behavioral pattern analysis
+Event-restricted kernels
+------------------------
 
-**Location**: ``docs/tutorial/applications_tutorial.ipynb``
+``event_kernels_tutorial.ipynb``: what restricting a kernel to events (blocks
+of consecutive timepoints) does to it; passing boundaries to ``timecorr``;
+segmenting synthetic stimulus embeddings with ``tc.segment`` (ordered events,
+with the number of events given or chosen automatically, and recurring states);
+recovery of block-wise correlations in synthetic brain data with the
+restricted kernel, compared with the unrestricted kernel and with wrong
+boundaries; per-subject events and cross-subject correlations; different
+events at each order in ``tc.features``; and events in the timepoint decoders.
 
-Key Concepts Covered
--------------------
+Applications
+------------
 
-Weighting Functions
-^^^^^^^^^^^^^^^^^^
+``applications_tutorial.ipynb``: dynamic correlations in simulated data from
+four domains (brain networks, financial returns, climate variables and social
+groups), at more than one kernel width.
 
-* **Gaussian weights**: Smooth temporal averaging with adjustable variance
-* **Laplace weights**: Sparser temporal kernels for precise timing
-* **Mexican Hat weights**: Derivative-based kernels for temporal dynamics
-* **Custom kernels**: How to define your own weighting functions
+Running the tutorials
+---------------------
 
-Correlation Methods
-^^^^^^^^^^^^^^^^^^
-
-* **Within-subject correlations**: Standard dynamic functional connectivity
-* **ISFC (Inter-Subject Functional Connectivity)**: Shared patterns across subjects
-* **WISFC (Weighted ISFC)**: Similarity-weighted multi-subject analysis
-* **Auto-correlation functions**: Temporal structure analysis
-
-Dimensionality Reduction
-^^^^^^^^^^^^^^^^^^^^^^^^
-
-* **PCA**: Principal component analysis for correlation patterns
-* **ICA**: Independent component analysis
-* **Factor Analysis**: Latent factor modeling
-* **Graph measures**: Network centrality and connectivity metrics
-
-Advanced Topics
-^^^^^^^^^^^^^^
-
-* **Higher-order correlations**: Correlations between correlation patterns
-* **Multi-level analysis**: Hierarchical temporal structure
-* **Statistical testing**: Permutation tests and multiple comparisons
-* **Optimization**: Memory and performance considerations
-
-Common Use Cases
----------------
-
-**Neuroscience Applications**
-
-.. code-block:: python
-
-   # Analyze brain network dynamics
-   brain_data = load_fmri_data()  # Shape: (timepoints, brain_regions)
-   
-   # Compute dynamic functional connectivity
-   dfc = tc.timecorr(brain_data, 
-                     weights_function=tc.gaussian_weights,
-                     weights_params={'var': 8})
-   
-   # Visualize connectivity at specific timepoint
-   connectivity_matrix = tc.vec2mat(dfc[100, :])
-
-**Financial Market Analysis**
-
-.. code-block:: python
-
-   # Analyze market correlations over time
-   stock_returns = load_market_data()  # Shape: (days, stocks)
-   
-   # Compute dynamic correlations
-   market_correlations = tc.timecorr(stock_returns,
-                                    weights_function=tc.laplace_weights,
-                                    weights_params={'scale': 5})
-
-**Climate Science**
-
-.. code-block:: python
-
-   # Study climate variable relationships
-   climate_data = load_climate_measurements()  # Shape: (months, variables)
-   
-   # Analyze long-term correlation patterns
-   climate_correlations = tc.timecorr(climate_data,
-                                     weights_function=tc.gaussian_weights,
-                                     weights_params={'var': 12})  # Annual scale
-
-Running the Tutorials
---------------------
-
-To run the interactive tutorials locally:
+From the root of the repository:
 
 .. code-block:: bash
 
-   # Navigate to the timecorr directory
-   cd /path/to/timecorr
-   
-   # Start Jupyter notebook
-   jupyter notebook
-   
-   # Open tutorials in docs/tutorial/ folder
+   pip install -e ".[docs]"
+   jupyter notebook docs/tutorial/
 
-Next Steps
-----------
-
-After completing the tutorials, explore:
-
-* **API Reference**: Detailed function documentation
-* **Example Gallery**: Additional code examples and use cases
-* **Research Paper**: Theoretical background and validation studies
-* **GitHub Repository**: Latest updates and community contributions
-
-
+Each notebook runs top to bottom in under about two minutes.

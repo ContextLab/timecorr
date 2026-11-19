@@ -4,73 +4,44 @@
 Explore kernels
 =============================
 
-In this example, we plot the kernel options provided.
+In this example, we plot the kernels provided by timecorr. Each kernel
+function returns a ``T x T`` matrix whose row ``t`` holds the weight given to
+every timepoint when the correlations at timepoint ``t`` are estimated; we plot
+row ``t = 50`` of each.
+
+The delta kernel (``eye_weights``) puts all of its weight on ``t`` itself and
+gives co-fluctuations (products of the z-scored features). The Mexican hat
+kernel has negative weights away from ``t``.
 
 """
 # Code source: Lucy Owen
 # License: MIT
 
-import os
-
-import numpy as np
 from matplotlib import pyplot as plt
 
-# load
 import timecorr as tc
-
-# load helper functions
 from timecorr.helpers import plot_weights
 
-# Configure matplotlib for CI environments
-if os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS"):
-    import matplotlib
-
-    matplotlib.use("Agg")  # Use non-interactive backend in CI
-
-# define number of timepoints
+# number of timepoints and the timepoint whose kernel is plotted
 T = 100
+t = 50
 
-# define width
+# kernel width
 width = 10
 
-# define functions
-laplace = {"name": "Laplace", "weights": tc.laplace_weights, "params": {"scale": width}}
-delta = {"name": r"$\delta$", "weights": tc.eye_weights, "params": tc.eye_params}
-gaussian = {
-    "name": "Gaussian",
-    "weights": tc.gaussian_weights,
-    "params": {"var": width},
-}
-mexican_hat = {
-    "name": "Mexican hat",
-    "weights": tc.mexican_hat_weights,
-    "params": {"sigma": width},
-}
+kernels = [
+    ("Delta", tc.eye_weights, tc.eye_params),
+    ("Gaussian (var=10)", tc.gaussian_weights, {"var": width}),
+    ("Laplace (scale=10)", tc.laplace_weights, {"scale": width}),
+    ("Mexican hat (sigma=10)", tc.mexican_hat_weights, {"sigma": width}),
+    ("t (df=10)", tc.t_weights, {"df": width}),
+    ("Boxcar (width=10)", tc.boxcar_weights, {"width": width}),
+]
 
-
-# Helper function to show plots conditionally
-def show_plot():
-    """Show plot only in interactive environments, not in CI."""
-    if not (os.environ.get("CI") or os.environ.get("GITHUB_ACTIONS")):
-        plt.show()
-
-
-# plot delta
-plot_weights(delta["weights"](T), title="Delta")
-show_plot()
-plt.clf()
-
-# plot gaussian
-plot_weights(gaussian["weights"](T), title="Gaussian")
-show_plot()
-plt.clf()
-
-# plot laplace
-plot_weights(laplace["weights"](T), title="Laplace")
-show_plot()
-plt.clf()
-
-# plot mexican hat
-plot_weights(mexican_hat["weights"](T), title="Mexican hat")
-show_plot()
-plt.clf()
+fig, axes = plt.subplots(2, 3, figsize=(11, 6), sharex=True)
+for ax, (name, weights_function, params) in zip(axes.ravel(), kernels):
+    plot_weights(weights_function(T, params), t=t, ax=ax, title=name,
+                 xlab="Timepoint", ylab="Weight")
+fig.suptitle(f"Row {t} of each kernel matrix (plot_weights numbers timepoints from 1)")
+fig.tight_layout()
+plt.show()

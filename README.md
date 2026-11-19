@@ -1,264 +1,206 @@
 # Overview
 
-The timecorr toolbox provides tools for computing and exploring the correlational structure of timeseries data. This powerful package allows you to analyze how correlations between variables change over time, making it ideal for studying dynamic brain networks, market correlations, climate patterns, and other time-varying systems.
+The timecorr toolbox computes and explores the correlational structure of timeseries data. It estimates how correlations between features change from moment to moment (**dynamic correlations**), and it computes **higher-order** dynamic correlations: dynamic correlations of features derived from lower-order dynamic correlations.
 
-Everything in the toolbox is built around one main function, `timecorr`, which computes **dynamic correlations** from timeseries data and can explore **higher-order correlational structure**. For comprehensive examples, tutorials, and API documentation, visit our [readthedocs page](https://timecorr.readthedocs.io/en/latest/).
+The toolbox accompanies Owen, Chang & Manning (2021), *Nature Communications* 12, 5728 ([doi:10.1038/s41467-021-25876-x](https://doi.org/10.1038/s41467-021-25876-x)). Version 0.3.0 changed the correlation estimator, so its numbers differ from version 0.2.0 and from Eq. 4 of the paper; see [CHANGELOG.md](https://github.com/ContextLab/timecorr/blob/master/CHANGELOG.md). Tutorials, examples and the API reference are on [Read the Docs](https://timecorr.readthedocs.io/en/latest/).
 
-## Key Features
+## Features
 
-- **Dynamic Correlations**: Compute moment-by-moment correlations between features
-- **Higher-Order Analysis**: Explore correlations between correlations (and beyond)
-- **Multi-Subject Analysis**: Compare patterns across different datasets/participants
-- **Flexible Kernels**: Gaussian, Laplace, Mexican Hat, and custom weighting functions
-- **Dimensionality Reduction**: PCA, ICA, factor analysis, and graph-theoretic measures
-- **Statistical Testing**: Built-in permutation testing and multiple comparisons correction
+- **Dynamic correlations** (`tc.timecorr`): kernel-weighted correlations at every timepoint, within one dataset or across subjects (inter-subject functional connectivity, ISFC).
+- **Kernels**: Gaussian, Laplace, Mexican hat, t, boxcar, uniform and delta (`eye_weights`), each two-sided or one-sided (only past or only future timepoints, with or without the timepoint itself).
+- **Higher-order features** (`tc.features`): features of every order up to a chosen order, computed through the two paths of Fig. 10 of the paper (an analysis path and a path that feeds the next order), with a reducer on each path at each order. By default the path that feeds the next order uses a Gaussian kernel and a summary of squared correlations by community; the original pipeline of the paper (co-fluctuations and PCA) is selected with three arguments.
+- **Dimensionality reduction**: hypertools / scikit-learn models (PCA, FastICA, factor analysis and others), graph measures (eigenvector centrality, PageRank centrality, strength), or your own function.
+- **Event-restricted kernels** (`events=` in `tc.timecorr` and `tc.features`, and `tc.segment`): confine the kernel to blocks of consecutive timepoints (events), given as boundary indices or found by segmenting a separate timeseries (for example a stimulus embedding) with a hidden Markov model; events may differ per subject and, in `tc.features` and the correlation decoders, per order.
+- **Simulation** (`tc.simulate_data`): data with known dynamic correlations, including structure embedded at exactly one chosen correlation order.
+- **Decoding**: timepoint decoders that measure how well features of each order identify the moment a pattern came from, across groups of subjects. They accept `events`: the correlation decoders restrict the analysis kernel at levels 1 and above (level 0 is unchanged), and `pca_decoder` restricts its smoothing kernel; the events are supplied by the caller and used as given in every fold.
+- **Inputs**: numpy arrays, pandas DataFrames and polars DataFrames, or lists of them (one per subject).
 
 # Quick Start
 
-## Simple Example: Basic Dynamic Correlations
+## Dynamic correlations
 
 ```python
 import numpy as np
 import timecorr as tc
 
-# Generate sample data: 100 timepoints, 5 features
-data = np.random.randn(100, 5)
+rng = np.random.default_rng(0)
+data = rng.standard_normal((100, 5))  # 100 timepoints, 5 features
 
-# Compute dynamic correlations with Gaussian weighting
-correlations = tc.timecorr(data, weights_function=tc.gaussian_weights, weights_params={'var': 10})
-
-print(f"Input shape: {data.shape}")
-print(f"Output shape: {correlations.shape}")  # (100, 15) - vectorized correlation matrices
+corrs = tc.timecorr(data, weights_function=tc.gaussian_weights, weights_params={"var": 10})
+print(corrs.shape)  # (100, 15): one vectorized 5 x 5 correlation matrix per timepoint
+print(tc.vec2mat(corrs).shape)  # (5, 5, 100)
 ```
 
-## Multi-Subject Analysis Example
+Each row of the output is a correlation matrix in vectorized form (`tc.mat2vec`): the 5 diagonal entries first, then the 10 entries above the diagonal. `tc.vec2mat` converts back to matrices.
+
+## Several subjects
 
 ```python
-# Analyze correlations across multiple subjects
-subjects_data = [np.random.randn(100, 5) for _ in range(10)]  # 10 subjects
+subjects = [rng.standard_normal((100, 5)) for _ in range(10)]  # 10 subjects
 
-# Inter-Subject Functional Connectivity (ISFC)
-# Returns a list of correlations (one per subject vs. others)
-isfc_results = tc.timecorr(subjects_data, cfun=tc.isfc, weights_function=tc.gaussian_weights)
-print(f"ISFC results: {len(isfc_results)} subjects, each shape {isfc_results[0].shape}")
+# each subject's features versus the mean of the other subjects' features
+isfc = tc.timecorr(subjects, cfun=tc.isfc, weights_params={"var": 10})
+print(len(isfc), isfc[0].shape)  # 10 (100, 15)
 
-# Weighted ISFC for similarity-based averaging
-# Also returns a list of correlations
-wisfc_results = tc.timecorr(subjects_data, cfun=tc.wisfc, weights_function=tc.gaussian_weights)
-print(f"WISFC results: {len(wisfc_results)} subjects, each shape {wisfc_results[0].shape}")
-
-# To get a single averaged result, use combine parameter
-combined_isfc = tc.timecorr(subjects_data, cfun=tc.isfc, combine=tc.mean_combine, 
-                           weights_function=tc.gaussian_weights)
-print(f"Combined ISFC shape: {combined_isfc.shape}")
+# one result: the subjects' correlations averaged in Fisher z space
+group = tc.timecorr(subjects, cfun=tc.isfc, combine=tc.corrmean_combine,
+                    weights_params={"var": 10})
+print(group.shape)  # (100, 15)
 ```
 
-## Higher-Order Correlations with Dimensionality Reduction
+## Higher-order features
 
 ```python
-# Compute correlations between correlations using PCA
-data = np.random.randn(200, 10)
-
-higher_order = tc.timecorr(data, 
-                          weights_function=tc.gaussian_weights,
-                          weights_params={'var': 20},
-                          rfun='PCA')  # Reduces dimensionality to prevent explosion
-
-print(f"Higher-order correlations shape: {higher_order.shape}")  # Same as input: (200, 10)
+# 108 nodes in 18 modules in 6 supergroups, 2 subjects
+nested, truth = tc.simulate_nested(S=2, T=1000, set_random_seed=0)
+X = tc.features(nested, order=2, cfun=tc.autofc, weights_params={"var": 33 ** 2})
+print(len(X), X[1][0].shape, X[2][0].shape)  # 3 (1000, 108) (1000, 36)
 ```
 
-# Comprehensive Usage Guide
-
-## 1. Data Formatting
-
-Your data should be formatted as:
-- **Single dataset**: NumPy array or Pandas DataFrame with shape `(timepoints, features)`
-- **Multiple datasets**: List of arrays/DataFrames with identical shapes
-- **Features**: Columns represent variables (e.g., brain regions, sensors, financial assets)
-- **Timepoints**: Rows represent observations over time
+`X[0]` is the data and `X[k]` holds the order-`k` features of each subject. Each order has two paths: the analysis path gives `X[k]`, and the path that feeds the next order (the feeding path, named `delta_*` in the arguments for historical reasons) gives the input of order `k + 1`. With the defaults, `X[1]` is the dynamic correlations of the data reduced with PCA, fit jointly across subjects, to as many features as the data have; the feeding path computes each subject's correlations with a Gaussian kernel (standard deviation 5 samples) and summarizes them with `tc.Communities()` (here 18 communities, one column each); `X[2]` is the dynamic correlations of those columns, summarized with `tc.WeightedStrength(signed=True)` (two columns per input column). The default feeding path needs at least 4 features and 40 timepoints (and as many distinct shift-null lags as features: at most 21 features at T = 40). Its width at order `k + 1` is the number of communities found at order `k` (at most half the features), so a later order raises when fewer than 4 remain, for example with 4 to 7 input features at `order=3`; `delta_rfun="weighted_strength"` (one column per feature) takes any number of features, and the original pipeline's settings avoid it too.
 
 ```python
-# Single subject data
-data = np.random.randn(100, 8)  # 100 timepoints, 8 features
-
-# Multiple subjects
-multi_data = [np.random.randn(100, 8) for _ in range(5)]  # 5 subjects
+# the original two-path pipeline of the paper: co-fluctuations feed the next order,
+# PCA on both paths
+X = tc.features(subjects, order=3, weights_params={"var": 10},
+                rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
+print(len(X), X[3][0].shape)  # 4 (100, 5): orders 0-3, each reduced (PCA) to 5 features
 ```
 
-## 2. Weighting Functions (`weights_function`)
+In the original pipeline the analysis kernel is applied to the previous order's co-fluctuations (computed with a delta kernel, `eye_weights`), so every order is blurred by the kernel once, and the features of each order are reduced with PCA. With `rfun=None` and `delta_rfun=None`, nothing is reduced and every correlation is kept (the number of features then grows from `K` to `K(K+1)/2` at each order, and `tc.features` raises `MemoryError` before a step whose estimated peak memory, for all subjects together, exceeds `max_memory_gb`, 4 GB by default).
 
-Control how much each timepoint contributes to correlations:
+## One-sided kernels
 
 ```python
-# Gaussian kernel (most common)
-correlations = tc.timecorr(data, weights_function=tc.gaussian_weights, 
-                          weights_params={'var': 10})
-
-# Laplace kernel (sparser, more temporal precision)
-correlations = tc.timecorr(data, weights_function=tc.laplace_weights,
-                          weights_params={'scale': 5})
-
-# Mexican Hat kernel (captures temporal dynamics)
-correlations = tc.timecorr(data, weights_function=tc.mexican_hat_weights,
-                          weights_params={'sigma': 15})
-
-# Eye/Delta kernel (uniform weighting)
-correlations = tc.timecorr(data, weights_function=tc.eye_weights,
-                          weights_params={})
+# use only the current and earlier timepoints to estimate each timepoint's correlations
+backward = tc.timecorr(data, weights_params={"var": 10}, include_timepoints="backward")
+# UserWarning: 2 of 100 timepoints have fewer than 3 non-zero kernel weights;
+# their correlations are undefined and set to 0.
 ```
 
-## 3. Correlation Functions (`cfun`)
+`include_timepoints="forward"` uses only the current and later timepoints, and `include_zero=False` leaves out the timepoint being estimated. The same options are available on every kernel function (`direction`, `include_zero`) and through `tc.one_sided`.
 
-Choose how correlations are computed:
+## Simulated structure at a chosen order
 
 ```python
-# Within-subject correlations (default)
-within_corr = tc.timecorr(data)
-
-# Inter-Subject Functional Connectivity (ISFC)
-# Each subject vs. average of others (returns list)
-isfc_corr = tc.timecorr(multi_data, cfun=tc.isfc)
-
-# Weighted ISFC (similarity-weighted averaging, also returns list)
-wisfc_corr = tc.timecorr(multi_data, cfun=tc.wisfc)
-
-# Combined ISFC (single averaged result)
-combined_isfc = tc.timecorr(multi_data, cfun=tc.isfc, combine=tc.mean_combine)
-
-# Auto-correlation function
-auto_corr = tc.timecorr(data, cfun=tc.autofc)
+# 4 blocks of 2 features: the 4 x 4 template is carried only by order-2 correlations
+sim, truth = tc.simulate_data(datagen="block", K=8, T=1000, order=2,
+                              return_corrs=True, set_random_seed=0)
+X = tc.features(sim, order=2, cfun=tc.autofc, rfun=None,
+                delta_rfun=tc.carrier_reducer(truth["blocks"]),
+                weights_params={"var": 625})
+off_diagonal = slice(4, None)  # mat2vec layout: 4 diagonal entries, then 6 pairs
+r = np.corrcoef(X[2][:, off_diagonal].ravel(), truth["corrs"][:, off_diagonal].ravel())[0, 1]
+print(round(r, 2))  # 0.9
 ```
 
-## 4. Dimensionality Reduction (`rfun`)
+`tc.carrier_reducer` keeps, at each order, only the features that carry the simulated structure, so the estimate at order 2 is the 4 x 4 correlation matrix among the block products. See the [higher-order tutorial](https://github.com/ContextLab/timecorr/blob/master/docs/tutorial/higher_order_tutorial.ipynb) for recovery at each order and for the limits of variance-based reduction.
 
-Prevent "correlation explosion" and explore higher-order structure:
+## Squared-correlation summaries and the feeding kernel
 
 ```python
-# Principal Component Analysis
-pca_corr = tc.timecorr(data, rfun='PCA')
-
-# Independent Component Analysis (note: may not be available in all versions)
-# ica_corr = tc.timecorr(data, rfun='ICA')
-
-# Factor Analysis
-fa_corr = tc.timecorr(data, rfun='FactorAnalysis')
-
-# Graph-theoretic measures
-pagerank_corr = tc.timecorr(data, rfun='pagerank_centrality')
-eigenvector_corr = tc.timecorr(data, rfun='eigenvector_centrality')
+# the subjects of simulate_nested share only the order-2 signal h
+comm = tc.Communities()  # number of communities set by a shift null
+X = tc.features(nested, order=2, cfun=tc.autofc, weights_params={"var": 33 ** 2},
+                rfun="auto",           # the default: PCA at order 1, WeightedStrength(signed=True) above
+                delta_rfun=comm,       # the default "auto" gives a new Communities() per order
+                delta_weights_function=tc.gaussian_weights,  # the default kernel of the feeding path
+                delta_weights_params={"var": 25})
+print(comm.fits_[0]["n"], X[2][0].shape)  # 18 (1000, 36)
 ```
 
-## 5. Common Analysis Patterns
+This call gives the same features as the default call above; passing a `tc.Communities` object makes its fit readable in `fits_`. `tc.WeightedStrength` and `tc.Communities` summarize each subject's correlations by weighted sums of squared correlations per node or by the mean squared correlation within each community of nodes; they are accepted wherever `rfun` is. `delta_weights_function` and `delta_weights_params` set the kernel of the feeding path (default: `gaussian_weights` with variance 25; `eye_weights` gives co-fluctuations). In the gallery example `plot_nested_recovery.py` (this call, seed 0), a ridge map from subject A's order-2 features to `h`, applied to subject B, gives a mean correlation of 0.74 with `h` over the 6 supergroups (a raw score for one seed; over 24 seeds in `tests/test_nested_recovery.py` the score is .753 +- .019, mean +- standard error, with a control of -.025 +- .018 from subjects with an independent `h`). A step reduced by a summary (with `cfun` `autofc`, `isfc` or `wisfc` and `combine=tc.null_combine`) is computed in blocks of nodes; memory is bounded only when every step uses a summary, since the default order-1 reducer (PCA) holds `K(K+1)/2` columns per subject; with `rfun=tc.WeightedStrength(signed=True)` the order-1 step is also computed in blocks.
 
-### Pattern 1: Basic Dynamic Connectivity
+# Usage
+
+## Data
+
+- One dataset: a numpy array, pandas DataFrame or polars DataFrame of shape `(timepoints, features)`.
+- Several datasets (for example one per subject): a list of such matrices, all with the same shape.
+- Inputs are converted to float arrays and never modified. NaN samples carry no weight in correlations. In `tc.features` with the default feeding kernel, NaN samples are left out pairwise and the features passed to the next order are finite. With `eye_weights` as the feeding kernel, this holds at every order when the delta path is unreduced (`delta_rfun=None` with `rfun=None`) or reduced by a callable; before a model-based reducer (such as PCA) or a graph measure, the co-fluctuations of NaN samples are set to 0 and a warning says that NaN handling is approximate from order 2 on.
+
+## Kernels (`weights_function`, `weights_params`)
+
+Row `t` of a kernel matrix, `weights[t, :]`, holds the weights given to every timepoint when estimating the correlations at timepoint `t`.
+
 ```python
-# Analyze how brain region correlations change over time
-brain_data = np.random.randn(300, 50)  # 300 TRs, 50 brain regions
+gaussian = tc.timecorr(data, weights_function=tc.gaussian_weights, weights_params={"var": 10})
+laplace = tc.timecorr(data, weights_function=tc.laplace_weights, weights_params={"scale": 5})
+mexican_hat = tc.timecorr(data, weights_function=tc.mexican_hat_weights, weights_params={"sigma": 15})
+boxcar = tc.timecorr(data, weights_function=tc.boxcar_weights, weights_params={"width": 10})
 
-dynamic_fc = tc.timecorr(brain_data, 
-                        weights_function=tc.gaussian_weights,
-                        weights_params={'var': 8})
-
-# Visualize correlation matrix at specific timepoint
-import matplotlib.pyplot as plt
-timepoint_50_corr = tc.vec2mat(dynamic_fc[50, :])
-plt.imshow(timepoint_50_corr, cmap='RdBu_r')
-plt.title('Brain Connectivity at Timepoint 50')
+# delta kernel: co-fluctuations (products of the z-scored features at each timepoint),
+# whose mean over timepoints is the static correlation
+delta = tc.timecorr(data, weights_function=tc.eye_weights)
 ```
 
-### Pattern 2: Multi-Level Analysis  
+Kernel functions take `(T, params)` and return a `T x T` matrix, so a function of your own with that signature can be passed as `weights_function`.
+
+## Correlation functions (`cfun`)
+
 ```python
-# Compute correlations at multiple temporal scales
-correlations_level1 = tc.timecorr(data, weights_params={'var': 5})   # Fine scale
-correlations_level2 = tc.timecorr(data, weights_params={'var': 20})  # Coarse scale
-
-# Compare temporal dynamics across scales
+within = tc.timecorr(data)                     # one dataset: its own correlations
+isfc = tc.timecorr(subjects, cfun=tc.isfc)     # each subject versus the mean of the others
+wisfc = tc.timecorr(subjects, cfun=tc.wisfc)   # versus a similarity-weighted mean of the others
+auto = tc.timecorr(subjects, cfun=tc.autofc)   # each subject's own correlations
+smoothed = tc.timecorr(data, cfun=None)        # kernel-weighted mean of the data, not correlations
 ```
 
-### Pattern 3: Group Analysis with Statistics
+## Combining subjects (`combine`)
+
+`tc.null_combine` (default) returns one result per subject; `tc.corrmean_combine` averages correlations in Fisher z space; `tc.mean_combine` takes the plain mean; `tc.tstat_combine` returns a t statistic per entry.
+
+## Dimensionality reduction (`rfun`)
+
 ```python
-# Compare two groups
-group1_data = [np.random.randn(100, 10) for _ in range(15)]
-group2_data = [np.random.randn(100, 10) for _ in range(15)]
-
-# Compute group-level ISFCs
-group1_isfc = tc.timecorr(group1_data, cfun=tc.isfc)
-group2_isfc = tc.timecorr(group2_data, cfun=tc.isfc)
-
-# Statistical comparison (implement your own t-tests, permutation tests, etc.)
+pca = tc.timecorr(data, rfun="PCA")                         # 15 correlations -> 5 features
+ica = tc.timecorr(data, rfun={"model": "FastICA", "params": {"max_iter": 1000}})
+fa = tc.timecorr(data, rfun="FactorAnalysis")
+pagerank = tc.timecorr(data, rfun="pagerank_centrality")    # one value per feature (node)
+eigenvector = tc.timecorr(data, rfun="eigenvector_centrality")
 ```
+
+A model name, a dict such as `{"model": "PCA", "params": {"whiten": True}}`, a graph measure, or a callable `f(list_of_arrays) -> list_of_arrays` is accepted. When a list of subjects is reduced, one model is fit jointly to all of them.
 
 # Tutorials and Examples
 
-We provide comprehensive Jupyter notebook tutorials to help you get started:
+The tutorials are Jupyter notebooks in `docs/tutorial/`, also rendered on Read the Docs:
 
-## 📊 Synthetic Data Tutorial
-**Location**: `docs/tutorial/synthetic_data_tutorial.ipynb`
+- **Using timecorr** (`timecorr_notebook.ipynb`): simulation, kernels, the vectorized format, several subjects.
+- **Synthetic data** (`synthetic_data_tutorial.ipynb`): the simulated dataset types, kernel shape and width compared against the true correlations, co-fluctuations from the delta kernel, several subjects, and a per-timepoint test across subjects.
+- **Higher-order correlations** (`higher_order_tutorial.ipynb`): the two paths of Fig. 10 (the original pipeline, with co-fluctuations), `tc.features`, one-sided kernels, simulation and recovery at a chosen order, the limits (feature counts, memory, variance-based reduction), and the defaults of `tc.features` (Gaussian feeding kernel, squared-correlation summaries) on `simulate_nested` data.
+- **Event-restricted kernels** (`event_kernels_tutorial.ipynb`): what restricting a kernel to events does, passing boundaries, segmenting synthetic stimulus embeddings with `tc.segment` (ordered events and recurring states), recovery of block-wise correlations compared with the unrestricted kernel and with wrong boundaries, per-subject events, events per order in `tc.features`, and events in the decoders.
+- **Applications** (`applications_tutorial.ipynb`): dynamic correlations in simulated neuroscience, finance, climate and social-network data.
 
-Learn the fundamentals of timecorr using synthetic data:
-- Generate different types of synthetic datasets (random, block, ramping, constant)
-- Explore various kernel functions and their effects
-- Understand dynamic correlations and higher-order analysis
-- Perform multi-subject analysis with ISFC and WISFC
-- Statistical testing and significance assessment
+Each tutorial has an "Open in Colab" link at the top that opens the notebook in Google Colab, where its first code cell installs timecorr.
 
-```bash
-# Run the tutorial
-jupyter notebook docs/tutorial/synthetic_data_tutorial.ipynb
-```
-
-## 🔬 Applications Tutorial  
-**Location**: `docs/tutorial/applications_tutorial.ipynb`
-
-Discover real-world applications across multiple domains:
-- **Neuroscience**: Brain network dynamics and connectivity patterns
-- **Economics**: Market correlations and financial network analysis  
-- **Climate Science**: Environmental variable relationships over time
-- **Social Sciences**: Social network dynamics and behavioral patterns
-
-```bash
-# Run the applications tutorial
-jupyter notebook docs/tutorial/applications_tutorial.ipynb
-```
-
-## 📚 Additional Resources
-
-- **Full Documentation**: [timecorr.readthedocs.io](http://timecorr.readthedocs.io/)
-- **API Reference**: Complete function documentation and parameters
-- **Example Gallery**: Collection of use cases and code snippets
-- **Research Paper**: [Nature Communications](https://doi.org/10.1038/s41467-021-25876-x)
+The `examples/` folder holds short scripts, shown in the example gallery on Read the Docs.
 
 # Installation
 
-## Recommended way of installing the toolbox
-You may install the latest stable version of our toolbox using [pip](https://pypi.org):
+Install the latest release with [pip](https://pypi.org):
 
 ```
 pip install timecorr
 ```
 
-or if you have a previous version already installed:
+or upgrade an existing installation:
 
 ```
 pip install --upgrade timecorr
 ```
 
-
-## Dangerous (hacker) developer way of installing the toolbox (use caution!)
-To install the latest (bleeding edge) version directly from this repository use:
+To install the development version from this repository:
 
 ```
 pip install --upgrade git+https://github.com/ContextLab/timecorr.git
 ```
 
-
 # Requirements
 
-The toolbox is currently supported on Mac and Linux.  It has not been tested on Windows (and we expect key functionality not to work properly on Windows systems).
-Dependencies:
-  - hypertools>=0.7.0
-  - scipy>=1.2.1
-  - scikit-learn>=0.19.2
+Python 3.10 or later. The toolbox is currently supported on Mac and Linux.  It has not been tested on Windows (and we expect key functionality not to work properly on Windows systems).
+
+Dependencies (installed by pip): pydata-wrangler, hypertools>=0.8, numpy, scipy, scikit-learn, pandas, matplotlib. Optional: polars (for polars DataFrame input); hmmlearn, used only by `tc.segment`, which installs it on demand the first time it is needed (the `segment` extra, `pip install "timecorr[segment]"`; setting `TIMECORR_AUTO_INSTALL=0` turns automatic installation off); and the `test` and `docs` extras (`pip install "timecorr[test]"`, `pip install "timecorr[docs]"`).
 
 # Citing this toolbox
 
@@ -295,89 +237,30 @@ The preferred way to contribute to timecorr is to fork the main repository on Gi
 
 # Testing
 
-<!-- [![Build Status](https://travis-ci.com/ContextLab/quail.svg?token=hxjzzuVkr2GZrDkPGN5n&branch=master) -->
-
-The timecorr package includes comprehensive tests to ensure reliability and correctness.
-
-## Running Tests
+The tests use real computations on simulated data (no mocks).
 
 ```bash
-# Install testing dependencies
-pip install pytest pytest-cov
+pip install -e ".[test]"
 
-# Run all tests
+# run the whole suite
 pytest
 
-# Run tests with coverage report
-pytest --cov=timecorr --cov-report=html
+# skip the slow integration tests (minutes, several GB of memory)
+pytest -m "not slow"
 
-# Run specific test files
-pytest tests/test_timecorr.py
-pytest tests/test_helpers.py
+# run the examples in the docstrings
+pytest --doctest-modules timecorr/
 ```
 
-## Test Coverage
+# Memory and run time
 
-The package maintains high test coverage (>85%) across all modules:
-- **Core functions**: `timecorr`, `isfc`, `wisfc`, `autofc`
-- **Helper functions**: Kernels, decoders, dimensionality reduction
-- **Simulation functions**: Synthetic data generation
-- **Utility functions**: Matrix operations, statistical functions
+- `timecorr` builds a `T x T` kernel and a `K x K x T` array of correlations for each subject, so memory grows with `T**2` and with `K**2 * T`.
+- Without reduction, the number of features grows from `K` to `K(K+1)/2` at every order. `tc.features(..., rfun=None, delta_rfun=None)` estimates the memory of each step and raises `MemoryError` before allocating more than `max_memory_gb` (default 4 GB); the message gives the largest number of features that fits. `timecorr.higher_order.estimate_memory_gb(K, order, T, n_subjects)` returns the estimates (in GB, for all subjects together; with `delta_weights_function=tc.eye_weights` for the original pipeline, whose delta path has no block temporaries).
+- With reduction (`rfun`, `delta_rfun`) the widths depend on the reducer: PCA gives `ndims` columns (the input width by default), `tc.Communities()` one column per community found (at most half its input features), and `tc.WeightedStrength(signed=True)` twice its input width. With the defaults the order-`k` analysis output (`k >= 2`) is twice the number of community columns found at order `k - 1`.
 
-All tests use actual data (never mocks) to ensure numerical correctness and real-world applicability.
+# Getting Help
 
-# Troubleshooting
-
-## Common Issues
-
-### Installation Problems
-```bash
-# If you encounter dependency conflicts
-pip install --upgrade --force-reinstall timecorr
-
-# For development installation
-pip install -e .
-```
-
-### Memory Issues with Large Datasets
-```python
-# Use chunking for very large datasets
-import timecorr as tc
-import numpy as np
-
-# Instead of processing all at once
-large_data = np.random.randn(10000, 100)  # Very large dataset
-
-# Process in chunks
-chunk_size = 1000
-results = []
-for i in range(0, len(large_data), chunk_size):
-    chunk = large_data[i:i+chunk_size]
-    result = tc.timecorr(chunk, weights_function=tc.gaussian_weights)
-    results.append(result)
-
-# Combine results
-final_result = np.vstack(results)
-```
-
-### Performance Optimization
-```python
-# For faster computation with large numbers of features
-# Use dimensionality reduction
-fast_result = tc.timecorr(data, 
-                         weights_function=tc.gaussian_weights,
-                         rfun='PCA')  # Reduces computational complexity
-
-# Adjust kernel width for faster computation
-# Smaller variance = faster but less smoothing
-fast_correlations = tc.timecorr(data, 
-                               weights_function=tc.gaussian_weights,
-                               weights_params={'var': 5})  # Smaller kernel
-```
-
-## Getting Help
-
-- **Documentation**: [timecorr.readthedocs.io](http://timecorr.readthedocs.io/)
+- **Documentation**: [timecorr.readthedocs.io](https://timecorr.readthedocs.io/en/latest/)
 - **Issues**: [GitHub Issues](https://github.com/ContextLab/timecorr/issues)
-- **Tutorials**: Check `docs/tutorial/` folder for Jupyter notebooks
-- **Examples**: See applications tutorial for domain-specific examples
+- **Tutorials**: Jupyter notebooks in `docs/tutorial/`
+- **Examples**: scripts in `examples/`

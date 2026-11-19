@@ -5,57 +5,75 @@
    :width: 400pt
    :align: center
 
-Welcome to TimeCorr
-====================
+Welcome to timecorr
+===================
 
-The TimeCorr toolbox provides tools for computing and exploring the correlational structure of timeseries data. This powerful package allows you to analyze how correlations between variables change over time, making it ideal for studying dynamic brain networks, market correlations, climate patterns, and other time-varying systems.
+The timecorr toolbox computes and explores the correlational structure of
+timeseries data. It estimates how correlations between features change from
+moment to moment (dynamic correlations), and it computes higher-order dynamic
+correlations: dynamic correlations of features derived from lower-order
+dynamic correlations. The toolbox accompanies Owen, Chang & Manning (2021),
+*Nature Communications* 12, 5728 (`doi:10.1038/s41467-021-25876-x
+<https://doi.org/10.1038/s41467-021-25876-x>`_).
 
-Key Features
-------------
+Version 0.3.0 changed the correlation estimator (a kernel-weighted Pearson
+correlation), so its numbers differ from version 0.2.0; the changes are listed
+in the `changelog <https://github.com/ContextLab/timecorr/blob/master/CHANGELOG.md>`_.
 
-* **Dynamic Correlations**: Compute moment-by-moment correlations between features
-* **Higher-Order Analysis**: Explore correlations between correlations (and beyond)
-* **Multi-Subject Analysis**: Compare patterns across different datasets/participants
-* **Flexible Kernels**: Gaussian, Laplace, Mexican Hat, and custom weighting functions
-* **Dimensionality Reduction**: PCA, ICA, factor analysis, and graph-theoretic measures
-* **Statistical Testing**: Built-in permutation testing and multiple comparisons correction
+Features
+--------
 
-Quick Start Example
--------------------
+* **Dynamic correlations**: kernel-weighted correlations at every timepoint,
+  within one dataset or across subjects (inter-subject functional connectivity).
+* **Kernels**: Gaussian, Laplace, Mexican hat, t, boxcar, uniform and delta,
+  each two-sided or one-sided (past or future timepoints only).
+* **Higher-order features**: ``tc.features`` computes features of every order
+  through the two paths of Fig. 10 of the paper.
+* **Dimensionality reduction**: hypertools / scikit-learn models, graph
+  measures, or a function of your own.
+* **Simulation**: data with known dynamic correlations, including structure
+  embedded at exactly one chosen correlation order.
+* **Decoding**: timepoint decoders that compare features of each order across
+  groups of subjects.
+
+Quick start
+-----------
 
 .. code-block:: python
 
    import numpy as np
    import timecorr as tc
 
-   # Generate sample data: 100 timepoints, 5 features
-   data = np.random.randn(100, 5)
+   rng = np.random.default_rng(0)
+   data = rng.standard_normal((100, 5))  # 100 timepoints, 5 features
 
-   # Compute dynamic correlations with Gaussian weighting
-   correlations = tc.timecorr(data, 
-                             weights_function=tc.gaussian_weights, 
-                             weights_params={'var': 10})
+   corrs = tc.timecorr(data, weights_function=tc.gaussian_weights,
+                       weights_params={"var": 10})
+   print(corrs.shape)  # (100, 15): one vectorized 5 x 5 matrix per timepoint
 
-   print(f"Input shape: {data.shape}")
-   print(f"Output shape: {correlations.shape}")  # (100, 15) - vectorized correlation matrices
-
-Multi-Subject Analysis
----------------------
+Several subjects and higher orders
+----------------------------------
 
 .. code-block:: python
 
-   # Analyze correlations across multiple subjects
-   subjects_data = [np.random.randn(100, 5) for _ in range(10)]  # 10 subjects
+   subjects = [rng.standard_normal((100, 5)) for _ in range(10)]
 
-   # Inter-Subject Functional Connectivity (ISFC)
-   isfc_results = tc.timecorr(subjects_data, 
-                             cfun=tc.isfc, 
-                             weights_function=tc.gaussian_weights)
+   # each subject versus the mean of the others, averaged in Fisher z space
+   group = tc.timecorr(subjects, cfun=tc.isfc, combine=tc.corrmean_combine,
+                       weights_params={"var": 10})
+   print(group.shape)  # (100, 15)
 
-   # Weighted ISFC for similarity-based averaging
-   wisfc_results = tc.timecorr(subjects_data, 
-                              cfun=tc.wisfc, 
-                              weights_function=tc.gaussian_weights)
+   # features of orders 0 to 3 with the original two-path pipeline of the paper
+   # (co-fluctuations feed the next order), each reduced to 5 features per subject
+   X = tc.features(subjects, order=3, weights_params={"var": 10},
+                   rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
+   print(len(X), X[3][0].shape)  # 4 (100, 5)
+
+   # the defaults: a Gaussian kernel and squared-correlation summaries on the
+   # path that feeds the next order (108 nodes in 18 modules)
+   nested, truth = tc.simulate_nested(S=2, T=1000, set_random_seed=0)
+   X = tc.features(nested, order=2, cfun=tc.autofc, weights_params={"var": 33 ** 2})
+   print(X[1][0].shape, X[2][0].shape)  # (1000, 108) (1000, 36)
 
 Installation
 ------------
@@ -88,15 +106,8 @@ Contents
 
    api
 
-.. toctree::
-   :maxdepth: 1
-   :caption: Additional Resources
-
-   tutorial/timecorr_notebook
-
 Indices and tables
 ==================
 
 * :ref:`genindex`
-* :ref:`modindex`
 * :ref:`search`

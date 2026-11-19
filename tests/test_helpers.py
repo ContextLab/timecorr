@@ -34,7 +34,10 @@ n_samples = 1000
 
 R = toeplitz(np.linspace(0, 1, n_elecs)[::-1])
 
-data_sim = np.random.multivariate_normal(np.zeros(n_elecs), R, size=n_samples)
+# seeded so the estimator checks below are deterministic
+data_sim = np.random.RandomState(0).multivariate_normal(
+    np.zeros(n_elecs), R, size=n_samples
+)
 
 width = 10
 laplace = {"name": "Laplace", "weights": laplace_weights, "params": {"scale": width}}
@@ -102,8 +105,12 @@ def test_wcorr():
     assert corrs_col_neg.mean() == -1
     # check if corresponding columns in 3d array produces 1
     assert np.isclose(corrs_col_arrays[4, 4, 500], 1)
-    # check if toeplitz matrix is produced
+    # check if toeplitz matrix is produced.  A single timepoint is a local
+    # estimate (Gaussian kernel, var 100: effective n = 35.4); for the seeded
+    # draw its largest entry error at t=500 is 0.152.  The time average is a
+    # near-static estimate (largest entry error 0.035 for the seeded draw).
     assert np.allclose(corrs_col_arrays[:, :, 500], R, atol=0.2)
+    assert np.allclose(corrs_col_arrays.mean(axis=2), R, atol=0.2)
     # check if corrs is a numpy array
     assert isinstance(corrs, np.ndarray)
 
@@ -337,3 +344,25 @@ def timepoint_decoder_rfun_wrong():
 # def test_smooth():
 #   smooth_tester= smooth()
 #   assert isinstance(smooth_tester, np.array)
+
+
+def test_import_leaves_matplotlib_rcparams_unchanged():
+    """Importing timecorr must not change the user's global matplotlib settings
+    (0.2.0 set font sizes of 18-24 points at import time).  The dependencies
+    are imported first: hypertools itself sets ``backend_fallback`` on import."""
+    import subprocess
+    import sys
+
+    code = (
+        "import matplotlib as mpl\n"
+        "import matplotlib.pyplot, datawrangler, hypertools\n"
+        "before = {k: str(v) for k, v in mpl.rcParams.items()}\n"
+        "import timecorr\n"
+        "after = {k: str(v) for k, v in mpl.rcParams.items()}\n"
+        "changed = sorted(k for k in before if before[k] != after[k])\n"
+        "print(changed)\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", code], capture_output=True, text=True, check=True
+    )
+    assert out.stdout.strip() == "[]", out.stdout

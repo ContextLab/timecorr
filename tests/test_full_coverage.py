@@ -12,32 +12,22 @@ import matplotlib
 import numpy as np
 import pandas as pd
 import pytest
-from scipy.linalg import toeplitz
 
 matplotlib.use("Agg")  # Use non-interactive backend
 
-import timecorr as tc
 from timecorr.helpers import (
     _is_empty,
-    apply_by_row,
-    autofc,
     calculate_error,
-    corrmean_combine,
     decoder,
-    eye_weights,
     folding_levels,
     folding_levels_ec,
     gaussian_params,
     gaussian_weights,
     get_xval_assignments,
     iseven,
-    isfc,
     isodd,
-    laplace_params,
-    laplace_weights,
     mat2vec,
     mean_combine,
-    null_combine,
     optimize_weights,
     pca_decoder,
     r2z,
@@ -48,14 +38,12 @@ from timecorr.helpers import (
     sum_to_x,
     symmetric,
     timepoint_decoder,
-    tstat_combine,
     vec2mat,
     wcorr,
     weight_corrs,
     weighted_mean,
     weighted_timepoint_decoder,
     weighted_timepoint_decoder_ec,
-    wisfc,
     z2r,
 )
 from timecorr.simulate import *
@@ -119,8 +107,12 @@ class TestFullCoverageHelpers:
         data_b = np.ones((10, 3))  # Constant data
         weights = gaussian_weights(10)
 
-        # This should trigger the exception handling branch
-        result = wcorr(data_a, data_b, weights)
+        # This should trigger the exception handling branch; constant data have
+        # no variance anywhere, which is reported (R-A)
+        with pytest.warns(
+            UserWarning, match="10 of 10 timepoints have zero kernel-weighted variance"
+        ):
+            result = wcorr(data_a, data_b, weights)
         assert result.shape == (3, 3, 10)
 
     def test_simulate_data_edge_cases(self):
@@ -152,151 +144,148 @@ class TestFullCoverageHelpers:
 
     def test_timepoint_decoder(self):
         """Test timepoint_decoder function with actual data."""
-        # Test basic functionality
-        try:
-            accuracy = timepoint_decoder(self.structured_data, nfolds=2, level=0)
-            assert isinstance(accuracy, (int, float, np.number))
-            assert 0 <= accuracy <= 1  # Accuracy should be between 0 and 1
-        except Exception as e:
-            # Some decoder functions may have issues with this data format
-            # Just ensure the function runs without hanging
-            print(f"timepoint_decoder basic test failed: {e}")
+        np.random.seed(0)
+        results = timepoint_decoder(self.structured_data, nfolds=2, level=0)
+        assert isinstance(results, pd.DataFrame)
+        assert results["folds"].tolist() == [0, 1]
+        accuracy = results["accuracy"].mean()
+        assert 0 <= accuracy <= 1
+        # the subjects share a strong signal: decoding is far above chance (1/T)
+        assert accuracy > 3 / self.T
 
         # Test with nfolds=1 (should trigger warning)
-        try:
-            with warnings.catch_warnings(record=True) as w:
-                warnings.simplefilter("always")
-                accuracy_circular = timepoint_decoder(
-                    self.structured_data, nfolds=1, level=0
-                )
-                # Check if warning was issued (if it got this far)
-                if len(w) > 0:
-                    assert "circular" in str(w[0].message)
-        except Exception as e:
-            print(f"timepoint_decoder warning test failed: {e}")
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always")
+            timepoint_decoder(self.structured_data, nfolds=1, level=0)
+            assert len(w) > 0
+            assert "circular" in str(w[0].message)
 
     def test_weighted_timepoint_decoder(self):
         """Test weighted_timepoint_decoder function."""
-        # Skip complex tests for now to focus on coverage
-        try:
-            result = weighted_timepoint_decoder(self.structured_data, nfolds=2, level=0)
-            assert isinstance(result, dict)
-        except Exception as e:
-            print(f"weighted_timepoint_decoder test failed: {e}")
+        np.random.seed(0)
+        result = weighted_timepoint_decoder(self.structured_data, nfolds=2, level=0)
+        assert isinstance(result, pd.DataFrame)
+        assert result["level"].tolist() == [0, 0]
+        # a single level gets all the weight
+        assert np.allclose(result["level_0"], 1)
 
     def test_weighted_timepoint_decoder_ec(self):
         """Test weighted_timepoint_decoder_ec function."""
-        try:
-            result = weighted_timepoint_decoder_ec(
-                self.structured_data, nfolds=2, level=0
-            )
-            assert isinstance(result, dict)
-        except Exception as e:
-            print(f"weighted_timepoint_decoder_ec test failed: {e}")
+        # data are indexed by level: [subjects] for raw data only
+        np.random.seed(0)
+        result = weighted_timepoint_decoder_ec(
+            [self.structured_data], nfolds=2, level=0
+        )
+        assert isinstance(result, pd.DataFrame)
+        assert result["level"].tolist() == [0, 0]
+        assert np.allclose(result["level_0"], 1)
+        with pytest.raises(ValueError, match="indexed by level"):
+            weighted_timepoint_decoder_ec(self.structured_data, nfolds=2, level=0)
 
     def test_folding_levels(self):
         """Test folding_levels function."""
-        # Use simple list data for folding_levels
         in_data = self.multi_data[:2]
         out_data = self.multi_data[2:4]
 
-        try:
-            in_smooth, out_smooth, in_raw, out_raw = folding_levels(
-                in_data,
-                out_data,
-                level=0,
-                cfun=None,
-                weights_fun=gaussian_weights,
-                combine=mean_combine,
-            )
-            assert isinstance(in_smooth, list)
-            assert isinstance(out_smooth, list)
-        except Exception as e:
-            print(f"folding_levels test failed: {e}")
+        in_smooth, out_smooth, in_raw, out_raw = folding_levels(
+            in_data,
+            out_data,
+            level=0,
+            cfun=None,
+            weights_fun=gaussian_weights,
+            combine=mean_combine,
+        )
+        # level 0: each group's kernel-smoothed data, averaged; raw is the input
+        assert isinstance(in_smooth, np.ndarray) and isinstance(out_smooth, np.ndarray)
+        expected = timecorr(in_data, cfun=None, weights_function=gaussian_weights, combine=mean_combine)
+        assert np.allclose(in_smooth, expected)
+        assert in_raw is in_data and out_raw is out_data
 
     def test_folding_levels_ec(self):
         """Test folding_levels_ec function."""
         in_data = self.multi_data[:2]
         out_data = self.multi_data[2:4]
 
-        try:
-            in_smooth, out_smooth, in_raw, out_raw = folding_levels_ec(
-                in_data,
-                out_data,
-                level=0,
-                cfun=None,
-                weights_fun=gaussian_weights,
-                combine=mean_combine,
-            )
-            assert isinstance(in_smooth, list)
-            assert isinstance(out_smooth, list)
-        except Exception as e:
-            print(f"folding_levels_ec test failed: {e}")
+        in_smooth, out_smooth, in_raw, out_raw = folding_levels_ec(
+            in_data,
+            out_data,
+            level=0,
+            cfun=None,
+            weights_fun=gaussian_weights,
+            combine=mean_combine,
+        )
+        assert isinstance(in_smooth, np.ndarray) and isinstance(out_smooth, np.ndarray)
+        assert in_smooth.shape == (self.T, self.K)
+        expected = timecorr(out_data, cfun=None, weights_function=gaussian_weights, combine=mean_combine)
+        assert np.allclose(out_smooth, expected)
+        assert in_raw is in_data and out_raw is out_data
 
     def test_pca_decoder(self):
         """Test pca_decoder function."""
-        try:
-            accuracy = pca_decoder(self.structured_data, nfolds=2, dims=3)
-            assert isinstance(accuracy, (int, float, np.number))
-            assert 0 <= accuracy <= 1
-        except Exception as e:
-            print(f"pca_decoder test failed: {e}")
+        np.random.seed(0)
+        results = pca_decoder(self.structured_data, nfolds=2, dims=3)
+        assert isinstance(results, pd.DataFrame)
+        assert results["dims"].tolist() == [1, 2, 3, 1, 2, 3]
+        accuracy = results["accuracy"].to_numpy()
+        assert np.all((accuracy >= 0) & (accuracy <= 1))
 
     def test_reduce_wrapper(self):
-        """Test reduce_wrapper function."""
-        try:
-            result = reduce_wrapper(self.multi_data[:2], dims=3, rfun="PCA")
-            assert isinstance(result, list)
-        except Exception as e:
-            print(f"reduce_wrapper test failed: {e}")
+        """reduce_wrapper passes level 0 through and reduces both paths jointly above it."""
+        parts = (self.multi_data[0], self.multi_data[1], self.multi_data[:2], self.multi_data[2:4])
+        assert reduce_wrapper(parts, level=0) == parts
+
+        V = [mat2vec(np.corrcoef(np.random.randn(self.K, 30))) for _ in range(self.T)]
+        smooth_in = np.array(V)
+        smooth_out = np.array(V[::-1])
+        raw = [np.array(V)] * 2
+        result = reduce_wrapper(
+            (smooth_in, smooth_out, raw, raw), level=1, rfun=[None, "PCA"]
+        )
+        joint = reduce([smooth_in, smooth_out], rfun="PCA")
+        assert len(result) == 4
+        assert np.allclose(result[0], joint[0]) and np.allclose(result[1], joint[1])
+        # Ruling R-R: each group's raw entries come back in the structure they
+        # were given (here a list of two (T, K(K+1)/2) arrays), reduced to K
+        assert isinstance(result[2], list) and len(result[2]) == 2
+        assert all(r.shape == (self.T, self.K) for r in result[2])
 
     def test_optimization_functions(self):
         """Test optimization-related functions."""
-        # Create test correlation data
         corrs = [np.random.randn(10, 15) for _ in range(3)]
-
-        try:
-            # Test optimize_weights
-            result = optimize_weights(corrs)
-            assert isinstance(result, dict)
-        except Exception as e:
-            print(f"optimize_weights test failed: {e}")
+        result = optimize_weights(corrs)
+        assert isinstance(result, np.ndarray) and result.shape == (3,)
+        assert np.all(np.isfinite(result))
+        assert np.all(result >= -1e-12) and np.isclose(result.sum(), 1)
 
     def test_utility_functions(self):
         """Test utility functions for edge cases."""
-        try:
-            # Test sum_to_x
-            result = sum_to_x(3, 1.0)
-            assert len(result) == 3
-            assert np.isclose(np.sum(result), 1.0)
-        except Exception as e:
-            print(f"sum_to_x test failed: {e}")
+        result = sum_to_x(3, 1.0)
+        assert len(result) == 3
+        assert np.isclose(np.sum(result), 1.0)
+        assert np.all(result >= 0)
 
-        try:
-            # Test calculate_error
-            mu = np.array([0.3, 0.4, 0.3])
-            corrs = [np.random.randn(10, 15) for _ in range(3)]
-            error = calculate_error(mu, corrs)
-            assert isinstance(error, (int, float, np.number))
-        except Exception as e:
-            print(f"calculate_error test failed: {e}")
+        mu = np.array([0.3, 0.4, 0.3])
+        corrs = [np.random.randn(10, 15) for _ in range(3)]
+        error = calculate_error(mu, corrs)
+        assert isinstance(error, np.ndarray) and error.shape == (1,)
+        assert np.allclose(error, decoder(weight_corrs(corrs, mu))["error"].values)
 
-        try:
-            # Test weight_corrs
-            mu = np.array([0.3, 0.4, 0.3])
-            corrs = [np.random.randn(10, 15) for _ in range(3)]
-            weighted = weight_corrs(corrs, mu)
-            assert isinstance(weighted, np.ndarray)
-        except Exception as e:
-            print(f"weight_corrs test failed: {e}")
+        weighted = weight_corrs(corrs, mu)
+        assert isinstance(weighted, np.ndarray) and weighted.shape == (10, 15)
+        # Fisher-z weighted mean of the inputs, clipped to +-(1 - 1e-7) first as
+        # in optimize_weights (Ruling R-C)
+        clip = 1 - 1e-7
+        assert np.allclose(
+            weighted, z2r(sum(m * r2z(np.clip(c, -clip, clip)) for m, c in zip(mu, corrs)))
+        )
 
-        try:
-            # Test decoder
-            corr_matrix = np.random.randn(10, 15)
-            decoder_result = decoder(corr_matrix)
-            assert isinstance(decoder_result, (int, float, np.number))
-        except Exception as e:
-            print(f"decoder test failed: {e}")
+        corr_matrix = np.eye(10)
+        decoder_result = decoder(corr_matrix)
+        assert isinstance(decoder_result, pd.DataFrame)
+        # the identity decodes every timepoint exactly
+        assert decoder_result["accuracy"].iloc[0] == 1
+        assert decoder_result["error"].iloc[0] == 0
+        assert decoder_result["rank"].iloc[0] == 1
 
     def test_weighted_mean_edge_cases(self):
         """Test weighted_mean with various edge cases."""
@@ -325,33 +314,25 @@ class TestFullCoverageHelpers:
     def test_smooth_function_edge_cases(self):
         """Test smooth function with edge cases."""
         w = np.random.randn(15, 6)
+        # any kernel function works with its own default parameters
+        result_gauss = smooth(w, kernel_fun=gaussian_weights)
+        assert result_gauss.shape == w.shape
+        assert np.allclose(
+            result_gauss, smooth(w, kernel_fun=gaussian_weights, kernel_params=gaussian_params)
+        )
 
-        try:
-            # Test with different kernel functions
-            result_gauss = smooth(w, kernel_fun=gaussian_weights)
-            assert result_gauss.shape == w.shape
-        except Exception as e:
-            print(f"smooth gaussian test failed: {e}")
-
-        try:
-            # Test with list input
-            w_list = [np.random.randn(12, 4) for _ in range(2)]
-            result_list = smooth(w_list, windowsize=8)
-            assert isinstance(result_list, list)
-        except Exception as e:
-            print(f"smooth list test failed: {e}")
+        w_list = [np.random.randn(12, 4) for _ in range(2)]
+        result_list = smooth(w_list, windowsize=8)
+        assert isinstance(result_list, list) and len(result_list) == 2
+        assert np.allclose(result_list[1], smooth(w_list[1], windowsize=8))
 
     def test_parameter_validation(self):
         """Test parameter validation and type checking."""
-        # Simple parameter validation that should work
-        try:
-            # Test get_xval_assignments
-            assignments = get_xval_assignments(10, 3)
-            assert len(assignments) == 10
-            assert max(assignments) < 3
-        except Exception as e:
-            print(f"get_xval_assignments test failed: {e}")
-
+        assignments = get_xval_assignments(10, 3)
+        assert len(assignments) == 10
+        assert max(assignments) < 3
+        # balanced groups (sizes differ by at most one): 4, 3 and 3
+        assert sorted(np.bincount(assignments.astype(int)).tolist()) == [3, 3, 4]
 
 class TestFullCoverageNumericalCorrectness:
     """Test numerical correctness of basic utility functions."""

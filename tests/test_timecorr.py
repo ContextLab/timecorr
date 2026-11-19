@@ -4,6 +4,7 @@ import hypertools as hyp
 import matplotlib
 import numpy as np
 import pandas as pd
+import pytest
 
 matplotlib.use("Agg")  # Use non-interactive backend
 
@@ -30,12 +31,15 @@ laplace = {"name": "Laplace", "weights": tc.laplace_weights, "params": {"scale":
 
 
 def test_reduce_shape():
-    dyna_corrs_reduced_1 = timecorr(
-        sim_1,
-        rfun="PCA",
-        weights_function=laplace["weights"],
-        weights_params=laplace["params"],
-    )
+    # one subject, T=30 samples, K=50 columns requested: 20 are zero padding,
+    # which is reported (Ruling R-U)
+    with pytest.warns(UserWarning, match="padded with 20 zero columns"):
+        dyna_corrs_reduced_1 = timecorr(
+            sim_1,
+            rfun="PCA",
+            weights_function=laplace["weights"],
+            weights_params=laplace["params"],
+        )
 
     dyna_corrs_reduced_3 = timecorr(
         sim_3,
@@ -72,25 +76,27 @@ def test_include_timepoints_all():
 
 
 def test_include_timepoints_pre():
-    dyna_corrs_reduced_3 = timecorr(
-        sim_3,
-        rfun="PCA",
-        weights_function=laplace["weights"],
-        weights_params=laplace["params"],
-        include_timepoints="pre",
-    )
+    with pytest.warns(UserWarning, match="fewer than 3 non-zero kernel weights"):
+        dyna_corrs_reduced_3 = timecorr(
+            sim_3,
+            rfun="PCA",
+            weights_function=laplace["weights"],
+            weights_params=laplace["params"],
+            include_timepoints="pre",
+        )
 
     assert np.shape(dyna_corrs_reduced_3) == np.shape(sim_3)
 
 
 def test_include_timepoints_post():
-    dyna_corrs_reduced_3 = timecorr(
-        sim_3,
-        rfun="PCA",
-        weights_function=laplace["weights"],
-        weights_params=laplace["params"],
-        include_timepoints="post",
-    )
+    with pytest.warns(UserWarning, match="fewer than 3 non-zero kernel weights"):
+        dyna_corrs_reduced_3 = timecorr(
+            sim_3,
+            rfun="PCA",
+            weights_function=laplace["weights"],
+            weights_params=laplace["params"],
+            include_timepoints="post",
+        )
 
     assert np.shape(dyna_corrs_reduced_3) == np.shape(sim_3)
 
@@ -153,11 +159,75 @@ def test_timecorr():
 
 # unsure how to test 'across' mode
 
-corrs = timecorr(
-    numpy_array,
-    weights_function=gaussian_weights,
-    weights_params=gaussian_params,
-    cfun=isfc,
-)
-# assert()
+def test_two_timepoint_input_warns_and_returns_zeros():
+    # Every timepoint has fewer than 3 non-zero kernel weights, so the
+    # correlations are undefined: one warning, and zeros in their place.
+    with pytest.warns(UserWarning, match="fewer than 3 non-zero kernel weights"):
+        corrs = timecorr(
+            numpy_array,
+            weights_function=gaussian_weights,
+            weights_params=gaussian_params,
+            cfun=isfc,
+        )
+    assert corrs.shape == (2, 3)
+    assert np.array_equal(corrs, np.zeros((2, 3)))
+
+
 # assert len(corrs.get_time_data()[0]) == len(numpy_array)
+
+
+# ------------------------------------------- smoothing path (cfun=None)
+
+
+def _impulse(T=40, K=2, at=20):
+    x = np.zeros((T, K))
+    x[at, :] = 1.0
+    return x
+
+
+def test_smoothing_path_is_kernel_weighted_mean_of_rows():
+    """cfun=None gives sum_j |w[t, j]| x[j] / sum_j |w[t, j]| with the full kernel."""
+    rng = np.random.RandomState(0)
+    x = rng.randn(40, 3)
+    w = tc.gaussian_weights(40, {"var": 9})
+    out = tc.timecorr(x, cfun=None, weights_function=tc.gaussian_weights, weights_params={"var": 9})
+    expected = (w @ x) / w.sum(axis=1, keepdims=True)
+    assert isinstance(out, np.ndarray)
+    assert np.allclose(out, expected, atol=1e-12, rtol=0)
+
+
+def test_smoothing_path_respects_include_timepoints():
+    x = _impulse()
+    back = tc.timecorr(x, cfun=None, weights_params={"var": 9}, include_timepoints="backward")
+    fwd = tc.timecorr(x, cfun=None, weights_params={"var": 9}, include_timepoints="forward")
+    assert np.allclose(back[:20], 0) and np.all(back[20:] > 0)
+    assert np.allclose(fwd[21:], 0) and np.all(fwd[:21] > 0)
+
+
+def test_smoothing_path_respects_include_zero_and_exclude_timepoints():
+    x = _impulse()
+    no_zero = tc.timecorr(x, cfun=None, weights_params={"var": 9}, include_zero=False)
+    assert np.allclose(no_zero[20], 0) and np.all(no_zero[19] > 0)
+    near = tc.timecorr(x, cfun=None, weights_params={"var": 9}, exclude_timepoints=3)
+    assert np.allclose(near[:17], 0) and np.allclose(near[24:], 0) and np.all(near[17:24] > 0)
+
+
+def test_smoothing_path_list_input_returns_arrays():
+    """List input with null_combine crashed on list.tolist()."""
+    rng = np.random.RandomState(1)
+    data = [rng.randn(30, 3) for _ in range(2)]
+    out = tc.timecorr(data, cfun=None, weights_params={"var": 9})
+    assert isinstance(out, list) and len(out) == 2
+    assert all(isinstance(o, np.ndarray) and o.shape == (30, 3) for o in out)
+    single = tc.timecorr(data[0], cfun=None, weights_params={"var": 9})
+    assert np.allclose(out[0], single)
+
+
+def test_empty_list_raises_a_clear_value_error():
+    # R-J (M13): it raised IndexError
+    import timecorr as tc
+
+    with pytest.raises(ValueError, match="at least one subject"):
+        timecorr([])
+    with pytest.raises(ValueError, match="at least one subject"):
+        tc.features([])

@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 from .helpers import (
     autofc,
@@ -21,6 +21,7 @@ from .helpers import (
     mean_combine,
     mexican_hat_params,
     mexican_hat_weights,
+    one_sided,
     null_combine,
     reduce,
     smooth,
@@ -35,5 +36,16 @@ from .helpers import (
     weighted_timepoint_decoder,
     wisfc,
 )
-from .simulate import simulate_data
+from .events import segment
+from .higher_order import features
+from .summaries import Communities, WeightedStrength
+from .simulate import (
+    carrier_columns,
+    carrier_reducer,
+    min_features,
+    nested_template,
+    simulate_data,
+    simulate_multi_order,
+    simulate_nested,
+)
 from .timecorr import timecorr

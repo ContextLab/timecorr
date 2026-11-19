@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-=============================
+==============================
 Calculate dynamic correlations
-=============================
+==============================
 
-In this example, we calculate dynamic correlations
+In this example, we simulate data whose correlations change over time, compute
+their dynamic correlations with ``timecorr``, and compare the estimates with the
+true correlations.
 
 """
 # Code source: Lucy Owen
@@ -12,7 +14,6 @@ In this example, we calculate dynamic correlations
 
 import numpy as np
 
-# load timecorr and other packages
 import timecorr as tc
 
 S = 1
@@ -20,21 +21,27 @@ T = 1000
 K = 10
 B = 5
 
-# define your weights parameters
+# simulate data whose correlation matrix ramps from one matrix to another;
+# corrs holds the true correlation matrix of each timepoint (vectorized)
+data, corrs = tc.simulate_data(
+    datagen="ramping", return_corrs=True, set_random_seed=1, S=S, T=T, K=K, B=B
+)
+
+# define the kernel
 width = 100
 laplace = {"name": "Laplace", "weights": tc.laplace_weights, "params": {"scale": width}}
 
-# calculate the dynamic correlation of the two datasets
-
-subs_data_2 = tc.simulate_data(
-    datagen="ramping", return_corrs=False, set_random_seed=1, S=S, T=T, K=K, B=B
+# one vectorized K x K correlation matrix per timepoint: shape (T, K(K+1)/2)
+estimated = tc.timecorr(
+    data, weights_function=laplace["weights"], weights_params=laplace["params"]
 )
+print(f"data: {data.shape}, estimated correlations: {estimated.shape}")
 
-subs_data_1 = tc.simulate_data(
-    datagen="ramping", return_corrs=False, set_random_seed=2, S=S, T=T, K=K, B=B
-)
+# compare the off-diagonal entries (the first K columns are the diagonal)
+r = np.corrcoef(estimated[:, K:].ravel(), corrs[:, K:].ravel())[0, 1]
+print(f"correlation between estimated and true correlations: {r:.2f}")
 
-
-wcorred_data = tc.wcorr(
-    np.array(subs_data_1), np.array(subs_data_2), weights=laplace["weights"](T)
-)
+# the same estimate from the estimator itself: wcorr returns (K, K, T)
+w = laplace["weights"](T, laplace["params"])
+direct = tc.wcorr(data, data, w)
+print(f"wcorr output: {direct.shape}, same values: {np.allclose(tc.vec2mat(estimated), direct)}")

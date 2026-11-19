@@ -11,8 +11,8 @@ Welcome to timecorr
 The timecorr toolbox computes and explores the correlational structure of
 timeseries data. It estimates how correlations between features change from
 moment to moment (dynamic correlations), and it computes higher-order dynamic
-correlations: correlations between the moment-by-moment co-fluctuations of
-lower-order features. The toolbox accompanies Owen, Chang & Manning (2021),
+correlations: dynamic correlations of features derived from lower-order
+dynamic correlations. The toolbox accompanies Owen, Chang & Manning (2021),
 *Nature Communications* 12, 5728 (`doi:10.1038/s41467-021-25876-x
 <https://doi.org/10.1038/s41467-021-25876-x>`_).
 
@@ -63,9 +63,17 @@ Several subjects and higher orders
                        weights_params={"var": 10})
    print(group.shape)  # (100, 15)
 
-   # features of orders 0 to 3, each reduced to 5 features per subject
-   X = tc.features(subjects, order=3, weights_params={"var": 10})
+   # features of orders 0 to 3 with the original two-path pipeline of the paper
+   # (co-fluctuations feed the next order), each reduced to 5 features per subject
+   X = tc.features(subjects, order=3, weights_params={"var": 10},
+                   rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
    print(len(X), X[3][0].shape)  # 4 (100, 5)
+
+   # the defaults: a Gaussian kernel and squared-correlation summaries on the
+   # path that feeds the next order (108 nodes in 18 modules)
+   nested, truth = tc.simulate_nested(S=2, T=1000, set_random_seed=0)
+   X = tc.features(nested, order=2, cfun=tc.autofc, weights_params={"var": 33 ** 2})
+   print(X[1][0].shape, X[2][0].shape)  # (1000, 108) (1000, 36)
 
 Installation
 ------------

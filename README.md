@@ -1,6 +1,6 @@
 # Overview
 
-The timecorr toolbox computes and explores the correlational structure of timeseries data. It estimates how correlations between features change from moment to moment (**dynamic correlations**), and it computes **higher-order** dynamic correlations: correlations between the moment-by-moment co-fluctuations of lower-order features.
+The timecorr toolbox computes and explores the correlational structure of timeseries data. It estimates how correlations between features change from moment to moment (**dynamic correlations**), and it computes **higher-order** dynamic correlations: dynamic correlations of features derived from lower-order dynamic correlations.
 
 The toolbox accompanies Owen, Chang & Manning (2021), *Nature Communications* 12, 5728 ([doi:10.1038/s41467-021-25876-x](https://doi.org/10.1038/s41467-021-25876-x)). Version 0.3.0 changed the correlation estimator, so its numbers differ from version 0.2.0 and from Eq. 4 of the paper; see [CHANGELOG.md](https://github.com/ContextLab/timecorr/blob/master/CHANGELOG.md). Tutorials, examples and the API reference are on [Read the Docs](https://timecorr.readthedocs.io/en/latest/).
 
@@ -8,7 +8,7 @@ The toolbox accompanies Owen, Chang & Manning (2021), *Nature Communications* 12
 
 - **Dynamic correlations** (`tc.timecorr`): kernel-weighted correlations at every timepoint, within one dataset or across subjects (inter-subject functional connectivity, ISFC).
 - **Kernels**: Gaussian, Laplace, Mexican hat, t, boxcar, uniform and delta (`eye_weights`), each two-sided or one-sided (only past or only future timepoints, with or without the timepoint itself).
-- **Higher-order features** (`tc.features`): features of every order up to a chosen order, computed through the two paths of Fig. 10 of the paper, with optional dimensionality reduction at each order.
+- **Higher-order features** (`tc.features`): features of every order up to a chosen order, computed through the two paths of Fig. 10 of the paper (an analysis path and a path that feeds the next order), with a reducer on each path at each order. By default the path that feeds the next order uses a Gaussian kernel and a summary of squared correlations by community; the original pipeline of the paper (co-fluctuations and PCA) is selected with three arguments.
 - **Dimensionality reduction**: hypertools / scikit-learn models (PCA, FastICA, factor analysis and others), graph measures (eigenvector centrality, PageRank centrality, strength), or your own function.
 - **Event-restricted kernels** (`events=` in `tc.timecorr` and `tc.features`, and `tc.segment`): confine the kernel to blocks of consecutive timepoints (events), given as boundary indices or found by segmenting a separate timeseries (for example a stimulus embedding) with a hidden Markov model; events may differ per subject and, in `tc.features` and the correlation decoders, per order.
 - **Simulation** (`tc.simulate_data`): data with known dynamic correlations, including structure embedded at exactly one chosen correlation order.
@@ -51,11 +51,23 @@ print(group.shape)  # (100, 15)
 ## Higher-order features
 
 ```python
-X = tc.features(subjects, order=3, weights_params={"var": 10})
+# 108 nodes in 18 modules in 6 supergroups, 2 subjects
+nested, truth = tc.simulate_nested(S=2, T=1000, set_random_seed=0)
+X = tc.features(nested, order=2, cfun=tc.autofc, weights_params={"var": 33 ** 2})
+print(len(X), X[1][0].shape, X[2][0].shape)  # 3 (1000, 108) (1000, 36)
+```
+
+`X[0]` is the data and `X[k]` holds the order-`k` features of each subject. Each order has two paths: the analysis path gives `X[k]`, and the path that feeds the next order (the feeding path, named `delta_*` in the arguments for historical reasons) gives the input of order `k + 1`. With the defaults, `X[1]` is the dynamic correlations of the data reduced with PCA, fit jointly across subjects, to as many features as the data have; the feeding path computes each subject's correlations with a Gaussian kernel (standard deviation 5 samples) and summarizes them with `tc.Communities()` (here 18 communities, one column each); `X[2]` is the dynamic correlations of those columns, summarized with `tc.WeightedStrength(signed=True)` (two columns per input column). The default feeding path needs at least 4 features and 40 timepoints; `delta_rfun="weighted_strength"` (one column per feature) takes any number.
+
+```python
+# the original two-path pipeline of the paper: co-fluctuations feed the next order,
+# PCA on both paths
+X = tc.features(subjects, order=3, weights_params={"var": 10},
+                rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
 print(len(X), X[3][0].shape)  # 4 (100, 5): orders 0-3, each reduced (PCA) to 5 features
 ```
 
-`X[0]` is the data and `X[k]` holds the order-`k` features of each subject. At each order the analysis kernel is applied to the previous order's co-fluctuations (computed with a delta kernel), so every order is blurred by the kernel once. By default the features of each order are reduced with PCA, fit jointly across subjects, to as many features as the data have; `rfun=None` keeps every correlation (the number of features then grows from `K` to `K(K+1)/2` at each order, and `tc.features` raises `MemoryError` before a step whose estimated peak memory, for all subjects together, exceeds `max_memory_gb`, 4 GB by default).
+In the original pipeline the analysis kernel is applied to the previous order's co-fluctuations (computed with a delta kernel, `eye_weights`), so every order is blurred by the kernel once, and the features of each order are reduced with PCA. `rfun=None` keeps every correlation (with `delta_rfun=None` on both paths; the number of features then grows from `K` to `K(K+1)/2` at each order, and `tc.features` raises `MemoryError` before a step whose estimated peak memory, for all subjects together, exceeds `max_memory_gb`, 4 GB by default).
 
 ## One-sided kernels
 
@@ -87,18 +99,17 @@ print(round(r, 2))  # 0.9
 ## Squared-correlation summaries and the feeding kernel
 
 ```python
-# 108 nodes in 18 modules in 6 supergroups; the subjects share only the order-2 signal h
-data, truth = tc.simulate_nested(S=2, T=1000, set_random_seed=0)
+# the subjects of simulate_nested share only the order-2 signal h
 comm = tc.Communities()  # number of communities set by a shift null
-X = tc.features(data, order=2, cfun=tc.autofc, weights_params={"var": 33 ** 2},
-                rfun="auto",           # PCA at order 1, WeightedStrength(signed=True) at order 2
-                delta_rfun=comm,       # "auto" gives a new Communities()
-                delta_weights_function=tc.gaussian_weights,  # kernel of the path feeding order 2
+X = tc.features(nested, order=2, cfun=tc.autofc, weights_params={"var": 33 ** 2},
+                rfun="auto",           # the default: PCA at order 1, WeightedStrength(signed=True) above
+                delta_rfun=comm,       # the default "auto" gives a new Communities() per order
+                delta_weights_function=tc.gaussian_weights,  # the default kernel of the feeding path
                 delta_weights_params={"var": 25})
 print(comm.fits_[0]["n"], X[2][0].shape)  # 18 (1000, 36)
 ```
 
-`tc.WeightedStrength` and `tc.Communities` summarize each subject's correlations by weighted sums of squared correlations per node or by the mean squared correlation within each community of nodes; they are accepted wherever `rfun` is. `delta_weights_function` and `delta_weights_params` set the kernel of the path that feeds the next order (default `eye_weights`, co-fluctuations). The defaults of `tc.features` are unchanged. In the gallery example `plot_nested_recovery.py` (this call, seed 0), a ridge map from subject A's order-2 features to `h`, applied to subject B, gives a mean correlation of 0.74 with `h` over the 6 supergroups (a raw score for one seed; over 24 seeds in `tests/test_nested_recovery.py` the score is .753 +- .019, mean +- standard error, with a control of -.025 +- .018 from subjects with an independent `h`). A step reduced by a summary (with `cfun` `autofc`, `isfc` or `wisfc` and `combine=tc.null_combine`) is computed in blocks of nodes; memory is bounded only when every step uses a summary, since the default order-1 reducer (PCA) holds `K(K+1)/2` columns per subject; with `rfun=tc.WeightedStrength(signed=True)` the order-1 step is also computed in blocks.
+This call gives the same features as the default call above; passing a `tc.Communities` object makes its fit readable in `fits_`. `tc.WeightedStrength` and `tc.Communities` summarize each subject's correlations by weighted sums of squared correlations per node or by the mean squared correlation within each community of nodes; they are accepted wherever `rfun` is. `delta_weights_function` and `delta_weights_params` set the kernel of the feeding path (default: `gaussian_weights` with variance 25; `eye_weights` gives co-fluctuations). In the gallery example `plot_nested_recovery.py` (this call, seed 0), a ridge map from subject A's order-2 features to `h`, applied to subject B, gives a mean correlation of 0.74 with `h` over the 6 supergroups (a raw score for one seed; over 24 seeds in `tests/test_nested_recovery.py` the score is .753 +- .019, mean +- standard error, with a control of -.025 +- .018 from subjects with an independent `h`). A step reduced by a summary (with `cfun` `autofc`, `isfc` or `wisfc` and `combine=tc.null_combine`) is computed in blocks of nodes; memory is bounded only when every step uses a summary, since the default order-1 reducer (PCA) holds `K(K+1)/2` columns per subject; with `rfun=tc.WeightedStrength(signed=True)` the order-1 step is also computed in blocks.
 
 # Usage
 
@@ -106,7 +117,7 @@ print(comm.fits_[0]["n"], X[2][0].shape)  # 18 (1000, 36)
 
 - One dataset: a numpy array, pandas DataFrame or polars DataFrame of shape `(timepoints, features)`.
 - Several datasets (for example one per subject): a list of such matrices, all with the same shape.
-- Inputs are converted to float arrays and never modified. NaN samples carry no weight in correlations. In `tc.features` this holds at every order when the delta path is unreduced (`delta_rfun=None`) or reduced by a callable; before a model-based reducer (such as the default PCA) or a graph measure, the co-fluctuations of NaN samples are set to 0 and a warning says that NaN handling is approximate from order 2 on.
+- Inputs are converted to float arrays and never modified. NaN samples carry no weight in correlations. In `tc.features` with the default feeding kernel, NaN samples are left out pairwise and the features passed to the next order are finite. With `eye_weights` as the feeding kernel, this holds at every order when the delta path is unreduced (`delta_rfun=None` with `rfun=None`) or reduced by a callable; before a model-based reducer (such as PCA) or a graph measure, the co-fluctuations of NaN samples are set to 0 and a warning says that NaN handling is approximate from order 2 on.
 
 ## Kernels (`weights_function`, `weights_params`)
 
@@ -157,7 +168,7 @@ The tutorials are Jupyter notebooks in `docs/tutorial/`, also rendered on Read t
 
 - **Using timecorr** (`timecorr_notebook.ipynb`): simulation, kernels, the vectorized format, several subjects.
 - **Synthetic data** (`synthetic_data_tutorial.ipynb`): the simulated dataset types, kernel shape and width compared against the true correlations, co-fluctuations from the delta kernel, several subjects, and a per-timepoint test across subjects.
-- **Higher-order correlations** (`higher_order_tutorial.ipynb`): the two paths of Fig. 10, `tc.features`, one-sided kernels, simulation and recovery at a chosen order, and the limits (feature counts, memory, variance-based reduction).
+- **Higher-order correlations** (`higher_order_tutorial.ipynb`): the two paths of Fig. 10 (the original pipeline, with co-fluctuations), `tc.features`, one-sided kernels, simulation and recovery at a chosen order, the limits (feature counts, memory, variance-based reduction), and the defaults of `tc.features` (Gaussian feeding kernel, squared-correlation summaries) on `simulate_nested` data.
 - **Event-restricted kernels** (`event_kernels_tutorial.ipynb`): what restricting a kernel to events does, passing boundaries, segmenting synthetic stimulus embeddings with `tc.segment` (ordered events and recurring states), recovery of block-wise correlations compared with the unrestricted kernel and with wrong boundaries, per-subject events, events per order in `tc.features`, and events in the decoders.
 - **Applications** (`applications_tutorial.ipynb`): dynamic correlations in simulated neuroscience, finance, climate and social-network data.
 
@@ -244,7 +255,7 @@ pytest --doctest-modules timecorr/
 # Memory and run time
 
 - `timecorr` builds a `T x T` kernel and a `K x K x T` array of correlations for each subject, so memory grows with `T**2` and with `K**2 * T`.
-- Without reduction, the number of features grows from `K` to `K(K+1)/2` at every order. `tc.features(..., rfun=None)` estimates the memory of each step and raises `MemoryError` before allocating more than `max_memory_gb` (default 4 GB); the message gives the largest number of features that fits. `timecorr.higher_order.estimate_memory_gb(K, order, T, n_subjects)` returns the estimates (in GB, for all subjects together).
+- Without reduction, the number of features grows from `K` to `K(K+1)/2` at every order. `tc.features(..., rfun=None, delta_rfun=None)` estimates the memory of each step and raises `MemoryError` before allocating more than `max_memory_gb` (default 4 GB); the message gives the largest number of features that fits. `timecorr.higher_order.estimate_memory_gb(K, order, T, n_subjects)` returns the estimates (in GB, for all subjects together; with `delta_weights_function=tc.eye_weights` for the original pipeline, whose delta path has no block temporaries).
 - Dimensionality reduction (`rfun`, `delta_rfun`) keeps the number of features fixed at each order.
 
 # Getting Help

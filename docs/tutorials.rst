@@ -37,11 +37,14 @@ Higher-order correlations
 -------------------------
 
 ``higher_order_tutorial.ipynb``: the two paths of Fig. 10 of Owen, Chang &
-Manning (2021) and ``tc.features``; one-sided kernels; simulating data whose
+Manning (2021) and ``tc.features`` with the original pipeline's settings
+(co-fluctuations on the path that feeds the next order); one-sided kernels; simulating data whose
 structure exists only at a chosen order and recovering it; and the limits of the
 approach (the number of features an order needs, the memory of unreduced runs,
 and how much of the structure variance-based reduction keeps at orders 2 and 3,
-as measured there).
+as measured there); and the defaults of ``tc.features`` (a Gaussian kernel and
+squared-correlation summaries on the path that feeds the next order) on
+``simulate_nested`` data.
 
 Event-restricted kernels
 ------------------------

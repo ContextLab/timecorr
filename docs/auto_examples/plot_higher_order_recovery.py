@@ -16,7 +16,10 @@ the estimated 4 x 4 correlation matrix among the blocks' (first) carriers
 against the template: the Pearson correlation between estimated and true
 off-diagonal entries, pooled over entries and timepoints. ``carrier_reducer``
 keeps, at each order, only the products that carry the simulated structure,
-so the cost stays small at every order.
+so the cost stays small at every order.  The carriers are products of
+co-fluctuations, so the calls use the delta-path kernel of the original
+two-path pipeline (``delta_weights_function=tc.eye_weights``) rather than the
+default Gaussian kernel.
 
 The recovery is high at the embedded order and near zero below it.
 
@@ -39,6 +42,7 @@ kernel = {
     "weights_function": tc.gaussian_weights,
     "weights_params": {"var": 625},  # standard deviation of 25 timepoints
     "cfun": tc.autofc,
+    "delta_weights_function": tc.eye_weights,  # the original pipeline's delta path
 }
 
 
@@ -72,7 +76,7 @@ for s, seed in enumerate(seeds):
             )
         if n == 1:
             corrs, blocks = truth, np.arange(p)[:, np.newaxis]
-            X = tc.features(data, order=1, rfun=None, **kernel)
+            X = tc.features(data, order=1, rfun=None, delta_rfun=None, **kernel)
         else:
             corrs, blocks = truth["corrs"], truth["blocks"]
             X = tc.features(

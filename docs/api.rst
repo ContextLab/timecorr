@@ -55,9 +55,16 @@ Higher-order features
    features
 
 ``features`` computes features of every order through the two paths of Fig. 10
-of Owen, Chang & Manning (2021): at each order the analysis kernel is applied to
-the previous order's delta features (co-fluctuations), and a delta kernel gives
-the co-fluctuations passed to the next order.
+of Owen, Chang & Manning (2021): at each order the analysis path applies the
+analysis kernel to the previous order's feeding features, and the feeding path
+(named ``delta_*`` in the arguments for historical reasons) gives the features
+passed to the next order. With the defaults the feeding path computes each
+subject's correlations with a Gaussian kernel of variance 25 (standard
+deviation 5 samples) and summarizes them with ``Communities()``; the analysis
+path is reduced with PCA at order 1 and with ``WeightedStrength(signed=True)``
+at orders 2 and above. In the original pipeline of the paper a delta kernel
+(``eye_weights``) gives the co-fluctuations passed to the next order and PCA
+reduces both paths.
 
 .. currentmodule:: timecorr.higher_order
 
@@ -72,30 +79,30 @@ The building blocks are in ``timecorr.higher_order``:
 
 .. code-block:: python
 
-   X = tc.features(subjects, order=2, weights_params={"var": 10})
+   data, truth = tc.simulate_nested(S=2, T=1000, set_random_seed=0)
+   X = tc.features(data, order=2, cfun=tc.autofc, weights_params={"var": 33 ** 2})
+   # X[1]: one (1000, 108) array per subject (PCA-reduced);
+   # X[2]: one (1000, 2 * c) array per subject, c = number of communities (18 here)
+
+   # the original two-path pipeline
+   X = tc.features(subjects, order=2, weights_params={"var": 10},
+                   rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
    # X[0]: the data; X[1], X[2]: one (100, 5) array per subject (PCA-reduced)
 
 The keyword-only arguments ``delta_weights_function`` and
-``delta_weights_params`` set the kernel of the delta (feeding) path; with a
-kernel other than ``eye_weights`` the features passed to the next order are
-kernel-weighted correlations (``autofc``) instead of co-fluctuations.
-``rfun`` and ``delta_rfun`` accept ``"auto"`` (analysis path: PCA at order 1
-and ``WeightedStrength(signed=True)`` above; delta path: ``"communities"``,
+``delta_weights_params`` set the kernel of the feeding path (default:
+``gaussian_weights`` with ``{"var": 25}``); ``eye_weights`` gives
+co-fluctuations, and any other kernel gives kernel-weighted correlations
+(``autofc``), shaped by ``include_timepoints``, ``include_zero`` and the
+events of each order like the analysis kernel. ``rfun`` and ``delta_rfun``
+accept ``"auto"`` (the defaults; analysis path: PCA at order 1 and
+``WeightedStrength(signed=True)`` above; feeding path: ``Communities()``,
 with the number of communities set by a shift null) and dicts keyed by order.
-Steps reduced by a summary (with ``null_combine`` and ``cfun`` ``autofc``,
-``isfc`` or ``wisfc``) are computed in blocks of nodes, without holding the
-``(K, K, T)`` correlation array. The defaults are unchanged; this call uses
-the Gaussian feeding kernel and the summaries:
-
-.. code-block:: python
-
-   data, truth = tc.simulate_nested(S=2, T=1000, set_random_seed=0)
-   X = tc.features(data, order=2, cfun=tc.autofc,
-                   weights_params={"var": 33 ** 2},
-                   rfun="auto", delta_rfun="auto",
-                   delta_weights_function=tc.gaussian_weights,
-                   delta_weights_params={"var": 25})
-   # X[2]: one (1000, 2 * c) array per subject, c = number of communities
+The default feeding reducer needs at least 4 features and 40 timepoints;
+``delta_rfun="weighted_strength"`` takes any number. Steps reduced by a
+summary (with ``null_combine`` and ``cfun`` ``autofc``, ``isfc`` or
+``wisfc``) are computed in blocks of nodes, without holding the ``(K, K, T)``
+correlation array.
 
 .. currentmodule:: timecorr
 

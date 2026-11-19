@@ -12,12 +12,15 @@ correlations among the modules' time-varying couplings: an order-2 signal.
 The two subjects share only ``h``; their modules' couplings, signs and noise
 are private.
 
-``tc.features(order=2)`` is called with a Gaussian kernel on the path that
-feeds order 2 (``delta_weights_function``) and the squared-correlation
-summaries: at order 1 the delta path is summarized by ``"communities"``
+``tc.features(order=2)`` is called with its defaults: a Gaussian kernel with
+a standard deviation of 5 timepoints on the path that feeds order 2 (the
+delta path, also called the feeding path) and the squared-correlation
+summaries: at order 1 the delta path is summarized by ``Communities()``
 (communities found from the subjects' squared correlations, with their
 number set by a shift null), and at order 2 the analysis path by
-``WeightedStrength(signed=True)``.
+``WeightedStrength(signed=True)``.  A ``Communities`` object is passed as
+``delta_rfun`` only to read its fit; the default ``delta_rfun="auto"``
+creates the same summary.
 
 A ridge map from subject A's order-2 features to ``h`` (every 10th timepoint,
 z-scored columns, penalty equal to the mean eigenvalue of the Gram matrix) is
@@ -52,10 +55,7 @@ with warnings.catch_warnings():
         order=2,
         cfun=tc.autofc,
         weights_params={"var": sd**2},
-        rfun="auto",  # PCA at order 1, WeightedStrength(signed=True) at order 2
-        delta_rfun=communities,
-        delta_weights_function=tc.gaussian_weights,
-        delta_weights_params={"var": 25},
+        delta_rfun=communities,  # the default, Communities(), kept to read its fit
     )
 labels = communities.fits_[0]["labels"]
 print("communities found at order 1:", communities.fits_[0]["n"])

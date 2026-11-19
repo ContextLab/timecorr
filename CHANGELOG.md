@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Changed defaults of the higher-order pipeline (`features`,
+  `two_path_step`).** The defaults are `rfun="auto"` (PCA at order 1,
+  `WeightedStrength(signed=True)` at orders 2 and above),
+  `delta_rfun="auto"` (`Communities()`, with the number of communities
+  counted with a shift null) and a Gaussian feeding kernel with variance 25
+  (`delta_weights_function=None`; standard deviation 5 samples). Order-1
+  outputs are unchanged; orders 2 and above differ. The original two-path
+  pipeline of Owen, Chang & Manning (2021, Fig. 10), with co-fluctuations on
+  the feeding path and PCA on both paths (the defaults of `features` earlier
+  in the development of this release, commit d4bb5ba), is
+  `tc.features(..., rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)`.
+  The default feeding reducer needs at least 4 features and 40 timepoints at
+  every feeding step that is computed; otherwise `ValueError` names
+  `delta_rfun="weighted_strength"` (any number of features and timepoints)
+  and the original pipeline's settings. `ndims` with the defaults at
+  `order >= 2` raises `ValueError`, because the order-2 reducer is a summary.
+  `delta_weights_params` without `delta_weights_function` sets the
+  parameters of the Gaussian feeding kernel. The decoders are unchanged
+  (co-fluctuations on the path that feeds the next level).
 - **Numerical results differ from 0.2.0: the correlation estimator changed.**
   `wcorr` (and so `timecorr`, `isfc`, `wisfc`, `autofc`, `tc.features` and the
   decoders) now computes a kernel-weighted Pearson correlation: for timepoint
@@ -43,7 +62,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   only the upper triangle of the asymmetric matrix.
 - NaN samples carry no weight in correlations (each pair of features uses the
   timepoints where both are observed), and NaN kernel weights count as 0. In
-  `tc.features` (and the decoders) a co-fluctuation involving a NaN sample is
+  the decoders, and in `tc.features` with `eye_weights` as the feeding kernel,
+  a co-fluctuation involving a NaN sample is
   NaN, so later orders also leave it out pairwise when the delta path is
   unreduced or reduced by a callable; before a model-based or graph-measure
   delta reduction the NaNs are set to 0 with one `UserWarning` per call
@@ -147,8 +167,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tc.features(data, order=...)`: features of every order from 0 to `order`
   through two paths per order (Fig. 10 of the paper). The analysis path applies
   the analysis kernel to the previous order's delta features; the delta path
-  (`eye_weights`, `autofc`) gives the unblurred co-fluctuations passed to the
-  next order, so each order is blurred by the kernel once. Separate reducers
+  (`autofc` with the feeding kernel) gives the features passed to the next
+  order. With `eye_weights` as the feeding kernel (the original pipeline)
+  they are unblurred co-fluctuations, so each order is blurred by the kernel
+  once. Separate reducers
   for the two paths (`rfun`, `delta_rfun`); `rfun=None` runs without
   reduction, guarded by an estimate of each step's peak memory for all
   subjects together (`max_memory_gb`, default 4 GB; None checks nothing) that
@@ -235,9 +257,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   data whose columns are circularly shifted by independent lags).
 - `features` and `two_path_step`: keyword-only `delta_weights_function` and
   `delta_weights_params` set the kernel of the path that feeds the next
-  order (the delta path); `delta_weights_params` with `eye_weights` (given
-  or by default) raises `ValueError`. A kernel other than `eye_weights` gives
-  kernel-weighted correlations (`autofc`) instead of co-fluctuations.
+  order (the delta path, also called the feeding path); `delta_weights_params`
+  with `eye_weights` raises `ValueError`. A kernel other than `eye_weights`
+  gives kernel-weighted correlations (`autofc`) instead of co-fluctuations,
+  and is shaped by `include_timepoints`, `include_zero` and the events of
+  each order.
   `rfun` and `delta_rfun` accept `"auto"` (analysis path: PCA at order 1 and
   `WeightedStrength(signed=True)` above; delta path: `"communities"`) and
   dicts keyed by order. A step whose reducer is a summary, with
@@ -250,9 +274,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `max_memory_gb` before computing anything. The default order-1 reducer (PCA)
   still holds `K(K+1)/2` columns per subject, so memory is bounded only when
   every step uses a summary (for example `rfun=tc.WeightedStrength(signed=True)`).
-  The defaults of `features` are unchanged (`eye_weights` delta kernel,
-  `rfun="PCA"`, `delta_rfun=None`); the new behavior is reached with explicit
-  arguments.
+  These are the defaults (see "Changed defaults of the higher-order
+  pipeline" above).
 - `tc.simulate_nested`: nodes in modules in supergroups, with an order-2
   signal `h` (per supergroup) that sets the time course of each module's
   coupling; returns `(data, truth)` with the modules, supergroups, `h` and

@@ -28,6 +28,7 @@ MODULES = [
     "timecorr.decoding",
     "timecorr.simulate",
     "timecorr.events",
+    "timecorr.summaries",
 ]
 
 # Public names that are not exported from ``timecorr`` but are documented on the

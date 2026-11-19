@@ -38,6 +38,7 @@ from .helpers import (
 )
 from .events import segment
 from .higher_order import features
+from .summaries import Communities, WeightedStrength
 from .simulate import (
     carrier_columns,
     carrier_reducer,

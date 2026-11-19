@@ -1863,6 +1863,8 @@ def null_combine(corrs):
 
 # Graph measures accepted (as strings) by ``reduce``.
 _GRAPH_MEASURES = ("eigenvector_centrality", "pagerank_centrality", "strength")
+# strings that create a fresh summary instance (timecorr.summaries)
+_SUMMARY_NAMES = ("weighted_strength", "weighted_strength_split", "communities")
 
 # Model names documented for ``reduce``; hypertools' own registry, when it can be
 # read, adds the others it supports.
@@ -1881,18 +1883,19 @@ def _model_names():
 
 def _check_rfun(rfun, name="rfun"):
     """
-    Raise for a reducer ``reduce`` cannot use: None, a callable, a graph measure
-    or model name (string), or a dict whose ``'model'`` is a model name or a
-    model class or instance.
+    Raise for a reducer ``reduce`` cannot use: None, a callable (including a
+    summary object), a graph measure, summary name or model name (string), or a
+    dict whose ``'model'`` is a model name or a model class or instance.
     """
     if rfun is None or callable(rfun):
         return
     if isinstance(rfun, str):
-        if rfun in _GRAPH_MEASURES or rfun in _model_names():
+        if rfun in _GRAPH_MEASURES or rfun in _SUMMARY_NAMES or rfun in _model_names():
             return
         raise ValueError(
-            f"{name}={rfun!r} is neither a graph measure {_GRAPH_MEASURES} nor a "
-            f"model name known to hypertools ({', '.join(sorted(_model_names()))})."
+            f"{name}={rfun!r} is neither a graph measure {_GRAPH_MEASURES}, a "
+            f"summary {_SUMMARY_NAMES}, nor a model name known to hypertools "
+            f"({', '.join(sorted(_model_names()))})."
         )
     if isinstance(rfun, dict):
         if "model" not in rfun:
@@ -1916,10 +1919,18 @@ def _check_rfun(rfun, name="rfun"):
 
 
 def _is_model(rfun):
-    """True for a model-based reducer (a model name or dict), whose width is ``ndims``."""
+    """
+    True for a model-based reducer (a model name or dict), whose width is
+    ``ndims``; False for graph measures, summaries (names or objects),
+    callables and None.
+    """
     if isinstance(rfun, dict):
         return True
-    return isinstance(rfun, str) and rfun not in _GRAPH_MEASURES
+    return (
+        isinstance(rfun, str)
+        and rfun not in _GRAPH_MEASURES
+        and rfun not in _SUMMARY_NAMES
+    )
 
 
 def _check_ndims(ndims):
@@ -1989,6 +2000,15 @@ def reduce(corrs, rfun=None, ndims=None):
           ``z z^T`` has rank one, so on the delta path of ``features``
           eigenvector centrality equals ``|z| / ||z||`` and the graph measures
           carry no network structure.
+        - A squared-correlation summary (see ``timecorr.summaries``): a
+          ``WeightedStrength`` or ``Communities`` instance, or the strings
+          ``'weighted_strength'`` (``WeightedStrength()``),
+          ``'weighted_strength_split'`` (``WeightedStrength(split=True)``) and
+          ``'communities'`` (``Communities()``), which create a fresh instance
+          per call.  The instance is fit to ``corrs`` and transforms
+          ``corrs``; its ``fits_`` record the fit.  The two strings that need
+          communities raise ``ValueError`` here, since direct calls need the
+          number of communities ``n``.
         - A callable ``f(list of numpy.ndarray) -> list of numpy.ndarray``.  A
           single array is passed as a one-element list and the first element of
           the result is returned.
@@ -2001,22 +2021,24 @@ def reduce(corrs, rfun=None, ndims=None):
         the data can supply (the number of features and of samples); any
         shortfall is filled with zero columns so the output has exactly the
         requested width, and a ``UserWarning`` says how many columns were
-        padded.  Graph measures (which return K columns) and callables define
-        their own width: giving ``ndims`` with them raises ``ValueError``.
+        padded.  Graph measures (which return K columns), summaries and
+        callables define their own width: giving ``ndims`` with them raises
+        ``ValueError``.
 
     Returns
     -------
     numpy.ndarray or list of numpy.ndarray
         The reduced (or original) matrices, in the same container type as
         ``corrs``: (T, ndims) for model-based reduction, (T, K) for a graph
-        measure, whatever the callable returns otherwise.
+        measure, (T, c) for a summary, whatever the callable returns otherwise.
 
     Raises
     ------
     ValueError
         If a dict ``rfun`` gives a key in both ``'params'`` and ``'kwargs'`` with
-        different values, if ``ndims`` is not a positive integer, or if
-        ``ndims`` is given with a graph measure or a callable.
+        different values, if ``ndims`` is not a positive integer, if
+        ``ndims`` is given with a graph measure, a summary or a callable, or
+        from a summary (see ``WeightedStrength`` and ``Communities``).
 
     Warns
     -----
@@ -2033,6 +2055,10 @@ def reduce(corrs, rfun=None, ndims=None):
     (20, 3)
     >>> reduce(corrs, rfun='PCA').shape
     (20, 6)
+    >>> import timecorr as tc
+    >>> x = np.random.default_rng(0).standard_normal((50, 4))
+    >>> reduce(tc.timecorr(x, cfun=tc.autofc), rfun='weighted_strength').shape
+    (50, 4)
     """
 
     # Define graph measures directly instead of using brainconn
@@ -2130,6 +2156,19 @@ def reduce(corrs, rfun=None, ndims=None):
             "measure or callable rfun defines its own output width.  Leave ndims "
             "as None."
         )
+
+    from .summaries import Communities, WeightedStrength, _Summary
+
+    if isinstance(rfun, str) and rfun in _SUMMARY_NAMES:
+        rfun = {
+            "weighted_strength": lambda: WeightedStrength(),
+            "weighted_strength_split": lambda: WeightedStrength(split=True),
+            "communities": lambda: Communities(),
+        }[rfun]()
+
+    if isinstance(rfun, _Summary):
+        # a summary takes a list or a single array and returns the same kind
+        return rfun(corrs)
 
     if callable(rfun):
         if isinstance(corrs, list):

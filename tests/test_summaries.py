@@ -1,0 +1,574 @@
+"""
+Squared-correlation summaries (``timecorr.summaries``): ``WeightedStrength`` and
+``Communities``, alone and as ``rfun`` of ``reduce`` and ``timecorr``.
+
+The summaries run on real correlations of ``simulate_nested`` data (computed by
+``timecorr`` with ``autofc``) and on small hand-built correlation series; the
+expected values are computed directly in the tests with ``vec2mat`` and
+``einsum``.  Nothing is mocked.
+"""
+
+import warnings
+
+import numpy as np
+import pytest
+from sklearn.metrics import adjusted_rand_score
+
+import timecorr as tc
+from timecorr import summaries as sm
+
+N_SG, PER_SG, PER_MOD = 3, 2, 4
+K_NESTED = N_SG * PER_SG * PER_MOD  # 24 nodes in 6 modules
+
+
+@pytest.fixture(scope="module")
+def nested():
+    data, truth = tc.simulate_nested(
+        S=2,
+        T=600,
+        n_supergroups=N_SG,
+        modules_per_supergroup=PER_SG,
+        nodes_per_module=PER_MOD,
+        set_random_seed=0,
+    )
+    corrs = tc.timecorr(data, cfun=tc.autofc, rfun=None, weights_params={"var": 25})
+    return data, truth, corrs
+
+
+@pytest.fixture(scope="module")
+def nested_other():
+    """A second recording with the same number of nodes (another seed)."""
+    data, truth = tc.simulate_nested(
+        S=3,
+        T=400,
+        n_supergroups=N_SG,
+        modules_per_supergroup=PER_SG,
+        nodes_per_module=PER_MOD,
+        set_random_seed=7,
+    )
+    return tc.timecorr(data, cfun=tc.autofc, rfun=None, weights_params={"var": 25})
+
+
+def _random_corr_series(K, T, seed):
+    """A (T, K(K+1)/2) series of valid correlation matrices from smoothed noise."""
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal((T + 40, K))
+    x = np.cumsum(x, axis=0)[40:] + rng.standard_normal((T, K)) * 5
+    return tc.timecorr(x, cfun=tc.autofc, rfun=None, weights_params={"var": 9})
+
+
+# ----------------------------------------------------------------------------
+# direct formulas
+# ----------------------------------------------------------------------------
+
+
+def _offdiag(v):
+    M = tc.vec2mat(v).copy()
+    K = M.shape[0]
+    M[np.arange(K), np.arange(K), :] = 0
+    return M
+
+
+def _pair_weights(M):
+    return (M**2).mean(axis=2)
+
+
+def _clipped(w):
+    K = w.shape[0]
+    if K < 4:
+        a = w.copy()
+    else:
+        iu = np.triu_indices(K, 1)
+        a = np.maximum(w - np.median(w[iu]), 0)
+    np.fill_diagonal(a, 0)
+    return a
+
+
+def ref_weighted_strength(v, signed=False, labels=None, w=None, mean_r=None):
+    M = _offdiag(v)
+    if w is None:
+        w = _pair_weights(M)
+    if mean_r is None:
+        mean_r = M.mean(axis=2)
+    np.fill_diagonal(mean_r, 0)
+    a = _clipped(w)
+    if labels is None:
+        cols = [np.einsum("ij,ijt->ti", a, M**2)]
+        if signed:
+            cols.append(np.einsum("ij,ijt->ti", mean_r, M))
+    else:
+        own = labels[:, None] == labels[None, :]
+        cols = [
+            np.einsum("ij,ijt->ti", a * own, M**2),
+            np.einsum("ij,ijt->ti", a * ~own, M**2),
+        ]
+        if signed:
+            cols += [
+                np.einsum("ij,ijt->ti", mean_r * own, M),
+                np.einsum("ij,ijt->ti", mean_r * ~own, M),
+            ]
+    return np.hstack(cols)
+
+
+def ref_communities(v, labels, signed=False, mean_r=None):
+    M = _offdiag(v)
+    if mean_r is None:
+        mean_r = M.mean(axis=2)
+    mag, sgn = [], []
+    for g in np.unique(labels):
+        idx = np.flatnonzero(labels == g)
+        m = len(idx)
+        if m < 2:
+            continue
+        sub = M[np.ix_(idx, idx)]
+        mag.append((sub**2).sum(axis=(0, 1)) / (m * (m - 1)))
+        s = np.sign(mean_r[np.ix_(idx, idx)])
+        sgn.append((s[:, :, None] * sub).sum(axis=(0, 1)) / (m * (m - 1)))
+    cols = mag + (sgn if signed else [])
+    return np.array(cols).T
+
+
+def _renumbered(labels):
+    """True if labels are numbered in order of each label's smallest member."""
+    _, first = np.unique(labels, return_index=True)
+    order = np.argsort(first)
+    return np.array_equal(np.unique(labels)[order], np.arange(len(first)))
+
+
+# ----------------------------------------------------------------------------
+# WeightedStrength
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("signed", [False, True])
+def test_weighted_strength_formula(nested, signed):
+    _, _, corrs = nested
+    out = tc.WeightedStrength(signed=signed)(corrs)
+    assert isinstance(out, list) and len(out) == len(corrs)
+    for o, v in zip(out, corrs):
+        assert o.shape == (v.shape[0], (2 if signed else 1) * K_NESTED)
+        np.testing.assert_allclose(o, ref_weighted_strength(v, signed), atol=1e-10, rtol=0)
+
+
+def test_weighted_strength_ignores_diagonal(nested):
+    _, _, corrs = nested
+    v = corrs[0].copy()
+    v2 = v.copy()
+    v2[:, :K_NESTED] = 5.0  # a different diagonal
+    a = tc.WeightedStrength(signed=True)([v])[0]
+    b = tc.WeightedStrength(signed=True)([v2])[0]
+    np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize("K", [2, 3])
+def test_weighted_strength_small_K_unclipped(K):
+    v = _random_corr_series(K, 120, seed=K)
+    out = tc.WeightedStrength()(v)
+    assert isinstance(out, np.ndarray) and out.shape == (120, K)
+    M = _offdiag(v)
+    w = _pair_weights(M)
+    np.testing.assert_allclose(out, np.einsum("ij,ijt->ti", w, M**2), atol=1e-12, rtol=0)
+    assert np.any(out != 0)
+
+
+@pytest.mark.parametrize("signed", [False, True])
+def test_weighted_strength_split(nested, signed):
+    _, _, corrs = nested
+    split = tc.WeightedStrength(split=True, signed=signed, n=6)
+    out = split(corrs)
+    whole = tc.WeightedStrength(signed=signed)(corrs)
+    K = K_NESTED
+    labels = split.fits_[-1]["labels"]
+    assert labels.shape == (K,)
+    for o, u, v in zip(out, whole, corrs):
+        assert o.shape == (v.shape[0], (4 if signed else 2) * K)
+        # magnitude [own, other], then signed [own, other]
+        np.testing.assert_allclose(o[:, :K] + o[:, K : 2 * K], u[:, :K], atol=1e-12, rtol=0)
+        if signed:
+            np.testing.assert_allclose(
+                o[:, 2 * K : 3 * K] + o[:, 3 * K :], u[:, K:], atol=1e-12, rtol=0
+            )
+        np.testing.assert_allclose(
+            o, ref_weighted_strength(v, signed, labels=labels), atol=1e-10, rtol=0
+        )
+
+
+# ----------------------------------------------------------------------------
+# Communities
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("signed", [False, True])
+def test_communities_recovers_modules(nested, signed):
+    _, truth, corrs = nested
+    comm = tc.Communities(n=6, signed=signed)
+    out = comm(corrs)
+    labels = comm.fits_[-1]["labels"]
+    assert adjusted_rand_score(truth["module"], labels) == 1.0
+    assert _renumbered(labels)
+    for o, v in zip(out, corrs):
+        assert o.shape == (v.shape[0], (12 if signed else 6))
+        np.testing.assert_allclose(o, ref_communities(v, labels, signed), atol=1e-10, rtol=0)
+
+
+def test_communities_singleton_has_no_column():
+    # nodes 0-3 and 4-7 correlated in two groups; node 8 independent of both
+    rng = np.random.default_rng(3)
+    T = 300
+    f1, f2 = rng.standard_normal((2, T))
+    x = np.column_stack(
+        [f1 + 0.5 * rng.standard_normal(T) for _ in range(4)]
+        + [f2 + 0.5 * rng.standard_normal(T) for _ in range(4)]
+        + [rng.standard_normal(T)]
+    )
+    v = tc.timecorr(x, cfun=tc.autofc, rfun=None, weights_params={"var": 25})
+    comm = tc.Communities(n=3)
+    out = comm(v)
+    labels = comm.fits_[-1]["labels"]
+    np.testing.assert_array_equal(labels, [0, 0, 0, 0, 1, 1, 1, 1, 2])
+    assert out.shape == (T, 2)
+    np.testing.assert_allclose(out, ref_communities(v, labels), atol=1e-12, rtol=0)
+    signed = tc.Communities(n=3, signed=True)(v)
+    assert signed.shape == (T, 4)
+
+
+# ----------------------------------------------------------------------------
+# errors
+# ----------------------------------------------------------------------------
+
+
+def test_n_none_raises(nested):
+    _, _, corrs = nested
+    for obj in (tc.Communities(), tc.WeightedStrength(split=True)):
+        with pytest.raises(ValueError, match=r"\bn\b"):
+            obj(corrs)
+    with pytest.raises(ValueError, match=r"\bn\b"):
+        tc.reduce(corrs, "communities")
+    with pytest.raises(ValueError, match=r"\bn\b"):
+        tc.reduce(corrs, "weighted_strength_split")
+
+
+@pytest.mark.parametrize("K", [2, 3])
+def test_small_K_needs_weighted_strength(K):
+    v = _random_corr_series(K, 100, seed=10 + K)
+    with pytest.raises(ValueError, match="WeightedStrength"):
+        tc.Communities(n=1)(v)
+    with pytest.raises(ValueError, match="WeightedStrength"):
+        tc.WeightedStrength(split=True, n=1)(v)
+
+
+def test_nan_raises(nested):
+    _, _, corrs = nested
+    v = corrs[0].copy()
+    v[10, 40] = np.nan
+    for obj in (tc.WeightedStrength(), tc.Communities(n=6)):
+        with pytest.raises(ValueError, match="NaN"):
+            obj([v])
+    fitted = tc.WeightedStrength().fit(corrs)
+    with pytest.raises(ValueError, match="NaN"):
+        fitted.transform([v])
+
+
+def test_ndims_with_summary_raises(nested):
+    _, _, corrs = nested
+    for rfun in ("weighted_strength", tc.WeightedStrength()):
+        with pytest.raises(ValueError, match="ndims=3 applies to model-based"):
+            tc.reduce(corrs, rfun, ndims=3)
+
+
+def test_bad_arguments(nested):
+    _, _, corrs = nested
+    with pytest.raises(ValueError, match="n"):
+        tc.Communities(n=0)
+    with pytest.raises(ValueError, match="n"):
+        tc.Communities(n=2.5)
+    with pytest.raises(ValueError):
+        tc.Communities(n=K_NESTED + 1)(corrs)
+    with pytest.raises(ValueError, match="K"):
+        tc.WeightedStrength()([np.zeros((10, 5))])  # 5 is not K(K+1)/2
+    with pytest.raises(ValueError, match="fit"):
+        tc.WeightedStrength().transform(corrs)
+    fitted = tc.WeightedStrength().fit(corrs)
+    with pytest.raises(ValueError, match="nodes"):
+        fitted.transform([np.zeros((10, 6))])
+
+
+# ----------------------------------------------------------------------------
+# fit / transform and fits_
+# ----------------------------------------------------------------------------
+
+
+def test_fits_records(nested):
+    _, _, corrs = nested
+    K = K_NESTED
+    ws = tc.WeightedStrength(signed=True)
+    assert ws.fits_ == []
+    ws.fit(corrs)
+    ws.fit(corrs, order=2, path="feeding")
+    assert len(ws.fits_) == 2
+    keys = {"order", "path", "weights", "mean_r", "labels", "n", "null_threshold"}
+    for f in ws.fits_:
+        assert set(f) == keys
+        assert len(f["weights"]) == 2 and all(w.shape == (K, K) for w in f["weights"])
+        assert len(f["mean_r"]) == 2 and all(m.shape == (K, K) for m in f["mean_r"])
+        assert f["labels"] is None and f["n"] is None and f["null_threshold"] is None
+    assert ws.fits_[0]["order"] is None and ws.fits_[0]["path"] is None
+    assert ws.fits_[1]["order"] == 2 and ws.fits_[1]["path"] == "feeding"
+    M = _offdiag(corrs[1])
+    np.testing.assert_allclose(ws.fits_[0]["weights"][1], _pair_weights(M), atol=1e-12)
+    mr = M.mean(axis=2)
+    np.testing.assert_allclose(ws.fits_[0]["mean_r"][1], mr, atol=1e-12)
+
+    comm = tc.Communities(n=6)
+    comm.fit(corrs)
+    f = comm.fits_[0]
+    assert set(f) == keys
+    assert f["mean_r"] is None and f["labels"].shape == (K,) and f["n"] == 6
+
+
+def test_fit_on_one_list_transform_another(nested, nested_other):
+    _, _, A = nested
+    B = nested_other
+    # same number of units: unit-specific weights of the fit
+    ws = tc.WeightedStrength(signed=True).fit(A)
+    B2 = B[:2]
+    out = ws.transform(B2)
+    for i, (o, v) in enumerate(zip(out, B2)):
+        expected = ref_weighted_strength(
+            v, True, w=ws.fits_[0]["weights"][i], mean_r=ws.fits_[0]["mean_r"][i].copy()
+        )
+        np.testing.assert_allclose(o, expected, atol=1e-10, rtol=0)
+    own = tc.WeightedStrength(signed=True)(B2)
+    assert not all(np.allclose(o, p) for o, p in zip(out, own))
+
+    # different number of units: the mean weights
+    out3 = ws.transform(B)
+    wbar = np.mean(ws.fits_[0]["weights"], axis=0)
+    mbar = np.mean(ws.fits_[0]["mean_r"], axis=0)
+    for o, v in zip(out3, B):
+        expected = ref_weighted_strength(v, True, w=wbar, mean_r=mbar.copy())
+        np.testing.assert_allclose(o, expected, atol=1e-10, rtol=0)
+
+    # Communities: the fit's communities
+    comm = tc.Communities(n=6, signed=True).fit(A)
+    labels = comm.fits_[0]["labels"]
+    outc = comm.transform(B)
+    mbar = np.mean(comm.fits_[0]["mean_r"], axis=0)
+    for o, v in zip(outc, B):
+        np.testing.assert_allclose(
+            o, ref_communities(v, labels, True, mean_r=mbar), atol=1e-10, rtol=0
+        )
+    own_c = tc.Communities(n=6, signed=True)(B)
+    assert not all(np.allclose(o, p) for o, p in zip(outc, own_c))
+
+
+# ----------------------------------------------------------------------------
+# null_threshold (the data-driven count)
+# ----------------------------------------------------------------------------
+
+
+def _centered_eigs(corrs):
+    w = np.mean([_pair_weights(_offdiag(v)) for v in corrs], axis=0)
+    K = w.shape[0]
+    C = w - np.median(w[np.triu_indices(K, 1)])
+    np.fill_diagonal(C, 0)
+    return np.sort(np.linalg.eigvalsh(C))[::-1]
+
+
+def test_null_threshold_count(nested):
+    _, truth, corrs = nested
+    ev = _centered_eigs(corrs)
+    thr = 0.5 * (ev[5] + ev[6])
+    comm = tc.Communities()
+    comm.fit(corrs, null_threshold=thr)
+    f = comm.fits_[-1]
+    assert f["n"] == 6 and f["null_threshold"] == thr
+    np.testing.assert_array_equal(f["labels"], tc.Communities(n=6).fit(corrs).fits_[0]["labels"])
+
+    # capped at K // 2
+    comm.fit(corrs, null_threshold=ev[-1] - 1.0)
+    assert comm.fits_[-1]["n"] == K_NESTED // 2
+
+    # nothing above the threshold: one community holding every node
+    with pytest.warns(UserWarning, match="no community structure above the shift null"):
+        out = tc.Communities().fit(corrs, null_threshold=ev[0] + 1.0).transform(corrs)
+    assert all(o.shape == (v.shape[0], 1) for o, v in zip(out, corrs))
+    for o, v in zip(out, corrs):
+        M = _offdiag(v)
+        np.testing.assert_allclose(
+            o[:, 0], (M**2).sum(axis=(0, 1)) / (K_NESTED * (K_NESTED - 1)), atol=1e-12
+        )
+
+    # split through the threshold
+    ws = tc.WeightedStrength(split=True).fit(corrs, null_threshold=thr)
+    assert ws.fits_[-1]["n"] == 6
+
+    # n given: the threshold is recorded and not used for the count
+    c6 = tc.Communities(n=3).fit(corrs, null_threshold=thr)
+    assert c6.fits_[-1]["n"] == 3
+
+
+# ----------------------------------------------------------------------------
+# row blocks (the streaming interface)
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "summary",
+    [
+        tc.WeightedStrength(),
+        tc.WeightedStrength(signed=True),
+        tc.WeightedStrength(split=True, signed=True, n=6),
+        tc.Communities(n=6),
+        tc.Communities(n=6, signed=True),
+    ],
+    ids=["ws", "ws-signed", "ws-split-signed", "comm", "comm-signed"],
+)
+def test_block_sizes_agree(nested, summary):
+    _, _, corrs = nested
+    K = K_NESTED
+    R_all = [tc.vec2mat(v) for v in corrs]
+    summary.fits_ = []
+    expected = summary.fit(corrs).transform(corrs)
+    fit = summary.fits_[-1]
+    for bs in (1, 2, K):
+        states = []
+        for R in R_all:
+            state = sm._new_state(K, R.shape[2], summary.signed)
+            for i0 in range(0, K, bs):
+                i1 = min(i0 + bs, K)
+                sm._accumulate(state, i0, i1, R[i0:i1])
+            states.append(state)
+        one = []
+        for R in R_all:
+            state = sm._new_state(K, R.shape[2], summary.signed)
+            sm._accumulate(state, 0, K, R)
+            one.append(state)
+        for s, o in zip(states, one):
+            np.testing.assert_array_equal(s["sum_r2"], o["sum_r2"])
+            if summary.signed:
+                np.testing.assert_array_equal(s["sum_r"], o["sum_r"])
+        for u, R in enumerate(R_all):
+            unit = summary._unit_params(fit, u)
+            out = np.zeros((R.shape[2], summary._n_columns(fit, K)))
+            for i0 in range(0, K, bs):
+                i1 = min(i0 + bs, K)
+                summary._emit(fit, unit, i0, i1, R[i0:i1], out)
+            np.testing.assert_allclose(out, expected[u], atol=1e-12, rtol=0)
+
+
+def test_private_helpers():
+    w = np.array(
+        [[0.0, 0.5, 0.1, 0.2], [0.5, 0.0, 0.3, 0.05], [0.1, 0.3, 0.0, 0.4],
+         [0.2, 0.05, 0.4, 0.0]]
+    )
+    sum_r2 = w * 10
+    np.fill_diagonal(sum_r2, 10.0)
+    np.testing.assert_allclose(sm._pair_weights(sum_r2, 10), w)
+    a = sm._clip_weights(w)
+    # median of (0.5, 0.1, 0.2, 0.3, 0.05, 0.4) is 0.25
+    np.testing.assert_allclose(a[0, 1], 0.25)
+    assert a[0, 2] == 0 and np.all(np.diag(a) == 0)
+    C = sm._centered(w)
+    np.testing.assert_allclose(C[0, 1], 0.25)
+    assert np.all(np.diag(C) == 0)
+    ev = np.linalg.eigvalsh(C)
+    assert sm._count_above(w, ev[-1] + 1, 4) == 0
+    assert sm._count_above(w, ev[0] - 1, 4) == 2
+    labels = sm._find_communities(w, 2)
+    assert labels.shape == (4,) and labels[0] == 0 and _renumbered(labels)
+
+
+# ----------------------------------------------------------------------------
+# reduce and timecorr
+# ----------------------------------------------------------------------------
+
+
+def test_through_reduce_and_timecorr(nested):
+    data, _, corrs = nested
+    expected = tc.WeightedStrength()(corrs)
+    via_obj = tc.reduce(corrs, tc.WeightedStrength())
+    via_str = tc.reduce(corrs, "weighted_strength")
+    for e, a, b in zip(expected, via_obj, via_str):
+        np.testing.assert_array_equal(e, a)
+        np.testing.assert_array_equal(e, b)
+    single = tc.reduce(corrs[0], "weighted_strength")
+    assert isinstance(single, np.ndarray)
+    np.testing.assert_allclose(single, tc.WeightedStrength()(corrs[0]), atol=0)
+
+    obj = tc.Communities(n=6)
+    out = tc.reduce(corrs, obj)
+    assert len(obj.fits_) == 1 and len(out) == 2
+
+    split = tc.reduce(corrs, tc.WeightedStrength(split=True, n=6))
+    assert split[0].shape == (600, 2 * K_NESTED)
+
+    via_tc = tc.timecorr(
+        data, cfun=tc.autofc, rfun="weighted_strength", weights_params={"var": 25}
+    )
+    for e, a in zip(expected, via_tc):
+        np.testing.assert_allclose(a, e, atol=1e-12, rtol=0)
+
+
+def test_rfun_classification():
+    from timecorr.helpers import _check_rfun, _is_model
+
+    for r in ("weighted_strength", "weighted_strength_split", "communities"):
+        _check_rfun(r)
+        assert not _is_model(r)
+    for r in (tc.WeightedStrength(), tc.Communities(n=2)):
+        _check_rfun(r)
+        assert not _is_model(r)
+    assert _is_model("PCA")
+
+
+def test_strings_make_fresh_instances(nested):
+    _, _, corrs = nested
+    a = tc.reduce(corrs, "weighted_strength")
+    b = tc.reduce(corrs, "weighted_strength")
+    for x, y in zip(a, b):
+        np.testing.assert_array_equal(x, y)
+
+
+# ----------------------------------------------------------------------------
+# determinism and warnings
+# ----------------------------------------------------------------------------
+
+
+def test_deterministic_and_global_state(nested):
+    _, _, corrs = nested
+    np.random.seed(12345)
+    before = np.random.get_state()
+    a = tc.Communities(n=6, signed=True)(corrs)
+    b = tc.Communities(n=6, signed=True)(corrs)
+    c = tc.WeightedStrength(split=True, n=6)(corrs)
+    d = tc.WeightedStrength(split=True, n=6)(corrs)
+    after = np.random.get_state()
+    assert before[0] == after[0] and np.array_equal(before[1], after[1])
+    assert before[2:] == after[2:]
+    for x, y in zip(a + c, b + d):
+        np.testing.assert_array_equal(x, y)
+
+
+@pytest.mark.parametrize(
+    "summary, name",
+    [
+        (tc.WeightedStrength(), "WeightedStrength"),
+        (tc.WeightedStrength(signed=True), "WeightedStrength"),
+        (tc.Communities(n=2), "Communities"),
+    ],
+)
+def test_constant_output_warns(summary, name):
+    v = np.zeros((50, 15))  # K = 5, every correlation 0
+    with pytest.warns(UserWarning, match=name) as record:
+        out = summary(v)
+    assert len([r for r in record if name in str(r.message)]) == 1
+    assert np.all(np.isfinite(out))
+
+
+def test_no_warning_on_real_correlations(nested):
+    _, _, corrs = nested
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        tc.WeightedStrength(signed=True)(corrs)
+        tc.Communities(n=6, signed=True)(corrs)

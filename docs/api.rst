@@ -243,8 +243,35 @@ Dimensionality reduction and smoothing
 ``reduce`` accepts a hypertools / scikit-learn model name (for example
 ``"PCA"``, ``"FastICA"``, ``"FactorAnalysis"``, ``"IncrementalPCA"``), a dict
 such as ``{"model": "PCA", "params": {"whiten": True}}``, a graph measure
-(``"eigenvector_centrality"``, ``"pagerank_centrality"``, ``"strength"``), or a
-callable that maps a list of arrays to a list of arrays.
+(``"eigenvector_centrality"``, ``"pagerank_centrality"``, ``"strength"``), a
+squared-correlation summary (below), or a callable that maps a list of arrays
+to a list of arrays.
+
+Squared-correlation summaries
+-----------------------------
+
+.. autosummary::
+   :toctree: generated/
+   :nosignatures:
+
+   WeightedStrength
+   Communities
+
+The summaries (module ``timecorr.summaries``) turn each subject's vectorized
+correlations into a few columns per node (``WeightedStrength``: weighted sums
+of squared correlations) or per community of nodes (``Communities``: mean
+squared correlation within each community). They are given to ``reduce`` or
+``timecorr`` as ``rfun``, as instances or as the strings
+``"weighted_strength"``, ``"weighted_strength_split"`` and ``"communities"``;
+``fit`` and ``transform`` fit the weights and communities to one set of
+correlations and apply them to another, and ``fits_`` records each fit.
+
+.. code-block:: python
+
+   corrs = tc.timecorr(data, cfun=tc.autofc, weights_params={"var": 25})
+   comm = tc.Communities(n=6)
+   cols = comm(corrs)              # one (T, c) array per subject
+   labels = comm.fits_[0]["labels"]
 
 Simulation
 ----------

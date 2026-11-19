@@ -25,7 +25,7 @@ from .helpers import (
     reduce,
     z2r,
 )
-from .events import resolve_events_by_order
+from .events import resolve_events, resolve_events_by_order
 from .higher_order import _analysis_path, _check_events_order_zero, _delta_path
 from .timecorr import timecorr
 
@@ -96,7 +96,59 @@ def _decoder_events(events, events_params, T, n_subjects, top):
     if top == 0:
         _check_events_order_zero(events, T, n_subjects, events_params)
         return None
-    return resolve_events_by_order(events, T, n_subjects, top, events_params)
+    return _keeping_global_random_state(
+        resolve_events_by_order, events, T, n_subjects, top, events_params
+    )
+
+
+def _keeping_global_random_state(fun, *args):
+    """
+    ``fun(*args)`` with NumPy's global random state restored afterwards.
+
+    Segmentation (``segment`` with ``random_state=None``) may draw from the
+    global state; restoring it keeps the decoders' fold assignments, drawn
+    next from that state, the same as in a run without events.
+    """
+    state = np.random.get_state()
+    try:
+        return fun(*args)
+    finally:
+        np.random.set_state(state)
+
+
+def _pca_events(events, events_params, T, n_subjects):
+    """
+    Resolve ``pca_decoder``'s events once, on the full subject list: one
+    specification (``timecorr.events.resolve_events``), never a dict keyed by
+    order, with NumPy's global random state left unchanged.
+    """
+    if isinstance(events, dict):
+        raise ValueError(
+            "pca_decoder has no orders (it smooths at level 0): pass one events "
+            "specification, not a dict keyed by order."
+        )
+    return _keeping_global_random_state(
+        resolve_events, events, T, n_subjects, events_params
+    )
+
+
+def _smooth_group(group, weights_function, weights_params, rfun=None, events=None):
+    """
+    A group's data smoothed with the kernel (``timecorr`` with ``cfun=None``)
+    and averaged with ``mean_combine``; ``events`` is a RESOLVED entry for the
+    group's members (None, one boundary array, or one entry per member).
+    """
+    return np.asarray(
+        timecorr(
+            [x for x in group],
+            cfun=None,
+            rfun=rfun,
+            combine=mean_combine,
+            weights_function=weights_function,
+            weights_params=weights_params,
+            events=events,
+        )
+    )
 
 
 def _decoder_delta_chain(data, level, rfun=None, max_memory_gb=None):
@@ -281,7 +333,9 @@ def timepoint_decoder(
         features with T rows segmented with ``segment``, a list with one such
         entry, or None, per subject, or a dict keyed by order).  The events
         are resolved once, on the full subject list, before any fold is
-        formed (a features entry is segmented once), and a per-subject entry
+        formed (a features entry is segmented once; segmentation does not
+        advance NumPy's global random state, so the folds are the ones drawn
+        without events), and a per-subject entry
         stays with its subject in every fold.  Boundaries are external
         information supplied by the caller and are used as given for all
         folds; they are not estimated from held-out data by the decoder.
@@ -468,7 +522,9 @@ def weighted_timepoint_decoder(
         features with T rows segmented with ``segment``, a list with one such
         entry, or None, per subject, or a dict keyed by order).  The events
         are resolved once, on the full subject list, before any fold is
-        formed (a features entry is segmented once), and a per-subject entry
+        formed (a features entry is segmented once; segmentation does not
+        advance NumPy's global random state, so the folds are the ones drawn
+        without events), and a per-subject entry
         stays with its subject in every fold and in both halves of every
         training group.  Boundaries are external information supplied by the
         caller and are used as given for all folds; they are not estimated
@@ -735,16 +791,7 @@ def folding_levels(
 
     if level == 0:
         smooth = [
-            np.asarray(
-                timecorr(
-                    [x for x in group],
-                    cfun=None,
-                    rfun=rfun[0],
-                    combine=mean_combine,
-                    weights_function=weights_function,
-                    weights_params=weights_params,
-                )
-            )
+            _smooth_group(group, weights_function, weights_params, rfun[0])
             for group in (infold_data, outfold_data)
         ]
         return smooth[0], smooth[1], infold_data, outfold_data
@@ -813,7 +860,9 @@ def weighted_timepoint_decoder_ec(
         features with T rows segmented with ``segment``, a list with one such
         entry, or None, per subject, or a dict keyed by order).  The events
         are resolved once, on the full subject list, before any fold is
-        formed (a features entry is segmented once), and a per-subject entry
+        formed (a features entry is segmented once; segmentation does not
+        advance NumPy's global random state, so the folds are the ones drawn
+        without events), and a per-subject entry
         stays with its subject in every fold and in both halves of every
         training group.  Boundaries are external information supplied by the
         caller and are used as given for all folds; they are not estimated
@@ -1059,14 +1108,23 @@ def pca_decoder(
         Alias of ``weights_function`` (its name in timecorr 0.2.0).  Passing
         both raises ``TypeError``.  Default: None.
     events : None, array-like, or list
-        Checked as in ``features(order=0)`` and otherwise not used
-        (keyword-only).  Events restrict correlation kernels at orders
-        ``k >= 1``; this decoder works at level 0 only (its features are
-        smoothed components, not correlations), so its results are the same
-        with or without events.  A dict keyed by order raises ``ValueError``.
-        Default: None.
+        Restricts the smoothing kernel to events (keyword-only; one
+        specification as in ``timecorr``: boundaries shared by all subjects,
+        features with T rows segmented with ``segment``, or a list with one
+        such entry, or None, per subject).  The events are resolved once, on
+        the full subject list, before the folds are formed (a features entry
+        is segmented once); in every fold each subject's components are
+        smoothed with that subject's own events (a per-subject entry follows
+        the original subject index).  Boundaries are external information
+        supplied by the caller and are used as given for all folds; they are
+        not estimated from held-out data by the decoder.  Segmentation does
+        not advance NumPy's global random state, so the fold assignment is
+        the one drawn without events.  The PCA reduction is unaffected.  A
+        dict keyed by order raises ``ValueError`` (this decoder has no
+        orders).  Default: None (no restriction).
     events_params : dict or None
-        Checked as in ``features(order=0)`` (keyword-only).  Default: None.
+        Keyword arguments for ``segment`` when ``events`` holds features
+        (keyword-only; see ``features``).  Default: None.
 
     Returns
     -------
@@ -1105,7 +1163,8 @@ def pca_decoder(
         raise ValueError("all data matrices must have the same number of timepoints")
     if len({np.shape(x)[1] for x in data}) != 1:
         raise ValueError("all data matrices must have the same number of features")
-    _decoder_events(events, events_params, np.shape(data[0])[0], len(data), 0)
+    # resolved once, on every subject, before the folds are formed
+    events = _pca_events(events, events_params, np.shape(data[0])[0], len(data))
 
     # never request more components than the data has features or samples; the
     # loop below slices the first d columns, so d > n_components is harmless
@@ -1119,22 +1178,22 @@ def pca_decoder(
     for i in range(0, nfolds):
         for d in range(1, dims + 1):
 
-            in_data = np.asarray([x for x in pca_data[group_assignments == i]])[
-                :, :, :d
-            ]
-            out_data = np.asarray([x for x in pca_data[group_assignments != i]])[
-                :, :, :d
-            ]
-
-            in_smooth, out_smooth, in_raw, out_raw = folding_levels(
-                in_data,
-                out_data,
-                level=0,
-                cfun=isfc,
-                rfun=[None],
-                combine=[mean_combine],
-                weights_function=weights_function,
-                weights_params=weights_params,
+            members = (
+                np.where(group_assignments == i)[0],
+                np.where(group_assignments != i)[0],
+            )
+            # level 0 of folding_levels, with each member's events (by
+            # original subject index; a shared entry is passed as is)
+            in_smooth, out_smooth = (
+                _smooth_group(
+                    pca_data[m][:, :, :d],
+                    weights_function,
+                    weights_params,
+                    events=[events[j] for j in m]
+                    if isinstance(events, list)
+                    else events,
+                )
+                for m in members
             )
 
             if d < 3:

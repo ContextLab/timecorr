@@ -817,6 +817,8 @@ def test_decoders_events_and_events_params_are_keyword_only():
 
 @pytest.mark.parametrize("name", sorted(_EV_RUNS))
 def test_decoders_events_none_and_one_block_are_unchanged(name):
+    # guards that events=None and events=[] (one block) give exactly the
+    # default call's result, for the same seed
     data = shared_ramping_data(S=6, T=24, K=3)
     run = _EV_RUNS[name]
     today = _seeded(lambda: run(data))
@@ -939,11 +941,8 @@ def test_decoders_run_with_events_and_return_the_documented_shape(name):
         assert len(res) == len(today)
         for col in ("rank", "accuracy", "error"):
             assert np.all((res[col] >= 0) & (res[col] <= 1))
-    if name == "pca_decoder":
-        # level 0 only: the smoothing kernel is not restricted
-        pd.testing.assert_frame_equal(shared, today, check_exact=True)
-    else:
-        assert not np.array_equal(shared["rank"].values, today["rank"].values)
+    metrics = ["rank", "accuracy", "error"]
+    assert not np.array_equal(shared[metrics].values, today[metrics].values)
 
 
 @pytest.mark.parametrize("name", sorted(_EV_RUNS))
@@ -988,3 +987,78 @@ def test_decoders_segment_features_events_once_for_all_folds():
     np.random.seed(1)
     b = tc.timepoint_decoder(data, level=1, events=bounds, **_EV_KW)
     pd.testing.assert_frame_equal(a, b, check_exact=True)
+
+
+def _pca_decoder_by_hand(data, nfolds, dims, events_of, seed):
+    """pca_decoder recomputed with ``tc.timecorr`` smoothing, per fold."""
+    import hypertools as hyp
+    import scipy.spatial.distance as sd
+
+    pca_data = np.asarray(hyp.reduce(list(data), ndims=min(dims, data[0].shape[1]),
+                                     random_state=0))
+    np.random.seed(seed)
+    assignments = get_xval_assignments(len(data), nfolds)
+    rows = []
+    for i in range(nfolds):
+        for d in range(1, dims + 1):
+            smooth = []
+            for members in (np.where(assignments == i)[0],
+                            np.where(assignments != i)[0]):
+                x = np.asarray(tc.timecorr([pca_data[j][:, :d] for j in members],
+                                           cfun=None, rfun=None, combine=mean_combine,
+                                           events=events_of(members), **_EV_KW))
+                if d < 3:
+                    x = np.hstack((x, np.zeros((x.shape[0], 3 - x.shape[1]))))
+                smooth.append(x)
+            rows.append(decoder(1 - sd.cdist(smooth[0], smooth[1], "correlation")))
+    return pd.concat(rows).reset_index(drop=True)
+
+
+def test_pca_decoder_smoothing_kernel_follows_each_subjects_events():
+    data = shared_ramping_data(S=6, T=24, K=3)
+    events = _differing_boundaries()
+    np.random.seed(4)
+    got = tc.helpers.pca_decoder(data, nfolds=2, dims=2, events=events, **_EV_KW)
+    got = got[["rank", "accuracy", "error"]].reset_index(drop=True)
+    own = _pca_decoder_by_hand(data, 2, 2, lambda m: [events[j] for j in m], seed=4)
+    pd.testing.assert_frame_equal(got, own, check_exact=True)
+    # the fold's members given the events of positions 0..n-1 instead
+    wrong = _pca_decoder_by_hand(data, 2, 2, lambda m: events[: len(m)], seed=4)
+    assert not np.array_equal(got.values, wrong.values)
+    # shared boundaries are passed as they are
+    np.random.seed(4)
+    shared = tc.helpers.pca_decoder(data, nfolds=2, dims=2, events=[12], **_EV_KW)
+    pd.testing.assert_frame_equal(
+        shared[["rank", "accuracy", "error"]].reset_index(drop=True),
+        _pca_decoder_by_hand(data, 2, 2, lambda m: [12], seed=4),
+        check_exact=True,
+    )
+
+
+@pytest.mark.parametrize("name", sorted(_EV_RUNS))
+def test_decoders_segmentation_leaves_the_global_random_state_unchanged(name):
+    # recurring segmentation without random_state draws from NumPy's global
+    # state; the decoders restore it, so folds match the no-events run
+    data = shared_ramping_data(S=6, T=24, K=3)
+    run = _EV_RUNS[name]
+    rng = np.random.RandomState(2)
+    stim = np.repeat([0.0, 3.0, 0.0], 8)[:, None] + 0.2 * rng.randn(24, 2)
+    params = {"n": 2, "kind": "recurring"}
+    np.random.seed(11)
+    run(data)
+    after_plain = np.random.random_sample(3)
+    np.random.seed(11)
+    with_events = run(data, events=stim, events_params=params)
+    after_events = np.random.random_sample(3)
+    assert np.array_equal(after_events, after_plain)
+    # the fold assignment is the one the seed gives without events
+    np.random.seed(11)
+    folds = get_xval_assignments(6, 2)
+    np.random.seed(11)
+    resolved_state = np.random.get_state()
+    from timecorr.events import resolve_events
+    resolve_events(stim, 24, 6, params)  # advances the global state
+    assert not np.array_equal(np.random.get_state()[1], resolved_state[1])
+    np.random.seed(11)
+    assert np.array_equal(get_xval_assignments(6, 2), folds)
+    assert len(with_events) == len(_seeded(lambda: run(data)))

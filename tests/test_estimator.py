@@ -557,10 +557,14 @@ def test_r2z_at_plus_minus_one_without_warnings():
         assert np.allclose(z2r(z), [1.0, -1.0, 0.5], atol=1e-15, rtol=0)
 
 
-# timecorr keeps the 0.2.0 positional order; include_zero is last
+# timecorr keeps the 0.2.0 positional order; include_zero is the last
+# positional parameter, and the event options are keyword-only
 def test_timecorr_positional_order():
-    names = list(inspect.signature(tc.timecorr).parameters)
-    assert names == [
+    params = inspect.signature(tc.timecorr).parameters
+    positional = [
+        n for n, p in params.items() if p.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
+    ]
+    assert positional == [
         "data",
         "weights_function",
         "weights_params",
@@ -571,6 +575,10 @@ def test_timecorr_positional_order():
         "rfun",
         "include_zero",
     ]
+    assert list(params) == positional + ["events", "events_params"]
+    assert all(
+        params[n].kind == inspect.Parameter.KEYWORD_ONLY for n in ("events", "events_params")
+    )
 
 
 # Fisher z averaging applies to correlations only: entries with any value

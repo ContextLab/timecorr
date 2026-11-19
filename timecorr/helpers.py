@@ -1109,8 +1109,13 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     ----------
     data : numpy.ndarray or list of numpy.ndarray
         One timepoints-by-features (T, K) matrix per subject.
-    timepoint_weights : numpy.ndarray
+    timepoint_weights : numpy.ndarray or list of numpy.ndarray
         Kernel matrix; row ``t`` is the kernel used to estimate at timepoint ``t``.
+        Or a list (or tuple) of S such matrices, one per subject: subject
+        ``s``'s correlations use item ``s``, applied both to subject ``s``'s
+        data and to the reference it is correlated with (see
+        ``timecorr(..., events=...)``).  Equal kernels in the list are
+        grouped.
     subject_weights : numpy.ndarray, scalar, or None, optional
         Number-of-subjects by number-of-subjects matrix; row ``s`` weights the
         subjects averaged for subject ``s``.  A scalar gives every other
@@ -1137,13 +1142,27 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
         estimate correlations reliably there); and timepoints with zero
         kernel-weighted variance in every feature (their correlations are set
-        to 0).  Never for a delta kernel.
+        to 0).  Never for a delta kernel.  With several different kernels,
+        the one warning names, for each kernel with a problem, the subjects
+        that use it.
 
     Raises
     ------
     ValueError
         If the subjects differ in shape, the kernel does not have T columns,
-        or every row of the kernel is zero.
+        every row of the kernel is zero, or a list of kernels does not have
+        one kernel per subject.
+
+    Notes
+    -----
+    With per-subject events and a cross-subject correlation function (``isfc``,
+    ``wisfc``), the timepoints that enter subject s's correlations at time t are those
+    in subject s's current block, for both subject s's data and the other subjects'
+    data. If the subjects' events occur at different times, the other subjects' data
+    inside that window may come from different events. Cross-subject correlations
+    assume that all subjects experience the same external stimulus at the same times;
+    per-subject events that are not aligned across subjects are better suited to
+    within-subject correlations (``cfun=autofc``).
 
     Examples
     --------
@@ -1152,6 +1171,15 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     >>> rng = np.random.RandomState(0)
     >>> data = [rng.randn(50, 4) for _ in range(3)]
     >>> out = tc.wisfc(data, tc.gaussian_weights(50, {"var": 20}))
+    >>> len(out), out[0].shape
+    (3, (50, 10))
+
+    One kernel per subject, each restricted to that subject's events:
+
+    >>> from timecorr.events import mask_kernel
+    >>> w = tc.gaussian_weights(50, {"var": 20})
+    >>> kernels = [mask_kernel(w, b) for b in ([20], [25], [30])]
+    >>> out = tc.wisfc(data, kernels, subject_weights=1 - np.eye(3))
     >>> len(out), out[0].shape
     (3, (50, 10))
     """
@@ -1185,24 +1213,72 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         subject_weights = subject_weights * np.ones([S, S])
         np.fill_diagonal(subject_weights, 0)
 
+    kernels, group_of = _subject_kernels(timepoint_weights, S)
     stacked = np.stack(data, axis=2)
     corrs = []
-    cancelled = False
+    cancelled = [False] * len(kernels)
     for s, a in enumerate(data):
+        g = group_of[s]
         b = _nan_weighted_mean(stacked, subject_weights[s, :])
-        wc, c = _wcorr(a, b, timepoint_weights, warn=False, return_cancelled=True)
-        cancelled = cancelled | c
+        wc, c = _wcorr(a, b, kernels[g], warn=False, return_cancelled=True)
+        cancelled[g] = cancelled[g] | c
         if not np.array_equal(a, b, equal_nan=True):
             wc = _fisher_symmetrize(wc)
         corrs.append(mat2vec(wc))
         # free the (K, K, T) array before the next subject's is allocated
         del wc
 
-    # every subject shares the kernel: one warning per call
-    message = _estimator_message(timepoint_weights, cancelled)
+    # one warning per call, covering every kernel
+    message = _kernels_message(kernels, group_of, cancelled)
     if message is not None:
         _warn_user(message)
     return corrs
+
+
+def _subject_kernels(timepoint_weights, S):
+    """
+    ``(kernels, group_of)``: the distinct kernels and, for each of the S subjects,
+    the index of its kernel.  ``timepoint_weights`` is one kernel shared by every
+    subject, or a list or tuple of S kernels (subject s uses item s); equal kernels
+    in a list are grouped (compared by identity, then by value).
+    """
+    if not isinstance(timepoint_weights, (list, tuple)):
+        return [timepoint_weights], [0] * S
+    if len(timepoint_weights) != S:
+        raise ValueError(
+            f"timepoint_weights is a list of {len(timepoint_weights)} kernels for "
+            f"{S} subjects; pass one kernel, or one kernel per subject"
+        )
+    kernels, group_of = [], []
+    for w in timepoint_weights:
+        for g, k in enumerate(kernels):
+            if w is k or (
+                np.shape(w) == np.shape(k) and np.array_equal(w, k, equal_nan=True)
+            ):
+                break
+        else:
+            g = len(kernels)
+            kernels.append(w)
+        group_of.append(g)
+    return kernels, group_of
+
+
+def _kernels_message(kernels, group_of, cancelled):
+    """
+    The one warning of a correlation call with one or several kernels, or None.
+    With one kernel it is ``_estimator_message``; with several, each kernel's
+    message is prefixed by the subjects that use it.
+    """
+    if len(kernels) == 1:
+        return _estimator_message(kernels[0], cancelled[0])
+    parts = []
+    for g, kernel in enumerate(kernels):
+        message = _estimator_message(kernel, cancelled[g])
+        if message is not None:
+            subjects = [s for s, k in enumerate(group_of) if k == g]
+            label = "Subject" if len(subjects) == 1 else "Subjects"
+            parts.append(f"{label} {', '.join(map(str, subjects))}: {message}")
+    return " ".join(parts) if parts else None
 
 
 def isfc(data, timepoint_weights):
@@ -1223,9 +1299,14 @@ def isfc(data, timepoint_weights):
     data : list of numpy.ndarray or numpy.ndarray
         List of timeseries data matrices, each of shape (timepoints, features).
         If a single array is provided, it will be converted to a list.
-    timepoint_weights : numpy.ndarray
+    timepoint_weights : numpy.ndarray or list of numpy.ndarray
         T x T kernel matrix; row ``t`` is the kernel used to estimate at
         timepoint ``t``.
+        Or a list (or tuple) of S such matrices, one per subject: subject
+        ``s``'s correlations use item ``s``, applied both to subject ``s``'s
+        data and to the reference it is correlated with (see
+        ``timecorr(..., events=...)``).  Equal kernels in the list are
+        grouped.
 
     Returns
     -------
@@ -1245,13 +1326,27 @@ def isfc(data, timepoint_weights):
         ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
         estimate correlations reliably there); and timepoints with zero
         kernel-weighted variance in every feature (their correlations are set
-        to 0).  Never for a delta kernel.
+        to 0).  Never for a delta kernel.  With several different kernels,
+        the one warning names, for each kernel with a problem, the subjects
+        that use it.
 
     Raises
     ------
     ValueError
         If the subjects differ in shape, the kernel does not have T columns,
-        or every row of the kernel is zero.
+        every row of the kernel is zero, or a list of kernels does not have
+        one kernel per subject.
+
+    Notes
+    -----
+    With per-subject events and a cross-subject correlation function (``isfc``,
+    ``wisfc``), the timepoints that enter subject s's correlations at time t are those
+    in subject s's current block, for both subject s's data and the other subjects'
+    data. If the subjects' events occur at different times, the other subjects' data
+    inside that window may come from different events. Cross-subject correlations
+    assume that all subjects experience the same external stimulus at the same times;
+    per-subject events that are not aligned across subjects are better suited to
+    within-subject correlations (``cfun=autofc``).
 
     Examples
     --------
@@ -1281,9 +1376,14 @@ def autofc(data, timepoint_weights):
     data : list of numpy.ndarray or numpy.ndarray
         List of timeseries data matrices, each of shape (timepoints, features).
         If a single array is provided, it will be converted to a list.
-    timepoint_weights : numpy.ndarray
+    timepoint_weights : numpy.ndarray or list of numpy.ndarray
         T x T kernel matrix; row ``t`` is the kernel used to estimate at
         timepoint ``t``.
+        Or a list (or tuple) of S such matrices, one per subject: subject
+        ``s``'s correlations use item ``s``, applied both to subject ``s``'s
+        data and to the reference it is correlated with (see
+        ``timecorr(..., events=...)``).  Equal kernels in the list are
+        grouped.
 
     Returns
     -------
@@ -1302,13 +1402,16 @@ def autofc(data, timepoint_weights):
         ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
         estimate correlations reliably there); and timepoints with zero
         kernel-weighted variance in every feature (their correlations are set
-        to 0).  Never for a delta kernel.
+        to 0).  Never for a delta kernel.  With several different kernels,
+        the one warning names, for each kernel with a problem, the subjects
+        that use it.
 
     Raises
     ------
     ValueError
         If the subjects differ in shape, the kernel does not have T columns,
-        or every row of the kernel is zero.
+        every row of the kernel is zero, or a list of kernels does not have
+        one kernel per subject.
 
     Examples
     --------

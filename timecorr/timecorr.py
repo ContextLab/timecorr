@@ -4,14 +4,20 @@ import warnings
 
 import numpy as np
 
+from .events import distinct_event_sets, mask_kernel, resolve_events
 from .helpers import (
+    autofc,
     format_data,
     gaussian_weights,
     isfc,
     null_combine,
     one_sided,
     reduce,
+    wisfc,
 )
+
+# correlation functions that accept one kernel per subject
+_KERNEL_LIST_CFUNS = (wisfc, isfc, autofc)
 
 
 def _kernel_smooth(x, weights):
@@ -37,6 +43,53 @@ def _kernel_smooth(x, weights):
     return out
 
 
+def _restricted(resolved):
+    """Resolved events with single-block boundary sets (no restriction) replaced by None."""
+
+    def one(b):
+        return None if b is None or len(b) <= 1 else b
+
+    if isinstance(resolved, list):
+        return [one(b) for b in resolved]
+    return one(resolved)
+
+
+def _per_subject_cfun(cfun, data, weights, groups):
+    """
+    Correlations with one masked kernel per group of subjects sharing events.
+
+    The built-in correlation functions take the list of kernels in one call; a
+    custom ``cfun`` is called once per group with the full data, and each subject's
+    output is taken from the call made with that subject's kernel.
+    """
+    S = len(data)
+    if cfun in _KERNEL_LIST_CFUNS:
+        kernels = [None] * S
+        for boundaries, subjects in groups:
+            masked = mask_kernel(weights, boundaries)
+            for s in subjects:
+                kernels[s] = masked
+        return cfun(data, kernels)
+
+    out = [None] * S
+    for boundaries, subjects in groups:
+        result = cfun(data, mask_kernel(weights, boundaries))
+        if not isinstance(result, list) or len(result) != S:
+            raise ValueError(
+                "with per-subject events, cfun must return a list with one array per "
+                f"subject ({S}); got "
+                + (
+                    f"a list of {len(result)}"
+                    if isinstance(result, list)
+                    else type(result).__name__
+                )
+            )
+        for s in subjects:
+            out[s] = result[s]
+        del result
+    return out
+
+
 def timecorr(
     data,
     weights_function=gaussian_weights,
@@ -47,6 +100,9 @@ def timecorr(
     cfun=isfc,
     rfun=None,
     include_zero=True,
+    *,
+    events=None,
+    events_params=None,
 ):
     """
     Compute dynamic (moment-by-moment) correlations in one or more datasets.
@@ -123,6 +179,28 @@ def timecorr(
     include_zero : bool
         If False, the timepoint being estimated is left out of its own
         estimate (the diagonal of the kernel is zeroed).  Default: True.
+    events : None, array-like, or list
+        Restricts the kernel to events (blocks of consecutive timepoints).
+        A boundary set is a 1-D sequence of integer timepoint indices at which
+        a new block starts (a list or tuple of integers, a 1-D integer numpy
+        array, or a pandas or polars Series); index 0 is implied and an empty
+        sequence means a single block (no restriction).  A boundary set is
+        shared by all subjects.  A list or tuple with one entry per subject,
+        each ``None`` (no restriction) or a boundary set, gives per-subject
+        events.  The kernel weight ``weights[t, u]`` is set to 0 whenever
+        ``t`` and ``u`` lie in different blocks, after ``include_timepoints``,
+        ``include_zero`` and ``exclude_timepoints`` are applied (the estimator
+        normalizes each row, so no renormalization is needed).  The smoothing
+        path (``cfun=None``) uses the same restricted kernel.  2-D arrays and
+        DataFrames (features to segment into events) raise
+        ``NotImplementedError`` in this version.  See
+        ``timecorr.events.resolve_events`` for the full grammar.  Default:
+        None (no restriction).
+    events_params : dict or None
+        Keyword arguments for the segmentation of features entries in
+        ``events`` (keys ``n``, ``kind``, ``max_events``, ``random_state``).
+        Unknown keys, or giving it when no entry of ``events`` holds features,
+        raise ``ValueError``.  Default: None.
 
     Returns
     -------
@@ -155,7 +233,44 @@ def timecorr(
     ------
     ValueError
         For an unknown ``include_timepoints``, subjects of different shapes,
-        non-numeric columns, or a kernel whose rows are all zero.
+        non-numeric columns, or a kernel whose rows are all zero; for a
+        malformed ``events`` specification; when ``events`` leave every kernel
+        row with fewer than 3 non-zero weights (no block is long enough to
+        estimate a correlation); and, with per-subject events, when a custom
+        ``cfun`` does not return a list with one array per subject.
+    NotImplementedError
+        If an entry of ``events`` holds features to segment.
+
+    Notes
+    -----
+    With ``events``, the kernel gives no weight to timepoints outside the
+    current block.  This is not statistical independence from the rest of the
+    recording: the subject weights of ``wisfc`` and the reductions (``rfun``)
+    still use all timepoints, and the estimator centers each feature over all
+    timepoints, so outputs inside a block can change by floating-point
+    rounding when data outside the block change.
+
+    With per-subject events, subject s's output at timepoint ``t`` is computed
+    with subject s's restricted kernel row, applied both to subject s's data
+    and to the reference it is correlated with (the average of the other
+    subjects for ``isfc``, the weighted average for ``wisfc``, subject s itself
+    for ``autofc``); the reference is not restricted by the other subjects'
+    events.  Subjects with identical boundaries share one kernel.  ``isfc``,
+    ``wisfc`` and ``autofc`` receive the list of per-subject kernels in one
+    call, which holds one T x T kernel per distinct event set in memory.  Any
+    other ``cfun`` is called once per distinct event set with the full data
+    and one kernel (one T x T kernel at a time); it must return a list with
+    one array per subject, and subject s's output is taken from the call made
+    with subject s's kernel.
+
+    With per-subject events and a cross-subject correlation function (``isfc``,
+    ``wisfc``), the timepoints that enter subject s's correlations at time t are those
+    in subject s's current block, for both subject s's data and the other subjects'
+    data. If the subjects' events occur at different times, the other subjects' data
+    inside that window may come from different events. Cross-subject correlations
+    assume that all subjects experience the same external stimulus at the same times;
+    per-subject events that are not aligned across subjects are better suited to
+    within-subject correlations (``cfun=autofc``).
 
     Examples
     --------
@@ -171,6 +286,19 @@ def timecorr(
     (100, 15)
     >>> tc.timecorr(data, rfun="PCA").shape
     (100, 5)
+
+    Restrict the kernel to three events (timepoints 0-39, 40-69 and 70-99):
+
+    >>> blocks = tc.timecorr(data, weights_params={"var": 50}, events=[40, 70])
+    >>> blocks.shape
+    (100, 15)
+    >>> full = tc.gaussian_weights(100, {"var": 50})
+    >>> alone = tc.timecorr(data[40:70], weights_function=lambda T, p: full[40:70, 40:70])
+    >>> bool(np.allclose(blocks[40:70], alone))
+    True
+    >>> per_subject = tc.timecorr(subjects, cfun=tc.autofc, events=[[40], [50, 80], None])
+    >>> len(per_subject), per_subject[0].shape
+    (3, (100, 15))
     """
 
     def temporal_filter(T, k):
@@ -208,14 +336,33 @@ def timecorr(
     if not (exclude_timepoints is None):
         weights = np.multiply(temporal_filter(T, exclude_timepoints), weights)
 
+    # event restriction: applied after the include/exclude options; subjects that
+    # share events share one masked kernel
+    resolved = resolve_events(events, T, len(data), events_params)
+    groups = distinct_event_sets(_restricted(resolved), len(data))
+    if len(groups) == 1:
+        weights = mask_kernel(weights, groups[0][0])
+
     if cfun:
-        corrs = reduce(combine(cfun(data, weights)), rfun=rfun)
+        if len(groups) == 1:
+            corrs = cfun(data, weights)
+        else:
+            corrs = _per_subject_cfun(cfun, data, weights, groups)
+        corrs = reduce(combine(corrs), rfun=rfun)
 
     else:
         # smoothing path: kernel-weighted mean of the samples, using the same
-        # kernel rows (after include_timepoints, include_zero and
-        # exclude_timepoints) as the correlation path
-        corrs = combine([_kernel_smooth(x, weights) for x in data])
+        # kernel rows (after include_timepoints, include_zero, exclude_timepoints
+        # and events) as the correlation path
+        if len(groups) == 1:
+            smoothed = [_kernel_smooth(x, weights) for x in data]
+        else:
+            smoothed = [None] * len(data)
+            for boundaries, subjects in groups:
+                masked = mask_kernel(weights, boundaries)
+                for s in subjects:
+                    smoothed[s] = _kernel_smooth(data[s], masked)
+        corrs = combine(smoothed)
 
     if isinstance(corrs, list) and len(corrs) == 1:
         return corrs[0]

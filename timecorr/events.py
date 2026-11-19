@@ -43,6 +43,12 @@ def _check_T(T):
     return int(T)
 
 
+def _check_n_subjects(n_subjects):
+    if not _is_int_scalar(n_subjects) or n_subjects < 1:
+        raise ValueError(f"n_subjects must be a positive integer, got {n_subjects!r}")
+    return int(n_subjects)
+
+
 def check_boundaries(b, T):
     """
     Validate a boundary set and return the block starts.
@@ -296,8 +302,9 @@ def resolve_events(events, T, n_subjects, events_params=None):
     >>> resolve_events([[4], None], 12, 2)
     [array([0, 4]), None]
     """
-    _check_params_keys(params := events_params)
-    parsed = _parse_spec(events, _check_T(T), n_subjects)
+    params = events_params
+    _check_params_keys(params)
+    parsed = _parse_spec(events, _check_T(T), _check_n_subjects(n_subjects))
     if params and not _has_features(parsed):
         raise ValueError("events_params was given but no events entry holds features")
     return _finish(parsed, params, {})
@@ -343,6 +350,7 @@ def resolve_events_by_order(events, T, n_subjects, order, events_params=None):
     (True, array([0, 4]))
     """
     T = _check_T(T)
+    n_subjects = _check_n_subjects(n_subjects)
     if not _is_int_scalar(order) or order < 1:
         raise ValueError(f"order must be a positive integer, got {order!r}")
     order = int(order)
@@ -356,13 +364,15 @@ def resolve_events_by_order(events, T, n_subjects, order, events_params=None):
     parsed = {k: _parse_spec(specs.get(k), T, n_subjects) for k in range(1, order + 1)}
 
     flat, by_order = None, None
-    if events_params:
+    if events_params is not None:
         if not isinstance(events_params, dict):
             raise ValueError(
                 f"events_params must be a dict or None, got {type(events_params).__name__}"
             )
         int_keys = [_is_int_scalar(k) for k in events_params]
-        if all(int_keys):
+        if not events_params:
+            pass  # an empty dict gives no parameters
+        elif all(int_keys):
             if not isinstance(events, dict):
                 raise ValueError(
                     "events_params keyed by order requires events to be a dict keyed by order"
@@ -459,7 +469,8 @@ def distinct_event_sets(resolved, n_subjects):
     groups : list of tuple
         ``(boundaries, subject_indices)`` pairs in order of first appearance; ``boundaries`` is
         an array or ``None`` and ``subject_indices`` is a sorted list. Every subject appears
-        in exactly one group.
+        in exactly one group. ``None`` and a single-block boundary set such as ``[0]`` form
+        separate groups.
 
     Examples
     --------
@@ -469,6 +480,7 @@ def distinct_event_sets(resolved, n_subjects):
     ...  distinct_event_sets([np.array([0, 4]), None, np.array([0, 4])], 3)]
     [([0, 4], [0, 2]), (None, [1])]
     """
+    n_subjects = _check_n_subjects(n_subjects)
     if resolved is None or isinstance(resolved, np.ndarray):
         return [(resolved, list(range(n_subjects)))]
     if len(resolved) != n_subjects:

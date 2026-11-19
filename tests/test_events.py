@@ -1,10 +1,14 @@
-"""Tests for timecorr.events: boundaries, specification grammar and kernel mask."""
+"""Tests for timecorr.events (boundaries, specification grammar, kernel mask) and for
+event-restricted kernels in ``timecorr`` and the correlation functions."""
+
+import warnings
 
 import numpy as np
 import pandas as pd
 import polars as pl
 import pytest
 
+import timecorr as tc
 from timecorr.events import (
     block_labels,
     check_boundaries,
@@ -13,7 +17,7 @@ from timecorr.events import (
     resolve_events,
     resolve_events_by_order,
 )
-from timecorr.helpers import eye_weights, gaussian_weights
+from timecorr.helpers import eye_weights, gaussian_weights, mat2vec, one_sided, r2z, z2r
 
 T = 12
 FEATURES = np.random.RandomState(0).randn(T, 3)
@@ -436,3 +440,399 @@ def test_distinct_every_subject_once():
 def test_distinct_wrong_length():
     with pytest.raises(ValueError):
         distinct_event_sets([np.array([0])], 3)
+
+
+# ---------------------------------------------------------------- Task 1 review cleanups
+@pytest.mark.parametrize("bad", [[], 0, "", ()])
+def test_by_order_falsy_non_dict_params_raise(bad):
+    with pytest.raises(ValueError):
+        resolve_events_by_order([4], T, 2, 2, events_params=bad)
+
+
+def test_by_order_empty_params_dict_is_no_params():
+    out = resolve_events_by_order([4], T, 2, 2, events_params={})
+    np.testing.assert_array_equal(out[1], [0, 4])
+    np.testing.assert_array_equal(out[2], [0, 4])
+
+
+@pytest.mark.parametrize("bad", [[], 0, ""])
+def test_resolve_falsy_non_dict_params_raise(bad):
+    with pytest.raises(ValueError):
+        resolve_events([4], T, 2, events_params=bad)
+
+
+@pytest.mark.parametrize("bad", [0, -1, 1.5, True, np.True_, "2", None])
+def test_n_subjects_must_be_positive_integer(bad):
+    with pytest.raises(ValueError):
+        resolve_events([4], T, bad)
+    with pytest.raises(ValueError):
+        resolve_events_by_order([4], T, bad, 2)
+    with pytest.raises(ValueError):
+        distinct_event_sets(None, bad)
+
+
+def test_n_subjects_numpy_integer_ok():
+    np.testing.assert_array_equal(resolve_events([4], T, np.int64(2)), [0, 4])
+
+
+def test_distinct_none_and_single_block_are_separate_groups():
+    groups = distinct_event_sets([None, np.array([0])], 2)
+    assert [g[1] for g in groups] == [[0], [1]]
+
+
+# ================================================================ timecorr(events=...)
+NT = 60
+K = 4
+S = 3
+B = np.array([20, 38])  # blocks [0, 20), [20, 38), [38, 60)
+EDGES = [0, 20, 38, 60]
+PARAMS = {"var": 25}
+SW = np.array([[0.0, 1.0, 2.0], [1.0, 0.0, 0.5], [3.0, 1.0, 0.0]])
+PER_SUBJECT = [np.array([20, 38]), np.array([15, 40]), np.array([30])]
+
+
+def _subjects(seed=0, n=S):
+    rng = np.random.RandomState(seed)
+    return [rng.randn(NT, K) for _ in range(n)]
+
+
+def _kernel(include):
+    w = tc.gaussian_weights(NT, PARAMS)
+    if include == "backward":
+        w = one_sided(w, "backward", True)
+    return w
+
+
+def _fixed_wisfc(data, weights):
+    n = len(data) if isinstance(data, list) else 1
+    return tc.wisfc(data, weights, subject_weights=SW[:n, :n])
+
+
+CFUNS = {"autofc": tc.autofc, "isfc": tc.isfc, "smooth": None, "wisfc": _fixed_wisfc}
+
+
+def _count_user_warnings(fn):
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        out = fn()
+    return out, [w for w in rec if issubclass(w.category, UserWarning)]
+
+
+def _quiet(fn):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return fn()
+
+
+# ---------------------------------------------------------------- (a) split-and-stitch oracle
+@pytest.mark.parametrize("include", ["all", "backward"])
+@pytest.mark.parametrize("name", list(CFUNS))
+def test_split_and_stitch_oracle(name, include):
+    cfun = CFUNS[name]
+    data = _subjects()
+    full = _kernel(include)
+    got = _quiet(
+        lambda: tc.timecorr(
+            data, weights_params=PARAMS, include_timepoints=include, cfun=cfun, events=B
+        )
+    )
+    pieces = []
+    for a, b in zip(EDGES[:-1], EDGES[1:]):
+        sub = full[a:b, a:b]
+        pieces.append(
+            _quiet(
+                lambda sub=sub, a=a, b=b: tc.timecorr(
+                    [d[a:b] for d in data],
+                    weights_function=lambda n, p, sub=sub: sub,
+                    cfun=cfun,
+                )
+            )
+        )
+    for s in range(S):
+        expected = np.vstack([p[s] for p in pieces])
+        assert got[s].shape == expected.shape
+        assert np.allclose(got[s], expected, atol=1e-10)
+
+
+# ---------------------------------------------------------------- (b) no restriction
+@pytest.mark.parametrize("name", list(CFUNS))
+def test_events_none_and_empty_reproduce_today(name):
+    cfun = CFUNS[name]
+    data = _subjects()
+    base = tc.timecorr(data, weights_params=PARAMS, cfun=cfun)
+    for ev in (None, []):
+        out = tc.timecorr(data, weights_params=PARAMS, cfun=cfun, events=ev)
+        for s in range(S):
+            assert np.array_equal(out[s], base[s])
+
+
+def test_events_empty_single_subject_reproduces_today():
+    x = _subjects()[0]
+    base = tc.timecorr(x, weights_params=PARAMS)
+    assert np.array_equal(tc.timecorr(x, weights_params=PARAMS, events=[]), base)
+    assert np.array_equal(tc.timecorr(x, weights_params=PARAMS, events=[0]), base)
+
+
+# ---------------------------------------------------------------- (c) per-subject events
+def test_per_subject_autofc_equals_single_subject_calls():
+    data = _subjects()
+    out = tc.timecorr(data, weights_params=PARAMS, cfun=tc.autofc, events=PER_SUBJECT)
+    for s in range(S):
+        single = tc.timecorr(data[s], weights_params=PARAMS, cfun=tc.autofc, events=PER_SUBJECT[s])
+        np.testing.assert_allclose(out[s], single, rtol=0, atol=1e-12)
+
+
+def test_per_subject_smoothing_equals_single_subject_calls():
+    data = _subjects()
+    out = tc.timecorr(data, weights_params=PARAMS, cfun=None, events=PER_SUBJECT)
+    for s in range(S):
+        single = tc.timecorr(data[s], weights_params=PARAMS, cfun=None, events=PER_SUBJECT[s])
+        np.testing.assert_allclose(out[s], single, rtol=0, atol=1e-12)
+
+
+def test_per_subject_isfc_matches_oracle():
+    data = _subjects()
+    out = tc.timecorr(data, weights_params=PARAMS, cfun=tc.isfc, events=PER_SUBJECT)
+    full = tc.gaussian_weights(NT, PARAMS)
+    for s in range(S):
+        w_s = mask_kernel(full, PER_SUBJECT[s])
+        others = np.mean([data[o] for o in range(S) if o != s], axis=0)
+        c = tc.wcorr(data[s], others, w_s)
+        sym = z2r((r2z(c) + r2z(c.transpose(1, 0, 2))) / 2)
+        assert np.allclose(out[s], mat2vec(sym), atol=1e-10)
+
+
+@pytest.mark.parametrize("name", list(CFUNS))
+def test_per_subject_identical_equals_shared(name):
+    cfun = CFUNS[name]
+    data = _subjects()
+    shared = tc.timecorr(data, weights_params=PARAMS, cfun=cfun, events=B)
+    for ev in ([B, B, B], [B.copy(), list(B), tuple(int(b) for b in B)]):
+        per = tc.timecorr(data, weights_params=PARAMS, cfun=cfun, events=list(ev))
+        for s in range(S):
+            assert np.array_equal(per[s], shared[s])
+
+
+def test_per_subject_none_entry_is_unrestricted():
+    data = _subjects()
+    out = tc.timecorr(data, weights_params=PARAMS, cfun=tc.autofc, events=[B, None, [0]])
+    base = tc.timecorr(data, weights_params=PARAMS, cfun=tc.autofc)
+    np.testing.assert_allclose(out[1], base[1], rtol=0, atol=1e-12)
+    np.testing.assert_allclose(out[2], base[2], rtol=0, atol=1e-12)
+    assert not np.allclose(out[0], base[0])
+
+
+# ---------------------------------------------------------------- correlation functions, list form
+@pytest.mark.parametrize("fn", [tc.wisfc, tc.isfc, tc.autofc])
+def test_list_of_kernels_takes_subject_kernel(fn):
+    data = _subjects()
+    full = tc.gaussian_weights(NT, PARAMS)
+    kernels = [mask_kernel(full, b) for b in PER_SUBJECT]
+    out = fn(data, kernels)
+    for s in range(S):
+        np.testing.assert_allclose(out[s], fn(data, kernels[s])[s], rtol=0, atol=1e-12)
+
+
+def test_list_of_kernels_wisfc_fixed_subject_weights():
+    data = _subjects()
+    full = tc.gaussian_weights(NT, PARAMS)
+    kernels = [mask_kernel(full, b) for b in PER_SUBJECT]
+    out = tc.wisfc(data, kernels, subject_weights=SW)
+    for s in range(S):
+        ref = tc.wisfc(data, kernels[s], subject_weights=SW)[s]
+        np.testing.assert_allclose(out[s], ref, rtol=0, atol=1e-12)
+
+
+def test_list_of_kernels_single_array_data():
+    x = _subjects()[0]
+    w = mask_kernel(tc.gaussian_weights(NT, PARAMS), B)
+    np.testing.assert_array_equal(tc.autofc(x, [w]), tc.autofc(x, w))
+
+
+@pytest.mark.parametrize("fn", [tc.wisfc, tc.isfc, tc.autofc])
+def test_list_of_kernels_wrong_length(fn):
+    data = _subjects()
+    w = tc.gaussian_weights(NT, PARAMS)
+    with pytest.raises(ValueError):
+        fn(data, [w, w])
+
+
+def test_list_of_equal_kernels_warns_as_single_kernel():
+    data = _subjects()
+    w = mask_kernel(tc.gaussian_weights(NT, PARAMS), [2, 4, 30])
+    _, single = _count_user_warnings(lambda: tc.isfc(data, w))
+    _, listed = _count_user_warnings(lambda: tc.isfc(data, [w.copy() for _ in range(S)]))
+    assert len(single) == 1 and len(listed) == 1
+    assert str(single[0].message) == str(listed[0].message)
+
+
+def test_list_of_different_kernels_one_warning():
+    data = _subjects()
+    full = tc.gaussian_weights(NT, PARAMS)
+    kernels = [mask_kernel(full, b) for b in ([2, 4, 30], [10], [50, 52])]
+    _, rec = _count_user_warnings(lambda: tc.isfc(data, kernels))
+    assert len(rec) == 1
+    msg = str(rec[0].message)
+    assert "fewer than 3" in msg and "0" in msg and "2" in msg
+    # subject 1's kernel has no short rows, so the message names only subjects 0 and 2
+    assert "subject 1" not in msg.lower()
+
+
+# ---------------------------------------------------------------- (d) custom cfun
+def test_custom_cfun_per_subject_matches_builtin():
+    data = _subjects()
+    calls = []
+
+    def my_isfc(d, w):
+        calls.append(w)
+        return tc.isfc(d, w)
+
+    got = tc.timecorr(data, weights_params=PARAMS, cfun=my_isfc, events=PER_SUBJECT)
+    ref = tc.timecorr(data, weights_params=PARAMS, cfun=tc.isfc, events=PER_SUBJECT)
+    for s in range(S):
+        np.testing.assert_allclose(got[s], ref[s], rtol=0, atol=1e-12)
+    assert len(calls) == 3
+
+
+def test_custom_cfun_called_once_per_distinct_kernel():
+    data = _subjects()
+    calls = []
+
+    def my_autofc(d, w):
+        calls.append(w)
+        return tc.autofc(d, w)
+
+    got = tc.timecorr(data, weights_params=PARAMS, cfun=my_autofc, events=[B, [30], list(B)])
+    ref = tc.timecorr(data, weights_params=PARAMS, cfun=tc.autofc, events=[B, [30], list(B)])
+    assert len(calls) == 2
+    for s in range(S):
+        np.testing.assert_allclose(got[s], ref[s], rtol=0, atol=1e-12)
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        lambda d, w: tc.isfc(d, w)[0],  # one array
+        lambda d, w: tc.isfc(d, w)[:2],  # wrong length
+        lambda d, w: tuple(tc.isfc(d, w)),  # not a list
+    ],
+)
+def test_custom_cfun_bad_return(bad):
+    with pytest.raises(ValueError):
+        tc.timecorr(_subjects(), weights_params=PARAMS, cfun=bad, events=PER_SUBJECT)
+
+
+# ---------------------------------------------------------------- (e) isolation
+def test_isolation_block_two_does_not_affect_block_one():
+    x = _subjects()[0]
+    y = x.copy()
+    y[20:38] = np.random.RandomState(9).randn(18, K) * 5 + 3
+    a = tc.timecorr(x, weights_params=PARAMS, cfun=tc.autofc, events=B)
+    b = tc.timecorr(y, weights_params=PARAMS, cfun=tc.autofc, events=B)
+    np.testing.assert_allclose(a[:20], b[:20], rtol=0, atol=1e-12)
+    np.testing.assert_allclose(a[38:], b[38:], rtol=0, atol=1e-12)
+    assert not np.allclose(a[20:38], b[20:38])
+    # without events, block 1 does change
+    c = tc.timecorr(x, weights_params=PARAMS, cfun=tc.autofc)
+    d = tc.timecorr(y, weights_params=PARAMS, cfun=tc.autofc)
+    assert not np.allclose(c[:20], d[:20], atol=1e-6)
+
+
+# ---------------------------------------------------------------- (f) short blocks, exclude
+def test_backward_without_zero_block_starts_are_zero_one_warning():
+    data = _subjects()
+    out, rec = _count_user_warnings(
+        lambda: tc.timecorr(
+            data,
+            weights_params=PARAMS,
+            include_timepoints="backward",
+            include_zero=False,
+            cfun=tc.autofc,
+            events=B,
+        )
+    )
+    assert len(rec) == 1
+    for s in range(S):
+        for start in EDGES[:-1]:
+            assert np.all(out[s][start] == 0)
+
+
+@pytest.mark.parametrize("exclude", [3, -2])
+def test_events_with_exclude_timepoints(exclude):
+    data = _subjects()
+    out, rec = _count_user_warnings(
+        lambda: tc.timecorr(
+            data,
+            weights_params=PARAMS,
+            include_timepoints="backward",
+            exclude_timepoints=exclude,
+            cfun=tc.isfc,
+            events=B,
+        )
+    )
+    assert len(rec) == 1
+    for s in range(S):
+        assert out[s].shape == (NT, K * (K + 1) // 2)
+        for start in EDGES[:-1]:
+            assert np.all(out[s][start] == 0)
+
+
+@pytest.mark.parametrize("name", ["autofc", "isfc", "wisfc"])
+def test_short_blocks_one_warning_shared(name):
+    _, rec = _count_user_warnings(
+        lambda: tc.timecorr(_subjects(), weights_params=PARAMS, cfun=CFUNS[name], events=[2, 4, 30])
+    )
+    assert len(rec) == 1
+    assert "fewer than 3" in str(rec[0].message)
+
+
+@pytest.mark.parametrize("name", ["autofc", "isfc"])
+def test_short_blocks_one_warning_per_subject(name):
+    _, rec = _count_user_warnings(
+        lambda: tc.timecorr(
+            _subjects(),
+            weights_params=PARAMS,
+            cfun=CFUNS[name],
+            events=[[2, 4, 30], [10], [50, 52]],
+        )
+    )
+    assert len(rec) == 1
+    assert "fewer than 3" in str(rec[0].message)
+
+
+def test_no_block_long_enough_raises():
+    with pytest.raises(ValueError):
+        tc.timecorr(_subjects()[0], weights_params=PARAMS, events=list(range(1, NT)))
+
+
+def test_events_params_without_features_raises():
+    with pytest.raises(ValueError):
+        tc.timecorr(_subjects()[0], weights_params=PARAMS, events=B, events_params={"n": 3})
+
+
+# ---------------------------------------------------------------- (g) one subject, list or bare
+@pytest.mark.parametrize("name", list(CFUNS))
+def test_timecorr_single_subject_list_and_bare_agree(name):
+    x = _subjects()[0]
+    bare = tc.timecorr(x, weights_params=PARAMS, cfun=CFUNS[name], events=B)
+    for ev in ([B], [list(B)], list(B)):
+        out = tc.timecorr(x, weights_params=PARAMS, cfun=CFUNS[name], events=ev)
+        assert np.array_equal(out, bare)
+    assert not np.array_equal(bare, tc.timecorr(x, weights_params=PARAMS, cfun=CFUNS[name]))
+
+
+# ---------------------------------------------------------------- (h) rfun and combine
+@pytest.mark.parametrize("events", [B, PER_SUBJECT])
+def test_rfun_and_combine_after_masking(events):
+    data = _subjects()
+    reduced = tc.timecorr(data, weights_params=PARAMS, rfun="PCA", events=events)
+    assert len(reduced) == S and all(r.shape == (NT, K) for r in reduced)
+    combined = tc.timecorr(
+        data, weights_params=PARAMS, combine=tc.corrmean_combine, events=events
+    )
+    assert combined.shape == (NT, K * (K + 1) // 2)
+    both = tc.timecorr(
+        data, weights_params=PARAMS, combine=tc.corrmean_combine, rfun="PCA", events=events
+    )
+    assert both.shape == (NT, K)
+

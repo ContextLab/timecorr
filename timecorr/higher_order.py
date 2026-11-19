@@ -31,6 +31,13 @@ from .helpers import (
     null_combine,
     reduce,
 )
+from .events import (
+    _check_params_keys,
+    _has_features,
+    _parse_spec,
+    resolve_events,
+    resolve_events_by_order,
+)
 from .timecorr import timecorr
 
 _BYTES_PER_GB = 1e9
@@ -179,6 +186,7 @@ def _analysis_path(
     max_memory_gb=None,
     n_outputs=1,
     order=None,
+    events=None,
 ):
     """
     Analysis path of one order: ``reduce(combine(timecorr(subjects, kernel, cfun)))``.
@@ -193,11 +201,17 @@ def _analysis_path(
     Before computing, the step is checked against ``max_memory_gb`` (see
     ``_check_step_memory``; ``n_outputs=2`` when the delta path of the same
     order follows and its results are held together).
+
+    ``events`` is a RESOLVED entry (``None``, one boundary array shared by all
+    subjects, or a list with one boundary array or ``None`` per subject; see
+    ``timecorr.events.resolve_events``) and restricts the analysis kernel.
+    With ``groups``, a per-subject list is subset by member index, so each
+    subject keeps its own events.
     """
     T, d = subjects[0].shape
     _check_step_memory(d, T, len(subjects), n_outputs, max_memory_gb, order)
 
-    def analyze(members):
+    def analyze(members, member_events):
         return combine(
             _as_list(
                 timecorr(
@@ -209,14 +223,20 @@ def _analysis_path(
                     cfun=cfun,
                     rfun=None,
                     include_zero=include_zero,
+                    events=member_events,
                 )
             )
         )
 
     if groups is None:
-        return _reduce(analyze(subjects), rfun, ndims)
+        return _reduce(analyze(subjects, events), rfun, ndims)
 
-    combined = [analyze([subjects[j] for j in g]) for g in groups]
+    def group_events(g):
+        if isinstance(events, list):
+            return [events[j] for j in g]
+        return events
+
+    combined = [analyze([subjects[j] for j in g], group_events(g)) for g in groups]
     # flatten every group's output into one list so a single reduction model is
     # fit to all of them, then restore each group's container type
     pieces, sizes = [], []
@@ -320,6 +340,9 @@ def two_path_step(
     include_timepoints="all",
     include_zero=True,
     max_memory_gb=4.0,
+    *,
+    events=None,
+    events_params=None,
 ):
     """
     Compute one order of the two-path pipeline from the previous delta features.
@@ -361,6 +384,16 @@ def two_path_step(
         Upper limit, in gigabytes, on the estimated peak memory of the step
         for all subjects together (see ``features`` and
         ``estimate_memory_gb``); None checks nothing.  Default: 4.0.
+    events : None, array-like, or list
+        Restricts the analysis kernel of this order to events (keyword-only;
+        see ``timecorr``): boundaries shared by all subjects, features with T
+        rows segmented with ``segment``, or a list with one such entry (or
+        None) per subject.  The delta path is not restricted.  A dict keyed
+        by order is not accepted here (see ``features``).  Default: None (no
+        restriction).
+    events_params : dict or None
+        Keyword arguments for ``segment`` when ``events`` holds features
+        (keyword-only; see ``timecorr``).  Default: None.
 
     Returns
     -------
@@ -400,8 +433,13 @@ def two_path_step(
         If ``rfun`` or ``delta_rfun`` is an unknown model or graph measure
         name or a dict without a ``'model'``, if ``ndims`` is not a positive
         integer, and as in ``timecorr`` (subjects of different shapes,
-        non-numeric columns, an unknown ``include_timepoints``, or an all-zero
-        kernel).
+        non-numeric columns, an unknown ``include_timepoints``, an all-zero
+        kernel, a malformed ``events`` specification, a dict ``events``, or
+        events that leave no kernel row with 3 or more non-zero weights).
+        The events are resolved (and features segmented) before any
+        correlations are computed.
+    RuntimeError, ImportError
+        As raised by ``segment`` for features entries of ``events``.
     TypeError
         If ``rfun`` or ``delta_rfun`` is not None, a string, a dict or a
         callable.
@@ -415,12 +453,21 @@ def two_path_step(
     >>> X1, D1 = two_path_step(data, weights_params={"var": 10})
     >>> len(X1), X1[0].shape, len(D1), D1[0].shape
     (3, (40, 4), 3, (40, 4))
+
+    Restrict the analysis kernel to two events (timepoints 0-19 and 20-39):
+
+    >>> X1, D1 = two_path_step(data, weights_params={"var": 10}, events=[20])
+    >>> X1[0].shape
+    (40, 4)
     """
     _check_rfun(rfun, "rfun")
     _check_rfun(delta_rfun, "delta_rfun")
     ndims = _check_ndims(ndims)
     single = not isinstance(data, (list, tuple))
     subjects = format_data(data, fill_nan=False)
+    resolved = resolve_events(
+        events, subjects[0].shape[0], len(subjects), events_params
+    )
     X_next, D_next = _two_path_step(
         subjects,
         weights_function=weights_function,
@@ -433,6 +480,7 @@ def two_path_step(
         include_timepoints=include_timepoints,
         include_zero=include_zero,
         max_memory_gb=max_memory_gb,
+        events=resolved,
     )
     if single:
         if isinstance(X_next, list):
@@ -463,6 +511,25 @@ def _two_path_step(
     return X_next, D_next
 
 
+def _check_events_order_zero(events, T, n_subjects, events_params):
+    """
+    Check ``events`` / ``events_params`` for ``features(order=0)``, which has no
+    kernel to restrict: a dict with any key raises, and a non-dict
+    specification is parsed as for one order (features are not segmented).
+    """
+    if isinstance(events, dict):
+        if events:
+            raise ValueError(
+                "order is 0, so there is no kernel for events to restrict; "
+                f"got events for order(s) {list(events)}"
+            )
+        events = None
+    _check_params_keys(events_params)
+    parsed = _parse_spec(events, T, n_subjects)
+    if events_params and not _has_features(parsed):
+        raise ValueError("events_params was given but no events entry holds features")
+
+
 def features(
     data,
     order=1,
@@ -477,6 +544,9 @@ def features(
     include_zero=True,
     return_delta=False,
     max_memory_gb=4.0,
+    *,
+    events=None,
+    events_params=None,
 ):
     """
     Compute features of every order from 0 to ``order`` with the two-path pipeline.
@@ -551,6 +621,29 @@ def features(
         every step, because the (d, d, T) correlation array is allocated
         whether or not the result is then reduced; for large K, raising it is
         the remedy.  None checks nothing.  Default: 4.0.
+    events : None, dict, array-like, or list
+        Restricts the analysis kernel to events (keyword-only; see
+        ``timecorr`` for one specification: boundaries shared by all
+        subjects, features with T rows segmented with ``segment``, or a list
+        with one such entry, or None, per subject).  A dict maps orders
+        (integers in ``1..order``) to specifications, and orders missing from
+        it are unrestricted; any other value applies to every order.  At
+        order ``k`` the analysis kernel is restricted with order ``k``'s
+        events; the delta path is never restricted, so the events of order
+        ``k`` change ``X_k`` only (``D_k`` and later orders are unaffected).
+        The events are resolved once, before any correlations are computed,
+        and a features object used for several orders is segmented once
+        (per distinct ``events_params``).  With ``order=0`` there is no
+        kernel to restrict: a non-dict specification is checked (without
+        segmenting features) and the data are returned unchanged, and a dict
+        with any key raises ``ValueError``.  Default: None (no restriction).
+    events_params : dict or None
+        Keyword arguments for ``segment`` when ``events`` holds features
+        (keyword-only; keys ``n``, ``kind``, ``max_events``,
+        ``random_state``).  When ``events`` is a dict, this may instead be a
+        dict keyed by order whose values are such dicts.  Unknown keys, or
+        giving it when no entry of ``events`` holds features, raise
+        ``ValueError``.  Default: None.
 
     Returns
     -------
@@ -586,8 +679,15 @@ def features(
         ``delta_rfun`` is an unknown model or graph measure name or a dict
         without a ``'model'`` (both are checked before anything is computed,
         even when ``delta_rfun`` would not be called); if ``ndims`` is not a
-        positive integer; and as in ``timecorr`` (subjects of different
+        positive integer; for a malformed ``events`` specification or
+        ``events_params`` (including dict keys outside ``1..order``), and
+        when the events of an order leave no kernel row with 3 or more
+        non-zero weights; and as in ``timecorr`` (subjects of different
         shapes, non-numeric columns, an unknown ``include_timepoints``).
+        The events are checked (and features segmented) before anything is
+        computed.
+    RuntimeError, ImportError
+        As raised by ``segment`` for features entries of ``events``.
     TypeError
         If ``rfun`` or ``delta_rfun`` is not None, a string, a dict or a
         callable.
@@ -609,6 +709,13 @@ def features(
     >>> X, D = tc.features(data[0], order=1, rfun=None, return_delta=True)
     >>> X[1].shape, D[1].shape
     ((50, 15), (50, 15))
+
+    Restrict the order-2 analysis kernel to two events (timepoints 0-24 and
+    25-49); ``X_1`` is unrestricted:
+
+    >>> X = tc.features(data, order=2, weights_params={"var": 10}, events={2: [25]})
+    >>> X[2][0].shape
+    (50, 5)
     """
     if (
         not isinstance(order, numbers.Integral)
@@ -628,6 +735,13 @@ def features(
     delta_unreduced = (rfun if delta_rfun is None else delta_rfun) is None
 
     S = len(subjects)
+    # events are resolved (and features segmented) once, before anything is computed
+    if order == 0:
+        _check_events_order_zero(events, T, S, events_params)
+        resolved = {}
+    else:
+        resolved = resolve_events_by_order(events, T, S, order, events_params)
+
     if delta_unreduced and max_memory_gb is not None:
         # widths are known in advance: refuse before computing anything
         estimates = estimate_memory_gb(K, order, T, S, return_delta)
@@ -655,6 +769,7 @@ def features(
             combine=combine,
             include_timepoints=include_timepoints,
             include_zero=include_zero,
+            events=resolved[k],
         )
         if k == order and not return_delta:
             # the last order's delta features feed nothing and are not returned:

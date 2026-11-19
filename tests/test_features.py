@@ -648,3 +648,225 @@ def test_max_memory_gb_none_is_documented_alike_everywhere():
     doc = " ".join(tc.features.__doc__.split())
     assert "max_memory_gb : float or None" in doc
     assert "None checks nothing" in doc
+
+
+# ---------------------------------------------------------------- events
+
+
+EVENTS_KW = dict(weights_params={"var": 10}, rfun=None)
+B = [20, 45]
+
+
+def _stimulus(seed=1):
+    # three events (0-19, 20-39, 40-59) whose means alternate between two states
+    rng = np.random.RandomState(seed)
+    means = np.repeat([0.0, 4.0, 0.0], 20)[:, None]
+    return means + 0.3 * rng.randn(T, 3)
+
+
+def test_events_signatures_keep_positional_order():
+    import inspect
+    for f, positional in [
+        (tc.features, ["data", "order", "weights_function", "weights_params", "cfun",
+                       "rfun", "delta_rfun", "ndims", "combine", "include_timepoints",
+                       "include_zero", "return_delta", "max_memory_gb"]),
+        (two_path_step, ["data", "weights_function", "weights_params", "cfun", "rfun",
+                         "delta_rfun", "ndims", "combine", "include_timepoints",
+                         "include_zero", "max_memory_gb"]),
+    ]:
+        params = inspect.signature(f).parameters
+        names = [n for n, p in params.items()
+                 if p.kind == inspect.Parameter.POSITIONAL_OR_KEYWORD]
+        assert names == positional, f.__name__
+        assert list(params) == positional + ["events", "events_params"], f.__name__
+        assert all(params[n].kind == inspect.Parameter.KEYWORD_ONLY
+                   for n in ("events", "events_params")), f.__name__
+        assert params["events"].default is None
+        assert params["events_params"].default is None
+
+
+def test_events_none_is_unchanged():
+    data = make_data(n_subjects=S)
+    X0, D0 = tc.features(data, order=2, return_delta=True, **EVENTS_KW)
+    X1, D1 = tc.features(data, order=2, return_delta=True, events=None, **EVENTS_KW)
+    for k in range(3):
+        assert_list_equal(X0[k], X1[k])
+        assert_list_equal(D0[k], D1[k])
+
+
+def test_events_order_one_masks_only_order_one_analysis():
+    data = make_data(n_subjects=S)
+    X0, D0 = tc.features(data, order=2, return_delta=True, **EVENTS_KW)
+    X, D = tc.features(data, order=2, return_delta=True, events={1: B}, **EVENTS_KW)
+    assert_list_equal(X[1], tc.timecorr(data, events=B, **EVENTS_KW))
+    assert not np.allclose(X[1][0], X0[1][0])
+    # the delta path is never masked, so D_1 and therefore X_2 are unchanged
+    assert_list_equal(D[1], D0[1])
+    assert_list_equal(D[2], D0[2])
+    assert_list_equal(X[2], X0[2])
+
+
+def test_events_order_two_masks_only_order_two_analysis():
+    data = make_data(n_subjects=S)
+    X0, D0 = tc.features(data, order=2, return_delta=True, **EVENTS_KW)
+    X, D = tc.features(data, order=2, return_delta=True, events={2: B}, **EVENTS_KW)
+    assert_list_equal(X[1], X0[1])
+    assert_list_equal(D[1], D0[1])
+    assert_list_equal(D[2], D0[2])
+    assert_list_equal(X[2], tc.timecorr(D0[1], events=B, **EVENTS_KW))
+    assert not np.allclose(X[2][0], X0[2][0])
+
+
+def test_events_bare_specification_applies_to_every_order():
+    data = make_data(n_subjects=S)
+    X0 = tc.features(data, order=2, **EVENTS_KW)
+    bare = tc.features(data, order=2, events=B, **EVENTS_KW)
+    by_order = tc.features(data, order=2, events={1: B, 2: B}, **EVENTS_KW)
+    for k in (1, 2):
+        assert_list_equal(bare[k], by_order[k])
+        assert not np.allclose(bare[k][0], X0[k][0])
+
+
+def test_events_with_pca_is_joint_reduction_of_masked_timecorr():
+    data = make_data(n_subjects=S)
+    X = tc.features(data, order=1, weights_params={"var": 10}, events=B)
+    expected = tc.reduce(
+        tc.timecorr(data, weights_params={"var": 10}, events=B), rfun="PCA"
+    )
+    assert_list_equal(X[1], expected)
+
+
+def test_events_per_subject_entries_per_order():
+    data = make_data(n_subjects=S)
+    per_subject = [[15], None, np.array([10, 40])]
+    X, D = tc.features(data, order=2, return_delta=True,
+                       events={1: per_subject, 2: B}, **EVENTS_KW)
+    assert_list_equal(X[1], tc.timecorr(data, events=per_subject, **EVENTS_KW))
+    D0 = tc.features(data, order=1, return_delta=True, **EVENTS_KW)[1]
+    assert_list_equal(D[1], D0[1])
+    assert_list_equal(X[2], tc.timecorr(D[1], events=B, **EVENTS_KW))
+
+
+def test_events_single_array_input():
+    x = make_data()
+    X = tc.features(x, order=1, events=B, **EVENTS_KW)
+    assert np.array_equal(X[1], tc.timecorr(x, events=B, **EVENTS_KW))
+
+
+def test_events_with_combine():
+    data = make_data(n_subjects=S)
+    X = tc.features(data, order=1, combine=tc.corrmean_combine, events=B, **EVENTS_KW)
+    expected = tc.timecorr(data, combine=tc.corrmean_combine, events=B, **EVENTS_KW)
+    assert np.array_equal(X[1], expected)
+
+
+def test_events_features_segmented_like_explicit_segment():
+    data = make_data(n_subjects=S)
+    stim = _stimulus()
+    params = {"n": 2, "kind": "recurring", "random_state": 0}
+    b = tc.segment(stim, **params)
+    assert len(b) >= 2
+    X, D = tc.features(data, order=2, return_delta=True, events=stim,
+                       events_params=params, **EVENTS_KW)
+    Xb, Db = tc.features(data, order=2, return_delta=True, events=b, **EVENTS_KW)
+    for k in (1, 2):
+        assert_list_equal(X[k], Xb[k])
+        assert_list_equal(D[k], Db[k])
+
+
+def test_events_params_keyed_by_order():
+    data = make_data(n_subjects=S)
+    stim = _stimulus()
+    X = tc.features(data, order=2, events={2: stim},
+                    events_params={2: {"n": 3}}, **EVENTS_KW)
+    Xb = tc.features(data, order=2, events={2: tc.segment(stim, n=3)}, **EVENTS_KW)
+    assert_list_equal(X[1], Xb[1])
+    assert_list_equal(X[2], Xb[2])
+
+
+@pytest.mark.parametrize("events, events_params", [
+    ({3: B}, None),            # order beyond 2
+    ({0: B}, None),            # order 0 is the data itself
+    ({True: B}, None),         # booleans are not orders
+    ({2: [T + 5]}, None),      # boundary outside [0, T)
+    ([[1], [2]], None),        # per-subject list of the wrong length
+    ({1: B}, {"n": 2}),        # events_params without features
+    ({1: B}, {"bogus": 1}),
+])
+def test_events_bad_specification_raises(events, events_params):
+    data = make_data(n_subjects=S)
+    with pytest.raises(ValueError):
+        tc.features(data, order=2, events=events, events_params=events_params,
+                    **EVENTS_KW)
+
+
+def test_events_resolved_before_any_correlation():
+    # an invalid order-2 entry is reported before the order-1 step, which would
+    # otherwise be refused first by its memory check
+    data = make_data(n_subjects=S)
+    with pytest.raises(MemoryError):
+        tc.features(data, order=2, max_memory_gb=1e-9)
+    with pytest.raises(ValueError, match=r"boundaries must lie in \[0, 60\)"):
+        tc.features(data, order=2, max_memory_gb=1e-9, events={2: [T + 5]})
+
+
+def test_events_order_zero_returns_data_unchanged():
+    data = make_data(n_subjects=S)
+    expected = tc.features(data, order=0)
+    for events, params in [(B, None), ([[1], None, [3]], None), ({}, None),
+                           (_stimulus(), {"n": 3})]:
+        X = tc.features(data, order=0, events=events, events_params=params)
+        assert len(X) == 1
+        assert_list_equal(X[0], expected[0])
+
+
+@pytest.mark.parametrize("events, events_params", [
+    ({1: B}, None),            # no order to apply it to
+    ({1: B}, {1: {"n": 2}}),
+    ([T + 5], None),           # a bare specification is still validated
+    ([[1], [2]], None),
+    (np.zeros((T + 1, 2)), None),
+    (B, {"n": 2}),             # events_params without features
+    (_stimulus(), {"bogus": 1}),
+])
+def test_events_order_zero_validates(events, events_params):
+    data = make_data(n_subjects=S)
+    with pytest.raises(ValueError):
+        tc.features(data, order=0, events=events, events_params=events_params)
+
+
+def test_two_path_step_events_matches_features_order_one():
+    data = make_data(n_subjects=S)
+    stim = _stimulus()
+    for events, params in [(B, None), ([[15], None, [10, 40]], None),
+                           (stim, {"n": 3})]:
+        x, d = two_path_step(data, events=events, events_params=params, **EVENTS_KW)
+        X, D = tc.features(data, order=1, return_delta=True, events=events,
+                           events_params=params, **EVENTS_KW)
+        assert_list_equal(x, X[1])
+        assert_list_equal(d, D[1])
+    x, d = two_path_step(data[0], events=B, **EVENTS_KW)
+    assert np.array_equal(x, tc.timecorr(data[0], events=B, **EVENTS_KW))
+
+
+def test_two_path_step_rejects_dict_events():
+    data = make_data(n_subjects=S)
+    with pytest.raises(ValueError):
+        two_path_step(data, events={1: B}, **EVENTS_KW)
+
+
+def test_analysis_path_groups_subset_per_subject_events():
+    from timecorr.higher_order import _analysis_path
+    data = make_data(n_subjects=S)
+    per_subject = [np.array([0, 15]), None, np.array([0, 10, 40])]
+    out = _analysis_path(data, weights_params={"var": 10}, rfun=None,
+                         groups=[[0, 2], [1]], events=per_subject)
+    assert_list_equal(out[0], tc.timecorr([data[0], data[2]],
+                                          events=[per_subject[0], per_subject[2]],
+                                          **EVENTS_KW))
+    # a one-subject group keeps its list (timecorr returns a bare array for it)
+    assert_list_equal(out[1], [tc.timecorr([data[1]], **EVENTS_KW)])
+    shared = _analysis_path(data, weights_params={"var": 10}, rfun=None,
+                            groups=[[0, 2], [1]], events=np.array([0, 20, 45]))
+    assert_list_equal(shared[0], tc.timecorr([data[0], data[2]], events=B, **EVENTS_KW))
+    assert_list_equal(shared[1], [tc.timecorr([data[1]], events=B, **EVENTS_KW)])

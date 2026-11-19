@@ -535,8 +535,9 @@ class WeightedStrength(_Summary):
     With ``center=True``, coupling that is the same for every pair (all pair
     weights equal) gives magnitude columns that are 0 at every timepoint for
     K >= 4, while K < 4 is never centered; ``center=False`` keeps such
-    coupling and loses the robustness to a signal shared by all nodes that
-    was measured with centering.
+    coupling.  The recovery of the order-2 signal with a global signal
+    added (``tests/test_nested_recovery.py``) was measured with centering;
+    it was not measured with ``center=False``.
     Calling the instance fits to the given units and transforms the same
     units: the weights (and communities) come from the data being summarized.
     ``fit`` and ``transform`` separate the two.  The summary of a unit
@@ -677,7 +678,8 @@ class Communities(_Summary):
     eigenvalue exceeds the shift null; the null's false-positive rate is
     not controlled.  If the top eigenvalue of the data and those of the
     ``n_null`` surrogates are exchangeable, the chance that it exceeds
-    the largest of them is ``1 / (n_null + 1)`` (1/6 at the default 5),
+    the largest of them is at most ``1 / (n_null + 1)`` (1/6 at the
+    default 5; ties make it smaller),
     and any exceedance gives at least two communities; the automatic
     count is a heuristic, and ``n`` can be given instead.  The shift null
     circularly shifts each column of each subject by its own lag (the K

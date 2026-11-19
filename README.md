@@ -256,7 +256,7 @@ pytest --doctest-modules timecorr/
 
 - `timecorr` builds a `T x T` kernel and a `K x K x T` array of correlations for each subject, so memory grows with `T**2` and with `K**2 * T`.
 - Without reduction, the number of features grows from `K` to `K(K+1)/2` at every order. `tc.features(..., rfun=None, delta_rfun=None)` estimates the memory of each step and raises `MemoryError` before allocating more than `max_memory_gb` (default 4 GB); the message gives the largest number of features that fits. `timecorr.higher_order.estimate_memory_gb(K, order, T, n_subjects)` returns the estimates (in GB, for all subjects together; with `delta_weights_function=tc.eye_weights` for the original pipeline, whose delta path has no block temporaries).
-- Dimensionality reduction (`rfun`, `delta_rfun`) keeps the number of features fixed at each order.
+- With reduction (`rfun`, `delta_rfun`) the widths depend on the reducer: PCA gives `ndims` columns (the input width by default), `tc.Communities()` one column per community found (at most half its input features), and `tc.WeightedStrength(signed=True)` twice its input width. With the defaults the order-`k` analysis output (`k >= 2`) is twice the number of community columns found at order `k - 1`.
 
 # Getting Help
 

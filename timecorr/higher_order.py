@@ -1728,8 +1728,10 @@ def features(
         it is known in advance (K at order 1; ``d(d+1)/2`` after an
         unreduced feeding step, ``ndims`` or ``d`` after a model-based one,
         ``d`` after a graph measure, ``d`` times 2 with ``split`` times 2
-        with ``signed`` after weighted strength) and K after a callable, as
-        ``estimate_memory_gb(..., streamed=True)`` does.  After
+        with ``signed`` after weighted strength) and K after a callable (a
+        callable reducer is assumed to keep the width K of the input data
+        in this up-front check; its actual width is checked when the next
+        step runs), as ``estimate_memory_gb(..., streamed=True)`` does.  After
         ``Communities``, whose width is found by the fit, the steps whose
         width follows from it are checked when they run.
         The message gives the estimate and the largest number of features

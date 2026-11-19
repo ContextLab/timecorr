@@ -276,8 +276,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fewer such lags than columns raises `ValueError` asking for `n`; fits
   counted this way record `"n_null"`). The null assumes that dependence
   between columns does not survive the shifts; if the data and surrogate
-  top eigenvalues are exchangeable, any exceedance (chance
-  `1 / (n_null + 1)`) gives at least two communities. The summaries reject
+  top eigenvalues are exchangeable, any exceedance (chance at most
+  `1 / (n_null + 1)`; ties make it smaller) gives at least two communities. The summaries reject
   NaN or infinite correlations, empty inputs and a non-finite
   `null_threshold` with `ValueError`.
 - `features` and `two_path_step`: keyword-only `delta_weights_function` and

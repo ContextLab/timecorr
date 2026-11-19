@@ -71,9 +71,13 @@ simulated in its own call).  Controls from the inputs (sustained, T 1000,
 order-1 features (``order1_score``: ``features(order=1)``, PCA fitted on
 the two subjects) .001 +- .046 (sd .228), asserted on 16 seeds
 (30000-30015; measured -.098, standard error .064, sd .256) because 4 seeds were too few (4-seed
-mean -.28 when the order-1 features came from the 6-subject call; that
-6-subject decode, computed by ``_development_table``, is .119 +- .052, sd
-.255, over the 24 development seeds).  Magnitude check
+mean -.28 when the order-1 features came from the 6-subject call).  The
+6-subject order-1 decode is the ``"order1"`` entry of ``case_scores``
+(printed in the case rows of ``_development_table``; the same features as
+``_order1_predictions``): .119 +- .052, sd .255, over the 24 development
+seeds; the two-subject value above (.001 +- .046) is the ``order1`` job of
+``_development_table`` (``order1_score``).  Both were re-measured on
+20000-20023 with the same result.  Magnitude check
 (``order1_magnitudes``, 6-subject call, 24 development seeds): mean
 |score| .240 +- .028 for the shared-h subject and .213 +- .017 for the
 independent-h control subjects (difference .027 +- .034, sd .167); asserted
@@ -86,7 +90,11 @@ seeds 20000-20023, shared .308 +- .022, control .331 +- .010, difference
 -.022 +- .025 (sd .122); asserted on 30000-30015 that the difference is
 below 0.09 (about 3 standard errors at 16 seeds; measured .074 +- .026,
 shared .381, control .307); 24 further seeds (40000-40023, not asserted):
-difference .001 +- .031 (shared .331, control .331).
+difference .001 +- .031 (shared .331, control .331).  What is asserted is
+a bound on the mean decoding advantage of the shared-h subject over the
+independent-h controls under this protocol (cross-subject ridge map,
+order-1 PCA features of one 6-subject call), not that the order-1
+features hold no information about h.
 Adjusted Rand index of the order-1 communities against the modules: 1.000
 on all seeds (sustained, sign-flip, T 3000), .956 +- .005 with global
 signal 0.5 (not asserted).  Automatic count on independent autocorrelated
@@ -518,12 +526,17 @@ def test_order1_features_do_not_carry_h_in_magnitude():
     assert diff < 0.13, (diff, rows.mean(0))
 
 
-def test_order1_features_do_not_carry_h_in_per_target_magnitude():
-    # the magnitude taken per column of h before the mean over columns
-    # (``_magnitude``), so opposite signs in different columns do not cancel.
-    # Development (24 seeds): shared .308 +- .022, control .331 +- .010,
+def test_order1_per_target_magnitude_advantage_is_bounded():
+    # Asserted: the mean over 16 seeds of (shared-h minus control) decoding
+    # magnitude from the order-1 features, under this protocol (ridge map
+    # fitted on subject A, applied to subject B and to 4 independent-h
+    # subjects; |corr| per column of h, then the mean over columns), is
+    # below 0.09.  This bounds the average advantage; it does not show that
+    # the order-1 features hold no information about h.
+    # Development (20000-20023): shared .308 +- .022, control .331 +- .010,
     # difference -.022 +- .025 (sd .122, so se .031 at 16 seeds); margin
-    # 0.09 is about 3 standard errors at 16 seeds
+    # 0.09 is about 3 standard errors at 16 seeds.  Measured on the asserted
+    # seeds 30000-30015: .074 +- .026 (shared .381, control .307).
     rows = np.array([order1_target_magnitudes(s)
                      for s in range(TEST_SEEDS[0], TEST_SEEDS[0] + 16)])
     diff = np.mean(rows[:, 0] - rows[:, 1])

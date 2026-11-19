@@ -837,6 +837,27 @@ def test_weighted_strength_width_is_known_in_advance():
     assert _known_width(lambda c: c, 7, None) is None
 
 
+def test_up_front_check_uses_the_original_k_after_a_callable():
+    # widths 24 -> 2 (PCA with ndims=2 on the feeding path at order 1); the
+    # callable at order 2 receives 2 features, but the up-front check takes
+    # the original K = 24 as its output width, so order 3 is checked on 24
+    # inputs, and a budget that fits 2 inputs but not 24 raises there
+    from timecorr.higher_order import _check_streamed_steps
+
+    K_, T_, S_ = 24, 2000, 2
+    on_two = estimate_memory_gb(2, 1, T_, S_, streamed=True)[1]
+    on_k = estimate_memory_gb(K_, 1, T_, S_, streamed=True)[1]
+    assert on_two < on_k
+    analysis = {1: "PCA", 2: "PCA", 3: tc.WeightedStrength()}
+    feeding = {1: "PCA", 2: lambda corrs: corrs, 3: "PCA"}
+    common = dict(cfun=tc.autofc, combine=tc.null_combine,
+                  feeding_function=tc.gaussian_weights, ndims=2)
+    with pytest.raises(MemoryError, match=r"at order 3 .*24 input features"):
+        _check_streamed_steps(K_, T_, S_, (on_two + on_k) / 2, analysis, feeding,
+                              [1, 2], **common)
+    _check_streamed_steps(K_, T_, S_, 2 * on_k, analysis, feeding, [1, 2], **common)
+
+
 # Task 8 review: delta_weights_params alone without "var" ---------------------
 
 

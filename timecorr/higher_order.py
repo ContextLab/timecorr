@@ -1013,8 +1013,9 @@ def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfu
     Input widths follow ``_known_width`` from K.  After ``Communities``,
     whose output width is found by the fit, the width is unknown until it
     runs, and the later steps whose width follows from it are not checked
-    here.  After a callable that is not a summary, K is used (as
-    ``estimate_memory_gb(..., streamed=True)``).  Every step is checked
+    here.  After a callable that is not a summary, the original K (the
+    number of features of the data, not the callable's input width) is
+    used (as ``estimate_memory_gb(..., streamed=True)`` uses K).  Every step is checked
     again, with its actual width, when it runs.
     """
     d = int(K)
@@ -1027,7 +1028,7 @@ def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfu
                 _streamed_block_elements(d, T, S, max_memory_gb, k, "feeding")
             width = _known_width(feeding[k], d, ndims)
             if width is None and not _is_summary(feeding[k]):
-                width = int(K)  # a callable: K, as estimate_memory_gb uses
+                width = int(K)  # a callable: the original K, as estimate_memory_gb uses
             d = width
 
 
@@ -1753,10 +1754,12 @@ def features(
         it is known in advance (K at order 1; ``d(d+1)/2`` after an
         unreduced feeding step, ``ndims`` or ``d`` after a model-based one,
         ``d`` after a graph measure, ``d`` times 2 with ``split`` times 2
-        with ``signed`` after weighted strength) and K after a callable (a
-        callable reducer is assumed to keep the width K of the input data
-        in this up-front check; its actual width is checked when the next
-        step runs), as ``estimate_memory_gb(..., streamed=True)`` does.  After
+        with ``signed`` after weighted strength) and K after a callable
+        (this up-front check takes K, the number of features of the input
+        data, as the output width of a callable reducer that is not a
+        summary, whatever the callable's own input width; its actual width
+        is checked when the next step runs), as
+        ``estimate_memory_gb(..., streamed=True)`` uses K.  After
         ``Communities``, whose width is found by the fit, the steps whose
         width follows from it are checked when they run.
         The message gives the estimate and the largest number of features

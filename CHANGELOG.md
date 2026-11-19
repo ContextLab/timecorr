@@ -298,7 +298,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streamed step, and `features` checks every streamed step whose input
   width is known in advance against `max_memory_gb` before computing
   anything (steps after `Communities`, whose width is found by the fit,
-  when they run); a streamed step also counts the kernels of distinct
+  when they run; after a callable reducer that is not a summary, this
+  check takes the number of features of the data, K, as its output width,
+  whatever the callable's own input width); a streamed step also counts the kernels of distinct
   per-subject event sets, the analysis results held while the feeding step
   runs, and the arrays kept in summaries' `fits_`. The default order-1 reducer (PCA)
   still holds `K(K+1)/2` columns per subject, so memory is bounded only when

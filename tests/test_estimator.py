@@ -1054,3 +1054,37 @@ def test_warns_sections_name_all_three_estimator_clauses():
         assert "fewer than 3 non-zero kernel weights" in section, f.__name__
         assert "effective sample size" in section and "below 2" in section, f.__name__
         assert "zero kernel-weighted variance in every feature" in section, f.__name__
+
+
+@pytest.mark.parametrize(
+    "cfun, kwargs, ref_weights",
+    [
+        (isfc, {}, [0.5, 0.5]),
+        (wisfc, {"subject_weights": np.array([[0, 0.25, 0.75], [1, 0, 1], [1, 1, 0]])},
+         [0.25, 0.75]),
+    ],
+)
+def test_one_sided_zero_variance_symmetrized_entry(cfun, kwargs, ref_weights):
+    # subject 0's feature 0 is constant where kernel row 5 has weight (timepoints
+    # 4-6), so its cross-correlations C[0, j] with the reference have zero
+    # kernel-weighted variance on the subject side only and are 0; C[j, 0]
+    # (subject 0's feature j with the reference's feature 0) is defined, and the
+    # Fisher-z symmetrization averages them, as for an undefined pair:
+    # z2r((r2z(0) + r2z(C[j, 0])) / 2); the diagonal entry C[0, 0] is 0 on both sides
+    x, _, w = _nan_reduced_support_case()
+    xc = x.copy()
+    xc[4:7, 0] = 0.7
+    rng = _rng(34)
+    others = [x + 0.3 * rng.randn(*x.shape) for _ in range(2)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = cfun([xc] + others, w, **kwargs)
+    m = vec2mat(out[0])
+    reference = ref_weights[0] * others[0] + ref_weights[1] * others[1]
+    assert m[0, 0, 5] == 0
+    for j in (1, 2):
+        c_j0 = _weighted_pearson(xc[:, [j]], reference[:, [0]], w[5])[0, 0]
+        expected = z2r(r2z(c_j0) / 2)
+        assert abs(c_j0) > 0.05
+        assert np.isclose(m[0, j, 5], expected, atol=1e-10, rtol=0)
+        assert np.isclose(m[j, 0, 5], expected, atol=1e-10, rtol=0)

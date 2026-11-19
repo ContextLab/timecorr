@@ -941,8 +941,16 @@ def test_decoders_run_with_events_and_return_the_documented_shape(name):
         assert len(res) == len(today)
         for col in ("rank", "accuracy", "error"):
             assert np.all((res[col] >= 0) & (res[col] <= 1))
-    metrics = ["rank", "accuracy", "error"]
-    assert not np.array_equal(shared[metrics].values, today[metrics].values)
+    for res in (shared, per_subject):
+        # every decoder's ranks change when its kernels are restricted to events
+        assert not np.array_equal(res["rank"].values, today["rank"].values)
+        if name in ("weighted_timepoint_decoder", "weighted_timepoint_decoder_ec"):
+            # level 0 (the raw data) does not use the kernel; levels >= 1 do
+            pd.testing.assert_frame_equal(res[res.level == 0],
+                                          today[today.level == 0],
+                                          check_exact=True)
+            assert not np.array_equal(res[res.level >= 1]["rank"].values,
+                                      today[today.level >= 1]["rank"].values)
 
 
 @pytest.mark.parametrize("name", sorted(_EV_RUNS))

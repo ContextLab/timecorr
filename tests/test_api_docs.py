@@ -27,12 +27,21 @@ MODULES = [
     "timecorr.higher_order",
     "timecorr.decoding",
     "timecorr.simulate",
+    "timecorr.events",
 ]
 
 # Public names that are not exported from ``timecorr`` but are documented on the
 # API page, under the module they live in.
 USER_FACING_MODULE_NAMES = {
     "timecorr.higher_order": ["two_path_step", "estimate_memory_gb"],
+    "timecorr.events": [
+        "check_boundaries",
+        "block_labels",
+        "resolve_events",
+        "resolve_events_by_order",
+        "mask_kernel",
+        "distinct_event_sets",
+    ],
     "timecorr.decoding": [
         "weighted_timepoint_decoder_ec",
         "optimize_weights",

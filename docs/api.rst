@@ -111,6 +111,23 @@ shows each form.
    corrs = tc.timecorr(data, events=[40, 70])              # blocks 0-39, 40-69, 70 to the end
    X = tc.features(data, order=2, events={1: boundaries, 2: [50]})
 
+.. currentmodule:: timecorr.events
+
+The building blocks are in ``timecorr.events``:
+
+.. autosummary::
+   :toctree: generated/
+   :nosignatures:
+
+   check_boundaries
+   block_labels
+   resolve_events
+   resolve_events_by_order
+   mask_kernel
+   distinct_event_sets
+
+.. currentmodule:: timecorr
+
 Kernels
 -------
 

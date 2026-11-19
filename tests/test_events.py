@@ -18,6 +18,7 @@ from timecorr.events import (
     resolve_events_by_order,
 )
 from timecorr.helpers import eye_weights, gaussian_weights, mat2vec, one_sided, r2z, z2r
+from timecorr.higher_order import two_path_step
 
 T = 12
 FEATURES = np.random.RandomState(0).randn(T, 3)
@@ -871,3 +872,51 @@ def test_rfun_and_combine_after_masking(events):
     )
     assert both.shape == (NT, K)
 
+
+
+@pytest.mark.parametrize(
+    "scalars",
+    [
+        [4.0, 8.0],  # length 2
+        [4.0, 8.0, 10.0],  # length 3
+        [True, False],
+        [True, False, True],
+        [np.float64(4.0), np.float64(8.0)],
+        [np.float64(4.0), np.float64(8.0), np.float64(10.0)],
+    ],
+)
+@pytest.mark.parametrize("S", [2, 3])
+def test_non_integer_scalar_boundaries_name_the_integer_rule(scalars, S):
+    # the "Boundaries must be integers" message appears whether or not the
+    # number of scalars equals the number of subjects
+    with pytest.raises(ValueError, match="Boundaries must be integers"):
+        resolve_events(scalars, T, S)
+    data = [np.random.RandomState(s).randn(T, 3) for s in range(S)]
+    with pytest.raises(ValueError, match="Boundaries must be integers"):
+        tc.timecorr(data, weights_params={"var": 4}, events=scalars)
+
+
+def test_dict_events_error_names_where_a_dict_is_accepted():
+    data = [np.random.RandomState(s).randn(T, 3) for s in range(2)]
+    for call in (
+        lambda: resolve_events({1: [6]}, T, 2),
+        lambda: tc.timecorr(data, weights_params={"var": 4}, events={1: [6]}),
+        lambda: two_path_step(data, weights_params={"var": 4}, events={1: [6]}),
+    ):
+        with pytest.raises(ValueError, match="order") as info:
+            call()
+        message = str(info.value)
+        assert "features" in message and "decoders" in message
+
+
+@pytest.mark.parametrize("cfun", [tc.isfc, tc.autofc, None, "custom"])
+def test_per_subject_events_without_a_long_block_name_the_subjects(cfun):
+    # subjects 1 and 3 share boundaries that leave only blocks of length 2
+    short = list(range(0, T, 2))
+    events = [[6], short, None, short]
+    data = [np.random.RandomState(s).randn(T, 3) for s in range(4)]
+    if cfun == "custom":
+        cfun = lambda d, w: tc.autofc(d, w)  # noqa: E731
+    with pytest.raises(ValueError, match="no block is long enough") as info:
+        tc.timecorr(data, weights_params={"var": 4}, cfun=cfun, events=events)
+    assert "subjects [1, 3]" in str(info.value)

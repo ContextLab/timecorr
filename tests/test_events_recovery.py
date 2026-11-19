@@ -17,14 +17,14 @@ unrestricted / true events / wrong events 0.888 / 0.919 / 0.876 overall and
 smaller than those gaps (0.031 and 0.124) and larger than the seed noise of the
 mean over 8 seeds.
 
-Order 2: no benefit of order-2 events was measured.  On data whose order-2
-structure (how strongly modules' coupling strengths co-vary) changes at known
-event boundaries, ``features(order=2, rfun=None, events={2: true boundaries})``
-did not recover the true order-2 correlations better than no events or wrong
-boundaries (24 seeds; recovery r near 0.03-0.07 in all three conditions).  The
-order-2 test therefore checks behavior only: events at order 2 change ``X[2]``,
-leave ``X[1]`` unchanged, and give the same result as ``timecorr`` applied to
-the delta features with the same events and reducer.
+Order 2: on data whose order-2 structure (how strongly modules' coupling
+strengths co-vary) changes at known event boundaries, the pipeline
+``features(order=2, rfun=None, events=...)`` recovered little of the simulated order-2 structure with or without events (24
+seeds; true boundaries, no events and wrong boundaries all gave recovery r
+about 0.02 to 0.07), so the measurement does not show whether events help
+there.  The order-2 test therefore checks behavior only: events at order 2
+change ``X[2]``, leave ``X[1]`` unchanged, and give the same result as
+``timecorr`` applied to the delta features with the same events and reducer.
 """
 
 import numpy as np
@@ -104,7 +104,8 @@ def test_order2_events_restrict_only_the_order2_analysis_kernel():
         X_none = tc.features(x, order=2, **kwargs)
         # order 1 and the delta path are not restricted
         np.testing.assert_array_equal(X[1], X_none[1])
-        # the order-2 analysis kernel is: X[2] changes ...
+        # the order-2 analysis kernel is: X[2] changes (measured maximum
+        # differences: 0.81 with rfun=None, 1.55 with PCA) ...
         assert np.abs(X[2] - X_none[2]).max() > 0.1
         # ... and equals timecorr on the delta features with the same events
         expected = tc.timecorr(D[1], events=bounds, **kwargs)

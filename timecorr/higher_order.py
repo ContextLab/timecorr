@@ -80,7 +80,9 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False):
     of bounded size, all in float64.  The estimate is the peak of
     ``tc.features(..., rfun=None)`` with the default ``combine``
     (``null_combine``) for data without NaNs; other ``combine`` functions and
-    reducers allocate more.
+    reducers allocate more.  With per-subject events, the kernels of the
+    distinct event sets (one T x T array each) are not included in the
+    estimate.
 
     Parameters
     ----------
@@ -383,7 +385,9 @@ def two_path_step(
     max_memory_gb : float or None
         Upper limit, in gigabytes, on the estimated peak memory of the step
         for all subjects together (see ``features`` and
-        ``estimate_memory_gb``); None checks nothing.  Default: 4.0.
+        ``estimate_memory_gb``).  With per-subject events, the kernels of the
+        distinct event sets (one T x T array each) are not included in the
+        estimate.  None checks nothing.  Default: 4.0.
     events : None, array-like, or list
         Restricts the analysis kernel of this order to events (keyword-only;
         see ``timecorr``): boundaries shared by all subjects, features with T
@@ -620,7 +624,9 @@ def features(
         ``combine`` functions other than ``null_combine``).  It is checked on
         every step, because the (d, d, T) correlation array is allocated
         whether or not the result is then reduced; for large K, raising it is
-        the remedy.  None checks nothing.  Default: 4.0.
+        the remedy.  With per-subject events, the kernels of the distinct
+        event sets (one T x T array each) are not included in the estimate.
+        None checks nothing.  Default: 4.0.
     events : None, dict, array-like, or list
         Restricts the analysis kernel to events (keyword-only; see
         ``timecorr`` for one specification: boundaries shared by all

@@ -189,19 +189,17 @@ def _parse_spec(events, T, n_subjects):
         return None
     if isinstance(events, dict):
         raise ValueError(
-            "a dict of events keyed by order is only valid where several orders are resolved"
+            "a dict of events keyed by order is accepted only by features and the "
+            "level-based decoders (timepoint_decoder, weighted_timepoint_decoder, "
+            "weighted_timepoint_decoder_ec); here, pass one events specification"
         )
     if _is_single_entry(events):
         return _parse_entry(events, T)
     if isinstance(events, (list, tuple)):
         if all(_is_int_scalar(e) for e in events):
             return check_boundaries(list(events), T)
-        if len(events) != n_subjects:
-            raise ValueError(
-                f"per-subject events must have one entry per subject: got {len(events)} "
-                f"entries for {n_subjects} subjects"
-            )
-        out = []
+        # scalars are checked before the length, so that a list of non-integer
+        # scalars gets this message whatever its length
         for i, e in enumerate(events):
             if _is_int_scalar(e) or isinstance(e, (float, bool, np.bool_, np.floating, str)):
                 raise ValueError(
@@ -210,8 +208,12 @@ def _parse_spec(events, T, n_subjects):
                     "per-subject entries must be None, a list/array of boundaries, "
                     "or an array or DataFrame of features"
                 )
-            out.append(_parse_entry(e, T))
-        return out
+        if len(events) != n_subjects:
+            raise ValueError(
+                f"per-subject events must have one entry per subject: got {len(events)} "
+                f"entries for {n_subjects} subjects"
+            )
+        return [_parse_entry(e, T) for e in events]
     raise ValueError(
         f"events must be None, boundaries, features, or a per-subject list; "
         f"got {type(events).__name__}"
@@ -872,9 +874,9 @@ def segment(data, n=None, kind="ordered", max_events=50, random_state=None, retu
     within-event and across-event timepoint-by-timepoint Pearson correlations of ``data``
     is kept (ties: the smallest ``n``). Only pairs ``(t, u)`` with ``0 <= u - t < L`` are
     compared, ``L`` being the length of the longest event (the diagonal included). This is
-    the rule of Heusser, Fitzpatrick and Manning (Nature Human Behaviour), who segmented
-    with ``brainiak``'s
-    ``EventSegment``; this function is a reimplementation with ``hmmlearn``, and its
+    the rule of Heusser, Fitzpatrick and Manning (2021), doi:10.1038/s41562-021-01051-6
+    (Nature Human Behaviour), who segmented with ``brainiak``'s ``EventSegment``; this
+    function is a reimplementation with ``hmmlearn``, and its
     results need not match ``brainiak``'s numerically. The rule is a heuristic for choosing
     among candidate counts: it does not test whether events exist.
 

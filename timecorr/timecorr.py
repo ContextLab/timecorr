@@ -54,6 +54,14 @@ def _restricted(resolved):
     return one(resolved)
 
 
+def _mask_for_subjects(weights, boundaries, subjects):
+    """``mask_kernel`` for one event set; an error names the subjects that use it."""
+    try:
+        return mask_kernel(weights, boundaries)
+    except ValueError as err:
+        raise ValueError(f"per-subject events of subjects {subjects}: {err}") from err
+
+
 def _per_subject_cfun(cfun, data, weights, groups):
     """
     Correlations with one masked kernel per group of subjects sharing events.
@@ -66,14 +74,14 @@ def _per_subject_cfun(cfun, data, weights, groups):
     if cfun in _KERNEL_LIST_CFUNS:
         kernels = [None] * S
         for boundaries, subjects in groups:
-            masked = mask_kernel(weights, boundaries)
+            masked = _mask_for_subjects(weights, boundaries, subjects)
             for s in subjects:
                 kernels[s] = masked
         return cfun(data, kernels)
 
     out = [None] * S
     for boundaries, subjects in groups:
-        result = cfun(data, mask_kernel(weights, boundaries))
+        result = cfun(data, _mask_for_subjects(weights, boundaries, subjects))
         if not isinstance(result, list) or len(result) != S:
             raise ValueError(
                 "with per-subject events, cfun must return a list with one array per "
@@ -368,7 +376,7 @@ def timecorr(
         else:
             smoothed = [None] * len(data)
             for boundaries, subjects in groups:
-                masked = mask_kernel(weights, boundaries)
+                masked = _mask_for_subjects(weights, boundaries, subjects)
                 for s in subjects:
                     smoothed[s] = _kernel_smooth(data[s], masked)
         corrs = combine(smoothed)

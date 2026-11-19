@@ -48,6 +48,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   unreduced or reduced by a callable; before a model-based or graph-measure
   delta reduction the NaNs are set to 0 with one `UserWarning` per call
   (NaN handling is then approximate from order 2 on).
+- A correlation for a pair of features with fewer than 3 observed (non-NaN)
+  samples with non-zero kernel weight is undefined: it is set to 0 and the
+  timepoint is counted in the call's one `UserWarning`. Before commit 5068179
+  it was returned as +1 or -1 without a warning. This changes results for
+  data with NaNs, with or without `events`.
 - `corrmean_combine`: the diagonal of averaged autocorrelations is 1 (it was
   0); where +1 and -1 both occur in a Fisher z average they are excluded and
   the remaining values are averaged.
@@ -184,6 +189,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subjects).
 - `carrier_columns(blocks, level, K=None)`: `K` defaults to
   `blocks.max() + 1`, as in `carrier_reducer`.
+- Event-restricted kernels: `events=` and `events_params=` (keyword-only) in
+  `tc.timecorr`, `tc.features` (also a dict keyed by order, one specification
+  per order), `timecorr.higher_order.two_path_step` and the decoders
+  (`timepoint_decoder`, `weighted_timepoint_decoder`,
+  `weighted_timepoint_decoder_ec`, `pca_decoder`). The kernel weight
+  `weights[t, u]` is set to 0 whenever `t` and `u` lie in different events.
+  `events` accepts boundary indices (block starts), a features array with one
+  row per timepoint (segmented with `tc.segment` and `events_params`), or a
+  list with one such entry (or None) per subject. Without `events`, results
+  are unchanged.
+- `tc.segment`: divides a timeseries into events with a Gaussian hidden
+  Markov model (`hmmlearn`), either ordered events (`kind="ordered"`, every
+  state visited once, in order; with `n=None` the number of events is chosen
+  automatically) or recurring states (`kind="recurring"`), and returns the
+  block starts. Building blocks in `timecorr.events`: `check_boundaries`,
+  `block_labels`, `resolve_events`, `resolve_events_by_order`, `mask_kernel`
+  and `distinct_event_sets`.
+- The `segment` extra (`pip install "timecorr[segment]"`) installs
+  `hmmlearn`. Without it, `hmmlearn` is installed with `python -m pip install`
+  on the first use of `tc.segment`; setting the environment variable
+  `TIMECORR_AUTO_INSTALL=0` turns that off (a missing `hmmlearn` then raises
+  `ImportError` with the manual command).
+- New tutorial on event-restricted kernels
+  (`docs/tutorial/event_kernels_tutorial.ipynb`).
 - New tutorial (`docs/tutorial/higher_order_tutorial.ipynb`) and gallery
   examples for one-sided kernels and recovery of simulated structure by order.
   The other three tutorials and the existing examples were updated to run on

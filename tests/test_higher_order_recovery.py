@@ -26,6 +26,16 @@ import pytest
 import timecorr as tc
 from timecorr.higher_order import estimate_memory_gb
 
+# The settings of the original two-path pipeline (co-fluctuations on the delta
+# path, PCA on both paths; the former defaults of features), merged under the
+# arguments of the calls of tests that pin its numbers, shapes, widths or
+# messages.
+LEGACY = dict(rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
+
+
+def legacy_features(*args, **kwargs):
+    return tc.features(*args, **{**LEGACY, **kwargs})
+
 T = 1000
 B = 4
 SEED = 0  # the slow unreduced order-3 case and the multi-order case
@@ -129,7 +139,7 @@ def test_unreduced_order1_recovery(seed):
 @pytest.mark.parametrize("seed", SEEDS)
 def test_unreduced_order2_recovery(seed):
     data, truth = _simulate(order=2, K=8, seed=seed)
-    X = tc.features(data, order=2, rfun=None, **KERNEL)
+    X = legacy_features(data, order=2, rfun=None, **KERNEL)
     cols = tc.carrier_columns(truth["blocks"], 1, 8).ravel()
     r = _recovery(X[2], cols, truth["corrs"])
     assert r >= RECOVERY, (seed, r)
@@ -169,7 +179,7 @@ def test_unreduced_order3_recovery():
 def test_carrier_reducer_recovery(order, seed):
     p = 4
     data, truth = _simulate(order=order, K=tc.min_features(order, p=p), seed=seed)
-    X = tc.features(
+    X = legacy_features(
         data,
         order=order,
         rfun=None,
@@ -186,7 +196,7 @@ def test_order3_data_run_with_pca():
     # PCA did not retain structure that exists only at order 3 in the tutorial's
     # measurement (the generator warns), but the pipeline must still run.
     data, _ = _simulate(order=3, K=16)
-    X = tc.features(data, order=3, rfun="PCA", **KERNEL)
+    X = legacy_features(data, order=3, rfun="PCA", **KERNEL)
     assert len(X) == 4
     for x in X:
         assert x.shape == (T, 16)
@@ -204,7 +214,7 @@ def test_simulate_multi_order_recovery():
     assert K == 4 + 8 + 16
     for truth in truths:
         n = truth["order"]
-        X = tc.features(
+        X = legacy_features(
             data,
             order=n,
             rfun=None,

@@ -27,6 +27,16 @@ from timecorr.helpers import (
     weighted_timepoint_decoder_ec,
 )
 
+# The settings of the original two-path pipeline (co-fluctuations on the delta
+# path, PCA on both paths; the former defaults of features), merged under the
+# arguments of the calls of tests that pin its numbers, shapes, widths or
+# messages.
+LEGACY = dict(rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
+
+
+def legacy_features(*args, **kwargs):
+    return tc.features(*args, **{**LEGACY, **kwargs})
+
 S = 8
 T = 60
 K = 6
@@ -132,7 +142,7 @@ def test_decoder_features_equal_pipeline_unreduced(level):
     )
     assert len(feats) == level + 1
     for g, members in enumerate(groups):
-        X = tc.features(
+        X = legacy_features(
             [data[j] for j in members],
             order=level,
             weights_function=gaussian_weights,
@@ -153,7 +163,7 @@ def test_decoder_features_delta_chain_equals_pipeline_pca():
     data = shared_ramping_data(S=6, T=30, K=4)
     params = {"var": 25}
     D = _decoder_delta_chain(data, level=3, rfun="PCA")
-    _, D_ref = tc.features(
+    _, D_ref = legacy_features(
         data,
         order=2,
         weights_function=gaussian_weights,
@@ -842,8 +852,8 @@ def test_decoder_features_with_shared_events_equal_pipeline():
     plain = _decoder_features(data, groups, 2, rfun=None, combine=mean_combine,
                               **_EV_KW)
     for g, members in enumerate(groups):
-        X = tc.features([data[j] for j in members], order=2, cfun=isfc, rfun=None,
-                        combine=mean_combine, events=events, **_EV_KW)
+        X = legacy_features([data[j] for j in members], order=2, cfun=isfc, rfun=None,
+                            combine=mean_combine, events=events, **_EV_KW)
         assert np.array_equal(feats[0][g], plain[0][g])  # level 0 unchanged
         for k in (1, 2):
             assert np.allclose(feats[k][g], X[k], atol=1e-12, rtol=0)

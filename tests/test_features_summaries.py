@@ -1,7 +1,8 @@
 """
 The feeding path's kernel, per-order reducers and streamed summaries in
-``features`` and ``two_path_step`` (opt-in arguments; the defaults are those
-of the legacy pipeline, pinned by ``tests/test_legacy_pipeline.py``).
+``features`` and ``two_path_step`` (the defaults are tested in
+``tests/test_features_defaults.py``; the original pipeline is pinned by
+``tests/test_legacy_pipeline.py``).
 
 Everything is computed for real on simulated data; nothing is mocked.
 """
@@ -73,12 +74,12 @@ def test_feeding_kernel_gives_summarized_kernel_correlations():
     assert D[1][0].shape == (T, 24)
 
 
-def test_eye_feeding_kernel_is_the_default():
+def test_gaussian_feeding_kernel_is_the_default():
     data = noise()
     common = dict(order=2, cfun=tc.autofc, weights_params={"var": 10},
-                  return_delta=True)
-    X0, D0 = tc.features(data, **common)
-    X1, D1 = tc.features(data, delta_weights_function=tc.eye_weights, **common)
+                  delta_rfun="weighted_strength", return_delta=True)
+    X0, D0 = quiet(tc.features, data, **common)
+    X1, D1 = quiet(tc.features, data, **common, **FEED)
     for k in range(3):
         assert_lists_close(X0[k], X1[k], rtol=0, atol=0)
         assert_lists_close(D0[k], D1[k], rtol=0, atol=0)
@@ -86,8 +87,8 @@ def test_eye_feeding_kernel_is_the_default():
 
 def test_feeding_kernel_params_none_uses_the_function_defaults():
     data = noise()
-    common = dict(order=1, cfun=tc.autofc, rfun=None, return_delta=True,
-                  delta_weights_function=tc.laplace_weights)
+    common = dict(order=1, cfun=tc.autofc, rfun=None, delta_rfun=None,
+                  return_delta=True, delta_weights_function=tc.laplace_weights)
     _, D_none = tc.features(data, **common)
     _, D_dflt = tc.features(data, delta_weights_params=tc.laplace_params, **common)
     assert_lists_close(D_none[1], D_dflt[1], rtol=0, atol=0)
@@ -416,7 +417,8 @@ def test_nan_with_a_kernel_feeding_path_gives_finite_features(delta_rfun):
 def test_nan_with_the_eye_feeding_path_keeps_the_old_message():
     with pytest.warns(UserWarning, match="co-fluctuations"):
         tc.features(_nan_data(), order=2, cfun=tc.autofc,
-                    weights_params={"var": 10}, rfun="PCA")
+                    weights_params={"var": 10}, rfun="PCA", delta_rfun=None,
+                    delta_weights_function=tc.eye_weights)
 
 
 # ---------------------------------------------------------------- warnings
@@ -505,7 +507,8 @@ def test_default_feeding_selection_gives_the_documented_kernels():
     from timecorr.higher_order import _DEFAULT_FEEDING, _feeding_kernel
 
     data = noise(T=100, K=5)
-    common = dict(order=1, cfun=tc.autofc, rfun=None, return_delta=True)
+    common = dict(order=1, cfun=tc.autofc, rfun=None, delta_rfun=None,
+                  return_delta=True)
     _, explicit = tc.features(data, **common, **FEED)
     function, params = _feeding_kernel(None, None, default="gaussian")
     assert function is tc.gaussian_weights and params == {"var": 25}
@@ -515,11 +518,15 @@ def test_default_feeding_selection_gives_the_documented_kernels():
     assert _feeding_kernel(None, {"var": 4}, default="gaussian") == (
         tc.gaussian_weights, {"var": 4})
 
-    assert _DEFAULT_FEEDING == "delta"
-    assert _feeding_kernel(None, None) == (tc.eye_weights, None)
+    assert _DEFAULT_FEEDING == "gaussian"
+    assert _feeding_kernel(None, None) == (tc.gaussian_weights, {"var": 25})
+    assert _feeding_kernel(None, None, default="delta") == (tc.eye_weights, None)
     _, default = tc.features(data, **common)
+    assert_lists_close(default[1], explicit[1], rtol=0, atol=0)
     assert_lists_close(
-        default[1], tc.timecorr(data, weights_function=tc.eye_weights, cfun=tc.autofc),
+        default[1],
+        tc.timecorr(data, weights_function=tc.gaussian_weights,
+                    weights_params={"var": 25}, cfun=tc.autofc),
         rtol=0, atol=0,
     )
 
@@ -553,7 +560,8 @@ def test_shift_null_on_the_eye_path_is_checked_before_computing():
     need, held = _held_sizes()
     calls = []
     common = dict(order=1, cfun=tc.autofc, rfun="PCA", return_delta=True,
-                  delta_rfun=tc.Communities(), weights_function=recording_kernel(calls))
+                  delta_rfun=tc.Communities(), weights_function=recording_kernel(calls),
+                  delta_weights_function=tc.eye_weights)
     with pytest.raises(MemoryError, match="shift null of the feeding step"):
         tc.features(data, max_memory_gb=need + held / 2, **common)
     # the analysis kernel was not built, so no correlation was computed
@@ -564,12 +572,21 @@ def test_shift_null_on_the_eye_path_is_checked_before_computing():
     assert len(D[1]) == 2
 
 
-def test_delta_weights_params_needs_delta_weights_function():
+def test_delta_weights_params_alone_sets_the_default_gaussian():
     data = noise()
-    with pytest.raises(ValueError, match="delta_weights_params needs delta_weights_function"):
-        tc.features(data, order=1, cfun=tc.autofc, delta_weights_params={"var": 25})
-    with pytest.raises(ValueError, match="delta_weights_params needs delta_weights_function"):
-        two_path_step(data, cfun=tc.autofc, delta_weights_params={"var": 25})
+    common = dict(cfun=tc.autofc, rfun=None, delta_rfun=None)
+    _, D = tc.features(data, order=1, return_delta=True,
+                       delta_weights_params={"var": 4}, **common)
+    expected = tc.timecorr(data, weights_function=tc.gaussian_weights,
+                           weights_params={"var": 4}, cfun=tc.autofc)
+    assert_lists_close(D[1], expected)
+    _, step = two_path_step(data, delta_weights_params={"var": 4}, **common)
+    assert_lists_close(step, D[1], rtol=0, atol=0)
+    # the "delta" selection (eye_weights) takes no parameters
+    from timecorr.higher_order import _feeding_kernel
+
+    with pytest.raises(ValueError, match="eye_weights takes no parameters"):
+        _feeding_kernel(None, {"var": 4}, default="delta")
 
 
 def test_explicit_eye_feeding_kernel_takes_no_params():
@@ -619,6 +636,7 @@ def test_streamed_steps_are_checked_before_order_one():
     with pytest.raises(MemoryError, match="streamed analysis step at order 2"):
         tc.features(data, order=2, cfun=tc.autofc,
                     rfun={1: recording_pca, 2: tc.WeightedStrength()},
+                    delta_rfun=None, delta_weights_function=tc.eye_weights,
                     max_memory_gb=(first + streamed) / 2)
     assert calls == []
 

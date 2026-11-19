@@ -8,6 +8,20 @@ import pytest
 import timecorr as tc
 from timecorr.higher_order import estimate_memory_gb, two_path_step
 
+# The settings of the original two-path pipeline (co-fluctuations on the delta
+# path, PCA on both paths; the former defaults of features), merged under the
+# arguments of the calls of tests that pin its numbers, shapes, widths or
+# messages.
+LEGACY = dict(rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
+
+
+def legacy_features(*args, **kwargs):
+    return tc.features(*args, **{**LEGACY, **kwargs})
+
+
+def legacy_step(*args, **kwargs):
+    return two_path_step(*args, **{**LEGACY, **kwargs})
+
 T = 60
 K = 4
 S = 3
@@ -33,7 +47,7 @@ def assert_list_equal(a, b):
 @pytest.mark.parametrize("order", [0, 1, 2, 3])
 def test_shapes_single_array_pca(order):
     data = make_data()
-    X, D = tc.features(data, order=order, weights_params={"var": 10}, return_delta=True)
+    X, D = legacy_features(data, order=order, weights_params={"var": 10}, return_delta=True)
     assert isinstance(X, list) and isinstance(D, list)
     assert len(X) == order + 1 and len(D) == order + 1
     for x, d in zip(X, D):
@@ -47,7 +61,7 @@ def test_shapes_single_array_pca(order):
 @pytest.mark.parametrize("order", [0, 1, 2, 3])
 def test_shapes_list_of_subjects_pca(order):
     data = make_data(n_subjects=S)
-    X, D = tc.features(data, order=order, weights_params={"var": 10}, return_delta=True)
+    X, D = legacy_features(data, order=order, weights_params={"var": 10}, return_delta=True)
     assert len(X) == order + 1 and len(D) == order + 1
     for x, d in zip(X, D):
         assert isinstance(x, list) and isinstance(d, list)
@@ -59,7 +73,7 @@ def test_shapes_list_of_subjects_pca(order):
 
 
 def test_return_delta_false_returns_only_x():
-    X = tc.features(make_data(), order=2, weights_params={"var": 10})
+    X = legacy_features(make_data(), order=2, weights_params={"var": 10})
     assert isinstance(X, list) and len(X) == 3
     assert all(isinstance(x, np.ndarray) and x.shape == (T, K) for x in X)
 
@@ -69,8 +83,8 @@ def test_return_delta_does_not_change_x(n_subjects):
     # without return_delta the last order's delta step is skipped; X is unchanged
     data = make_data(n_subjects=n_subjects) if n_subjects else make_data()
     for kwargs in ({"rfun": None}, {"ndims": 3}):
-        X = tc.features(data, order=2, weights_params={"var": 10}, **kwargs)
-        Xd, _ = tc.features(
+        X = legacy_features(data, order=2, weights_params={"var": 10}, **kwargs)
+        Xd, _ = legacy_features(
             data, order=2, weights_params={"var": 10}, return_delta=True, **kwargs
         )
         for x, xd in zip(X, Xd):
@@ -79,13 +93,13 @@ def test_return_delta_does_not_change_x(n_subjects):
 
 
 def test_unreduced_widths_grow():
-    X, D = tc.features(make_data(), order=2, rfun=None, return_delta=True)
+    X, D = legacy_features(make_data(), order=2, rfun=None, return_delta=True)
     assert [x.shape for x in X] == [(T, 4), (T, 10), (T, 55)]
     assert [d.shape for d in D] == [(T, 4), (T, 10), (T, 55)]
 
 
 def test_ndims_sets_reduced_width():
-    X, D = tc.features(make_data(n_subjects=S), order=2, ndims=2, return_delta=True)
+    X, D = legacy_features(make_data(n_subjects=S), order=2, ndims=2, return_delta=True)
     for k in (1, 2):
         assert all(x.shape == (T, 2) for x in X[k])
         assert all(d.shape == (T, 2) for d in D[k])
@@ -93,7 +107,7 @@ def test_ndims_sets_reduced_width():
 
 def test_single_subject_list_stays_list():
     data = make_data(n_subjects=1)
-    X, D = tc.features(data, order=2, return_delta=True)
+    X, D = legacy_features(data, order=2, return_delta=True)
     for x, d in zip(X, D):
         assert isinstance(x, list) and len(x) == 1 and x[0].shape == (T, K)
         assert isinstance(d, list) and len(d) == 1 and d[0].shape == (T, K)
@@ -101,7 +115,7 @@ def test_single_subject_list_stays_list():
 
 def test_combine_applies_to_analysis_path_only():
     data = make_data(n_subjects=S)
-    X, D = tc.features(
+    X, D = legacy_features(
         data, order=2, combine=tc.corrmean_combine, return_delta=True,
         weights_params={"var": 10},
     )
@@ -153,7 +167,7 @@ def test_x1_unreduced_equals_timecorr_with_combine():
 
 def test_d1_unreduced_equals_delta_timecorr():
     for data in (make_data(), make_data(n_subjects=S)):
-        _, D = tc.features(data, order=1, rfun=None, return_delta=True)
+        _, D = legacy_features(data, order=1, rfun=None, return_delta=True)
         expected = tc.timecorr(data, weights_function=tc.eye_weights, cfun=tc.autofc)
         if isinstance(data, list):
             assert_list_equal(D[1], expected)
@@ -171,8 +185,8 @@ def test_x1_pca_is_joint_reduction_of_timecorr():
 def test_x2_is_analysis_kernel_applied_to_d1():
     """Order 2 analysis features come from the unblurred D_1, not from X_1."""
     data = make_data(n_subjects=S)
-    X, D = tc.features(data, order=2, rfun=None, weights_params={"var": 10},
-                       return_delta=True)
+    X, D = legacy_features(data, order=2, rfun=None, weights_params={"var": 10},
+                           return_delta=True)
     expected = tc.timecorr(D[1], weights_params={"var": 10})
     assert_list_equal(X[2], expected)
     blurred_twice = tc.timecorr(X[1], weights_params={"var": 10})
@@ -181,8 +195,8 @@ def test_x2_is_analysis_kernel_applied_to_d1():
 
 def test_widening_analysis_kernel_changes_x2_not_delta_path():
     data = make_data(n_subjects=S)
-    Xn, Dn = tc.features(data, order=2, weights_params={"var": 5}, return_delta=True)
-    Xw, Dw = tc.features(data, order=2, weights_params={"var": 500}, return_delta=True)
+    Xn, Dn = legacy_features(data, order=2, weights_params={"var": 5}, return_delta=True)
+    Xw, Dw = legacy_features(data, order=2, weights_params={"var": 500}, return_delta=True)
     for k in (1, 2):
         assert_list_equal(Dn[k], Dw[k])
     assert not np.allclose(Xn[2][0], Xw[2][0])
@@ -190,10 +204,10 @@ def test_widening_analysis_kernel_changes_x2_not_delta_path():
 
 def test_features_equals_repeated_two_path_step():
     data = make_data(n_subjects=S)
-    X, D = tc.features(data, order=3, weights_params={"var": 10}, return_delta=True)
+    X, D = legacy_features(data, order=3, weights_params={"var": 10}, return_delta=True)
     prev = data
     for k in (1, 2, 3):
-        x, d = two_path_step(prev, weights_params={"var": 10})
+        x, d = legacy_step(prev, weights_params={"var": 10})
         assert_list_equal(x, X[k])
         assert_list_equal(d, D[k])
         prev = d
@@ -201,7 +215,7 @@ def test_features_equals_repeated_two_path_step():
 
 def test_two_path_step_single_array():
     data = make_data()
-    x, d = two_path_step(data, rfun=None, weights_params={"var": 10})
+    x, d = legacy_step(data, rfun=None, weights_params={"var": 10})
     assert np.array_equal(x, tc.timecorr(data, weights_params={"var": 10}))
     assert np.array_equal(
         d, tc.timecorr(data, weights_function=tc.eye_weights, cfun=tc.autofc)
@@ -214,8 +228,8 @@ def test_delta_rfun_applies_to_delta_path_only():
     def first_two_columns(arrays):
         return [a[:, :2] for a in arrays]
 
-    X, D = tc.features(data, order=2, rfun="PCA", delta_rfun=first_two_columns,
-                       return_delta=True, weights_params={"var": 10})
+    X, D = legacy_features(data, order=2, rfun="PCA", delta_rfun=first_two_columns,
+                           return_delta=True, weights_params={"var": 10})
     raw_d1 = tc.timecorr(data, weights_function=tc.eye_weights, cfun=tc.autofc)
     assert_list_equal(D[1], [a[:, :2] for a in raw_d1])
     # analysis path at order 1 is reduced with PCA back to K columns
@@ -227,8 +241,8 @@ def test_delta_rfun_applies_to_delta_path_only():
 
 def test_delta_rfun_none_defaults_to_rfun():
     data = make_data(n_subjects=S)
-    _, D1 = tc.features(data, order=2, return_delta=True)
-    _, D2 = tc.features(data, order=2, delta_rfun="PCA", return_delta=True)
+    _, D1 = legacy_features(data, order=2, return_delta=True)
+    _, D2 = legacy_features(data, order=2, delta_rfun="PCA", return_delta=True)
     for k in (1, 2):
         assert_list_equal(D1[k], D2[k])
 
@@ -239,16 +253,16 @@ def test_delta_rfun_none_defaults_to_rfun():
 @pytest.mark.parametrize("convert", [pd.DataFrame, pl.DataFrame])
 def test_dataframe_inputs_match_numpy(convert):
     data = make_data(n_subjects=S)
-    X, D = tc.features(data, order=2, weights_params={"var": 10}, return_delta=True)
-    Xc, Dc = tc.features([convert(d) for d in data], order=2,
-                         weights_params={"var": 10}, return_delta=True)
+    X, D = legacy_features(data, order=2, weights_params={"var": 10}, return_delta=True)
+    Xc, Dc = legacy_features([convert(d) for d in data], order=2,
+                             weights_params={"var": 10}, return_delta=True)
     for k in range(3):
         assert_list_equal(Xc[k], X[k])
         assert_list_equal(Dc[k], D[k])
 
     single = data[0]
-    Xs = tc.features(single, order=2, weights_params={"var": 10})
-    Xsc = tc.features(convert(single), order=2, weights_params={"var": 10})
+    Xs = legacy_features(single, order=2, weights_params={"var": 10})
+    Xsc = legacy_features(convert(single), order=2, weights_params={"var": 10})
     for a, b in zip(Xs, Xsc):
         assert isinstance(b, np.ndarray)
         assert np.array_equal(a, b)
@@ -272,7 +286,8 @@ def test_numpy_integer_order_accepted():
 
 
 def test_estimate_memory_gb_values():
-    est = estimate_memory_gb(4, 2, 100)
+    eye = dict(delta_weights_function=tc.eye_weights)  # the original pipeline
+    est = estimate_memory_gb(4, 2, 100, **eye)
     assert len(est) == 3
     assert est[0] == 0.0
     # order 1: 4 -> 10 columns; order 2: 10 -> 55 columns.  Terms (float64
@@ -288,15 +303,15 @@ def test_estimate_memory_gb_values():
         (100 * 10**2 + 100 * 55 + 3 * 100 * 10 + 3 * 100**2
          + max(6 * 10 * 100 * 10, 0)) * 8 / 1e9
     )
-    assert estimate_memory_gb(4, 0, 100) == [0.0]
+    assert estimate_memory_gb(4, 0, 100, **eye) == [0.0]
     # more subjects hold more results; the delta path of the last order counts
     # only when it is returned
-    three = estimate_memory_gb(4, 2, 100, n_subjects=3)
+    three = estimate_memory_gb(4, 2, 100, n_subjects=3, **eye)
     assert three[2] == pytest.approx(
         (100 * 10**2 + 3 * 100 * 55 + 3 * 3 * 100 * 10 + 3 * 100**2
          + 6 * 10 * 100 * 10) * 8 / 1e9
     )
-    assert estimate_memory_gb(4, 2, 100, return_delta=True)[2] >= est[2]
+    assert estimate_memory_gb(4, 2, 100, return_delta=True, **eye)[2] >= est[2]
 
 
 def largest_k_brute_force(order, T, limit):
@@ -311,7 +326,7 @@ def test_unreduced_memory_guard_raises_with_estimate_and_fitting_k():
     est = estimate_memory_gb(10, 3, 100)
     assert est[2] < 1.0 < est[3]
     with pytest.raises(MemoryError) as info:
-        tc.features(data, order=3, rfun=None, max_memory_gb=1.0)
+        legacy_features(data, order=3, rfun=None, max_memory_gb=1.0)
     msg = str(info.value)
     assert f"{est[3]:.3g} GB" in msg
     fit = largest_k_brute_force(3, 100, 1.0)
@@ -322,7 +337,7 @@ def test_unreduced_memory_guard_raises_with_estimate_and_fitting_k():
 
 def test_memory_guard_allows_runs_that_fit():
     data = make_data(K=10, T=100)
-    X = tc.features(data, order=2, rfun=None, max_memory_gb=1.0)
+    X = legacy_features(data, order=2, rfun=None, max_memory_gb=1.0)
     assert X[2].shape == (100, 55 * 56 // 2)
 
 
@@ -330,10 +345,10 @@ def test_memory_guard_with_reduced_delta_path():
     """With the delta path reduced, each step costs about the same; the guard
     still refuses a step whose allocation exceeds the limit."""
     data = make_data(K=50, T=100)
-    step = estimate_memory_gb(50, 1, 100)[1]
+    step = estimate_memory_gb(50, 1, 100, delta_weights_function=tc.eye_weights)[1]
     with pytest.raises(MemoryError) as info:
-        tc.features(data, order=2, rfun=None, delta_rfun="PCA",
-                    max_memory_gb=step / 2)
+        legacy_features(data, order=2, rfun=None, delta_rfun="PCA",
+                        max_memory_gb=step / 2)
     assert f"{step:.3g} GB" in str(info.value)
 
 
@@ -382,10 +397,10 @@ def test_memory_guard_counts_subjects():
     assert one < 0.6 < three
     data = make_data(K=20, T=300, n_subjects=3)
     with pytest.raises(MemoryError) as info:
-        tc.features(data, order=2, rfun=None, max_memory_gb=0.6)
+        legacy_features(data, order=2, rfun=None, max_memory_gb=0.6)
     assert f"{three:.3g} GB" in str(info.value)
     assert "3 subjects" in str(info.value)
-    X = tc.features(data[0], order=2, rfun=None, max_memory_gb=0.6)
+    X = legacy_features(data[0], order=2, rfun=None, max_memory_gb=0.6)
     assert X[2].shape == (300, 210 * 211 // 2)
 
 
@@ -432,8 +447,8 @@ def test_undefined_row_warning_points_at_the_users_line_through_features():
     data = make_data(n_subjects=3)
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        tc.features(data, order=2, include_timepoints="backward",
-                    weights_params={"var": 10})
+        legacy_features(data, order=2, include_timepoints="backward",
+                        weights_params={"var": 10})
     found = _undefined_warnings(rec)
     # one analysis call per order, each warning once
     assert len(found) == 2
@@ -454,10 +469,10 @@ def test_list_returning_combine_on_single_array_input():
     def as_list(corrs):  # a combine that returns a list (like null_combine)
         return [np.array(c, copy=True) for c in corrs]
 
-    X, D = tc.features(data, order=2, combine=as_list, return_delta=True,
-                       weights_params={"var": 10})
-    ref_X, ref_D = tc.features(data, order=2, return_delta=True,
-                               weights_params={"var": 10})
+    X, D = legacy_features(data, order=2, combine=as_list, return_delta=True,
+                           weights_params={"var": 10})
+    ref_X, ref_D = legacy_features(data, order=2, return_delta=True,
+                                   weights_params={"var": 10})
     for k in (0, 1, 2):
         assert isinstance(X[k], np.ndarray) and X[k].shape == (T, K)
         assert isinstance(D[k], np.ndarray) and D[k].shape == (T, K)
@@ -474,10 +489,10 @@ def test_kernel_options_reach_the_analysis_path_only(option):
     data = make_data(n_subjects=S)
     common = dict(order=2, rfun=None, return_delta=True,
                   weights_function=tc.laplace_weights, weights_params={"scale": 5})
-    ref_X, ref_D = tc.features(data, **common)
+    ref_X, ref_D = legacy_features(data, **common)
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        X, D = tc.features(data, **common, **option)
+        X, D = legacy_features(data, **common, **option)
     # the only warnings: a backward kernel leaves its first rows undefined
     assert all("non-zero kernel weights" in str(r.message) for r in rec)
     assert len(rec) == (2 if "include_timepoints" in option else 0)
@@ -540,8 +555,8 @@ def _with_nans(seed=11, n_subjects=None):
 
 def test_unreduced_delta_path_marks_co_fluctuations_of_nan_samples_as_nan():
     data = _with_nans()
-    X, D = tc.features(data, order=2, rfun=None, weights_params={"var": 10},
-                       return_delta=True)
+    X, D = legacy_features(data, order=2, rfun=None, weights_params={"var": 10},
+                           return_delta=True)
     D1 = D[1]
     nan_samples = np.isnan(data)
     # mat2vec layout: diagonal first, then the upper triangle row by row
@@ -552,8 +567,8 @@ def test_unreduced_delta_path_marks_co_fluctuations_of_nan_samples_as_nan():
         expected = nan_samples[:, i] | nan_samples[:, j]
         assert np.array_equal(np.isnan(D1[:, col]), expected), (i, j)
     # observed co-fluctuations are unchanged: the z-scored products
-    clean = tc.features(np.where(nan_samples, 0.0, data), order=1, rfun=None,
-                        return_delta=True)[1][1]
+    clean = legacy_features(np.where(nan_samples, 0.0, data), order=1, rfun=None,
+                            return_delta=True)[1][1]
     z = (data - np.nanmean(data, axis=0)) / np.nanstd(data, axis=0)
     i, j = 0, 2
     col = pairs.index((i, j))
@@ -568,8 +583,8 @@ def test_order_two_ignores_nan_co_fluctuations_pairwise():
     # X_2 from data with NaN samples equals the analysis path applied to D_1
     # with those co-fluctuations removed, not set to 0
     data = _with_nans()
-    X, D = tc.features(data, order=2, rfun=None, weights_params={"var": 10},
-                       return_delta=True)
+    X, D = legacy_features(data, order=2, rfun=None, weights_params={"var": 10},
+                           return_delta=True)
     direct = tc.timecorr(D[1], weights_params={"var": 10})
     np.testing.assert_allclose(X[2], direct, atol=1e-12)
     zeroed = tc.timecorr(np.nan_to_num(D[1]), weights_params={"var": 10})
@@ -586,8 +601,8 @@ def test_callable_delta_reducer_receives_the_nan_co_fluctuations():
 
     with __import__("warnings").catch_warnings():
         __import__("warnings").simplefilter("error")
-        X, D = tc.features(data, order=2, rfun=None, delta_rfun=keep,
-                           weights_params={"var": 10}, return_delta=True)
+        X, D = legacy_features(data, order=2, rfun=None, delta_rfun=keep,
+                               weights_params={"var": 10}, return_delta=True)
     assert seen and seen[0][0] > 0
     assert np.isnan(D[1]).any()
     assert np.all(np.isfinite(X[2]))
@@ -597,8 +612,8 @@ def test_callable_delta_reducer_receives_the_nan_co_fluctuations():
 def test_model_or_graph_delta_reducer_fills_nan_with_one_warning(rfun):
     data = _with_nans(n_subjects=S)
     with pytest.warns(UserWarning, match="approximate from order 2") as rec:
-        X, D = tc.features(data, order=3, rfun=None, delta_rfun=rfun,
-                           weights_params={"var": 10}, return_delta=True)
+        X, D = legacy_features(data, order=3, rfun=None, delta_rfun=rfun,
+                               weights_params={"var": 10}, return_delta=True)
     assert len([r for r in rec if "approximate" in str(r.message)]) == 1
     for d in D[1:]:
         assert all(np.all(np.isfinite(x)) for x in d)
@@ -609,8 +624,8 @@ def test_data_without_nan_do_not_warn_about_nan_handling():
 
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        tc.features(make_data(n_subjects=S), order=3, weights_params={"var": 10},
-                    return_delta=True)
+        legacy_features(make_data(n_subjects=S), order=3, weights_params={"var": 10},
+                        return_delta=True)
 
 
 # ------------------------------------------- review minors (m5)
@@ -621,15 +636,15 @@ def test_features_max_memory_gb_none_means_no_limit():
     # data raise MemoryError with a 1.0 GB limit (see the guard test above)
     data = make_data(K=10, T=100)
     with pytest.raises(MemoryError):
-        tc.features(data, order=3, rfun=None, max_memory_gb=1.0)
-    X = tc.features(data, order=2, rfun=None, max_memory_gb=None)
+        legacy_features(data, order=3, rfun=None, max_memory_gb=1.0)
+    X = legacy_features(data, order=2, rfun=None, max_memory_gb=None)
     assert X[2].shape == (100, 55 * 56 // 2)
     # the reduced delta path checks each step; None skips that check too
     data = make_data(K=50, T=100)
     step = estimate_memory_gb(50, 1, 100)[1]
     assert isinstance(step, float) and step > 0
-    X = tc.features(data, order=2, rfun=None, delta_rfun="PCA",
-                    max_memory_gb=None)
+    X = legacy_features(data, order=2, rfun=None, delta_rfun="PCA",
+                        max_memory_gb=None)
     assert len(X) == 3
 
 
@@ -692,8 +707,8 @@ def test_events_signatures_keep_positional_order():
 
 def test_events_none_is_unchanged():
     data = make_data(n_subjects=S)
-    X0, D0 = tc.features(data, order=2, return_delta=True, **EVENTS_KW)
-    X1, D1 = tc.features(data, order=2, return_delta=True, events=None, **EVENTS_KW)
+    X0, D0 = legacy_features(data, order=2, return_delta=True, **EVENTS_KW)
+    X1, D1 = legacy_features(data, order=2, return_delta=True, events=None, **EVENTS_KW)
     for k in range(3):
         assert_list_equal(X0[k], X1[k])
         assert_list_equal(D0[k], D1[k])
@@ -701,8 +716,8 @@ def test_events_none_is_unchanged():
 
 def test_events_order_one_masks_only_order_one_analysis():
     data = make_data(n_subjects=S)
-    X0, D0 = tc.features(data, order=2, return_delta=True, **EVENTS_KW)
-    X, D = tc.features(data, order=2, return_delta=True, events={1: B}, **EVENTS_KW)
+    X0, D0 = legacy_features(data, order=2, return_delta=True, **EVENTS_KW)
+    X, D = legacy_features(data, order=2, return_delta=True, events={1: B}, **EVENTS_KW)
     assert_list_equal(X[1], tc.timecorr(data, events=B, **EVENTS_KW))
     assert not np.allclose(X[1][0], X0[1][0])
     # the delta path is never masked, so D_1 and therefore X_2 are unchanged
@@ -713,8 +728,8 @@ def test_events_order_one_masks_only_order_one_analysis():
 
 def test_events_order_two_masks_only_order_two_analysis():
     data = make_data(n_subjects=S)
-    X0, D0 = tc.features(data, order=2, return_delta=True, **EVENTS_KW)
-    X, D = tc.features(data, order=2, return_delta=True, events={2: B}, **EVENTS_KW)
+    X0, D0 = legacy_features(data, order=2, return_delta=True, **EVENTS_KW)
+    X, D = legacy_features(data, order=2, return_delta=True, events={2: B}, **EVENTS_KW)
     assert_list_equal(X[1], X0[1])
     assert_list_equal(D[1], D0[1])
     assert_list_equal(D[2], D0[2])
@@ -744,10 +759,10 @@ def test_events_with_pca_is_joint_reduction_of_masked_timecorr():
 def test_events_per_subject_entries_per_order():
     data = make_data(n_subjects=S)
     per_subject = [[15], None, np.array([10, 40])]
-    X, D = tc.features(data, order=2, return_delta=True,
-                       events={1: per_subject, 2: B}, **EVENTS_KW)
+    X, D = legacy_features(data, order=2, return_delta=True,
+                           events={1: per_subject, 2: B}, **EVENTS_KW)
     assert_list_equal(X[1], tc.timecorr(data, events=per_subject, **EVENTS_KW))
-    D0 = tc.features(data, order=1, return_delta=True, **EVENTS_KW)[1]
+    D0 = legacy_features(data, order=1, return_delta=True, **EVENTS_KW)[1]
     assert_list_equal(D[1], D0[1])
     assert_list_equal(X[2], tc.timecorr(D[1], events=B, **EVENTS_KW))
 
@@ -771,9 +786,9 @@ def test_events_features_segmented_like_explicit_segment():
     params = {"n": 2, "kind": "recurring", "random_state": 0}
     b = tc.segment(stim, **params)
     assert len(b) >= 2
-    X, D = tc.features(data, order=2, return_delta=True, events=stim,
-                       events_params=params, **EVENTS_KW)
-    Xb, Db = tc.features(data, order=2, return_delta=True, events=b, **EVENTS_KW)
+    X, D = legacy_features(data, order=2, return_delta=True, events=stim,
+                           events_params=params, **EVENTS_KW)
+    Xb, Db = legacy_features(data, order=2, return_delta=True, events=b, **EVENTS_KW)
     for k in (1, 2):
         assert_list_equal(X[k], Xb[k])
         assert_list_equal(D[k], Db[k])

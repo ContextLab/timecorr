@@ -12,6 +12,16 @@ import timecorr as tc
 from timecorr.helpers import mat2vec, vec2mat
 from timecorr.simulate import random_corrmat
 
+# The settings of the original two-path pipeline (co-fluctuations on the delta
+# path, PCA on both paths; the former defaults of features), merged under the
+# arguments of the calls of tests that pin its numbers, shapes, widths or
+# messages.
+LEGACY = dict(rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
+
+
+def legacy_features(*args, **kwargs):
+    return tc.features(*args, **{**LEGACY, **kwargs})
+
 DATAGENS = ["block", "ramping", "constant", "random"]
 
 
@@ -398,8 +408,8 @@ def test_nested_template_matches_empirical_cofluctuation_correlations():
     )
     # T=20000: the three T x T kernel arrays of the analysis step alone take
     # about 9.6 GB, which the memory guard counts (default limit 4 GB)
-    _, D = tc.features(data, order=1, rfun=None, return_delta=True,
-                       max_memory_gb=12.0)
+    _, D = legacy_features(data, order=1, rfun=None, return_delta=True,
+                           max_memory_gb=12.0)
     empirical = np.corrcoef(D[1].T)
     truth = tc.nested_template(corrs[0])
     assert truth.shape == (55,)
@@ -457,7 +467,7 @@ def test_carrier_columns_select_block_products_in_unreduced_run():
     data, truth = _order3_data(T=2000, amplitude_noise=0)
     blocks = truth["blocks"]
     K = data.shape[1]
-    _, D = tc.features(data, order=2, rfun=None, return_delta=True)
+    _, D = legacy_features(data, order=2, rfun=None, return_delta=True)
     for level, m in [(0, 4), (1, 2), (2, 1)]:
         cols = tc.carrier_columns(blocks, level, K)
         assert cols.shape == (3, m)
@@ -487,8 +497,8 @@ def test_carrier_reducer_matches_unreduced_carriers():
     data, truth = _order3_data()
     blocks = truth["blocks"]
     K = data.shape[1]
-    _, D_full = tc.features(data, order=2, rfun=None, return_delta=True)
-    X, D = tc.features(
+    _, D_full = legacy_features(data, order=2, rfun=None, return_delta=True)
+    X, D = legacy_features(
         data,
         order=3,
         cfun=tc.autofc,
@@ -509,7 +519,7 @@ def test_carrier_reducer_matches_unreduced_carriers():
 def test_carrier_reducer_is_stateless_and_rejects_unknown_widths():
     data, truth = _order3_data()
     f = tc.carrier_reducer(truth["blocks"])
-    _, D = tc.features(data, order=1, rfun=None, return_delta=True)
+    _, D = legacy_features(data, order=1, rfun=None, return_delta=True)
     first = f([D[1]])
     again = f([D[1], D[1]])
     assert len(first) == 1 and len(again) == 2
@@ -524,7 +534,7 @@ def test_carrier_reducer_with_extra_columns():
     f = tc.carrier_reducer(blocks, K=7)
     rng = np.random.default_rng(0)
     x = rng.standard_normal((30, 7))
-    _, D = tc.features(x, order=1, rfun=None, return_delta=True)
+    _, D = legacy_features(x, order=1, rfun=None, return_delta=True)
     out = f([D[1]])[0]
     z = _zscore(x)
     assert np.allclose(out, np.stack([z[:, 2] * z[:, 3], z[:, 4] * z[:, 5]], 1))
@@ -543,7 +553,7 @@ def test_order2_end_to_end_recovery():
         order=2,
     )
     blocks = truth["blocks"]
-    X = tc.features(
+    X = legacy_features(
         data,
         order=2,
         cfun=tc.autofc,
@@ -585,7 +595,7 @@ def test_simulate_multi_order_layout():
     # the reducer finds the order-2 group's carriers inside the wider data
     K = data[0].shape[1]
     f = tc.carrier_reducer(truths[1]["blocks"], K=K)
-    _, D = tc.features(data[0], order=1, rfun=None, return_delta=True)
+    _, D = legacy_features(data[0], order=1, rfun=None, return_delta=True)
     z = _zscore(data[0])
     b = truths[1]["blocks"]
     assert np.allclose(f([D[1]])[0], z[:, b[:, 0]] * z[:, b[:, 1]])

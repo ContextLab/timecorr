@@ -19,8 +19,9 @@ from timecorr.higher_order import two_path_step
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "legacy_features.npz")
 
-# Arguments merged into every call (empty: the package defaults).
-LEGACY = {}
+# Arguments merged into every call: the settings of the original pipeline,
+# the package defaults at commit d4bb5ba.
+LEGACY = dict(rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
 
 T, K = 60, 5
 

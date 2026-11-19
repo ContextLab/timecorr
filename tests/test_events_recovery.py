@@ -18,18 +18,32 @@ smaller than those gaps (0.031 and 0.124) and larger than the seed noise of the
 mean over 8 seeds.
 
 Order 2: on data whose order-2 structure (how strongly modules' coupling
-strengths co-vary) changes at known event boundaries, the pipeline
-``features(order=2, rfun=None, events=...)`` recovered little of the simulated order-2 structure with or without events (24
-seeds; true boundaries, no events and wrong boundaries all gave recovery r
-about 0.02 to 0.07), so the measurement does not show whether events help
-there.  The order-2 test therefore checks behavior only: events at order 2
-change ``X[2]``, leave ``X[1]`` unchanged, and give the same result as
-``timecorr`` applied to the delta features with the same events and reducer.
+strengths co-vary) changes at known event boundaries, the original pipeline
+``features(order=2, rfun=None, delta_rfun=None,
+delta_weights_function=tc.eye_weights, events=...)`` (co-fluctuations on the
+delta path) recovered little of the simulated order-2 structure with or
+without events (24 seeds; true boundaries, no events and wrong boundaries all
+gave recovery r about 0.02 to 0.07), so the measurement does not show whether
+events help there; it was not repeated with the default delta-path kernel and
+summaries.  The order-2 test therefore checks behavior only, with the original
+pipeline's settings: events at order 2 change ``X[2]``, leave ``X[1]``
+unchanged, and give the same result as ``timecorr`` applied to the delta
+features with the same events and reducer.
 """
 
 import numpy as np
 
 import timecorr as tc
+
+# The settings of the original two-path pipeline (co-fluctuations on the delta
+# path, PCA on both paths; the former defaults of features), merged under the
+# arguments of the calls of tests that pin its numbers, shapes, widths or
+# messages.
+LEGACY = dict(rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
+
+
+def legacy_features(*args, **kwargs):
+    return tc.features(*args, **{**LEGACY, **kwargs})
 
 T, K = 600, 10
 VAR = 100.0
@@ -100,8 +114,8 @@ def test_order2_events_restrict_only_the_order2_analysis_kernel():
     bounds = [0, 70, 140]
     for rfun in (None, "PCA"):
         kwargs = dict(weights_params={"var": 100}, cfun=tc.autofc, rfun=rfun)
-        X, D = tc.features(x, order=2, events={2: bounds}, return_delta=True, **kwargs)
-        X_none = tc.features(x, order=2, **kwargs)
+        X, D = legacy_features(x, order=2, events={2: bounds}, return_delta=True, **kwargs)
+        X_none = legacy_features(x, order=2, **kwargs)
         # order 1 and the delta path are not restricted
         np.testing.assert_array_equal(X[1], X_none[1])
         # the order-2 analysis kernel is: X[2] changes (measured maximum

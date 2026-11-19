@@ -877,26 +877,48 @@ _AUTO_FEEDING_MIN_K = 4
 _AUTO_FEEDING_MIN_T = 40
 
 
-def _check_auto_feeding(delta_rfun, d, T, order):
+def _check_auto_feeding(delta_rfun, d, T, order, bandwidth=_DEFAULT_BANDWIDTH,
+                        previous=None):
     """
     Raise ``ValueError`` naming the alternatives when the feeding reducer
     resolved from ``delta_rfun="auto"`` (communities) cannot be fitted to
-    (T, d) inputs: fewer than 4 features or fewer than 40 timepoints.
+    (T, d) inputs: fewer than 4 features, fewer than 40 timepoints, or fewer
+    than d distinct shift-null lags in ``[L, T - L]`` (``L = min(T // 4,
+    max(10, 10 * bandwidth))``, ``bandwidth`` the feeding kernel's standard
+    deviation).  ``previous``: the number of communities found at the
+    previous order when the d inputs are that order's community columns.
     """
     if not getattr(delta_rfun, "_from_auto", False):
         return
-    if d >= _AUTO_FEEDING_MIN_K and T >= _AUTO_FEEDING_MIN_T:
-        return
     at = "" if order is None else f" at order {order}"
-    raise ValueError(
-        f'The default feeding reducer (delta_rfun="auto": communities, counted '
-        f"with a shift null){at} needs at least {_AUTO_FEEDING_MIN_K} features "
-        f"and {_AUTO_FEEDING_MIN_T} timepoints; got {d} feature"
-        f"{'' if d == 1 else 's'} and T = {T}.  Pass "
-        'delta_rfun="weighted_strength" (any number of features and '
+    alternatives = (
+        'Pass delta_rfun="weighted_strength" (any number of features and '
         "timepoints), or the original pipeline's settings "
         'rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights.'
     )
+    if d < _AUTO_FEEDING_MIN_K or T < _AUTO_FEEDING_MIN_T:
+        source = ""
+        if previous is not None and order is not None:
+            source = (
+                f" (the community columns of order {order - 1}; communities "
+                f"found at order {order - 1}: {previous}, at most half the "
+                "features of that order)"
+            )
+        raise ValueError(
+            f'The default feeding reducer (delta_rfun="auto": communities, counted '
+            f"with a shift null){at} needs at least {_AUTO_FEEDING_MIN_K} features "
+            f"and {_AUTO_FEEDING_MIN_T} timepoints; got {d} feature"
+            f"{'' if d == 1 else 's'}{source} and T = {T}. " + alternatives
+        )
+    L = int(min(T // 4, max(10, 10 * float(bandwidth))))
+    n_lags = T - 2 * L + 1
+    if n_lags < d:
+        raise ValueError(
+            f'The default feeding reducer (delta_rfun="auto": communities, counted '
+            f"with a shift null){at} needs at least as many distinct lags in "
+            f"[L, T - L] as features: T = {T} and L = {L} give {max(n_lags, 0)} "
+            f"distinct lags for {d} features. " + alternatives
+        )
 
 
 def _resolve_reducers(rfun, delta_rfun, orders, max_order):
@@ -1187,8 +1209,8 @@ def two_path_step(
         every order: the feeding reducer is ``Communities()`` at order 1 and
         the analysis reducer a summary from order 2); if the default
         feeding reducer
-        (``delta_rfun="auto"``) gets fewer than 4 features or fewer than 40
-        timepoints (the message names ``delta_rfun="weighted_strength"`` and
+        (``delta_rfun="auto"``) gets fewer than 4 features, fewer than 40
+        timepoints, or fewer distinct shift-null lags than features (the message names ``delta_rfun="weighted_strength"`` and
         the original pipeline's settings); for a ``Communities`` (or split
         ``WeightedStrength``) without ``n`` where the number of
         communities cannot be counted automatically (analysis path with a
@@ -1295,6 +1317,7 @@ def _two_path_step(
     feeding_params=None,
     retained_elements=0,
     reducers=(),
+    previous_communities=None,
     **analysis
 ):
     """
@@ -1314,7 +1337,12 @@ def _two_path_step(
         delta_rfun = analysis.get("rfun", "PCA")
     T, d = subjects[0].shape
     if feed:
-        _check_auto_feeding(delta_rfun, d, T, order)
+        _check_auto_feeding(
+            delta_rfun, d, T, order,
+            _DEFAULT_BANDWIDTH if feeding_function is eye_weights
+            else _bandwidth(feeding_function, feeding_params),
+            previous_communities,
+        )
     analysis_streamed = _streams(
         analysis.get("rfun", "PCA"), analysis.get("cfun", isfc),
         analysis.get("combine", null_combine),
@@ -1524,8 +1552,15 @@ def features(
     delta_rfun : None, str, dict, or callable
         Feeding-path reducer, with the same forms as ``rfun``; here
         ``"auto"`` is ``Communities()`` at every order (automatic count; at
-        least 4 features and 40 timepoints, otherwise ``ValueError`` naming
-        the alternatives).  None (also as an
+        least 4 features, 40 timepoints, and as many distinct shift-null
+        lags in ``[L, T - L]`` as features, otherwise ``ValueError`` naming
+        the alternatives).  The feeding width at order k is then the number
+        of communities found at order k - 1, at most half the features of
+        that order, so a later feeding step raises when fewer than 4 remain
+        (for example with 4 to 7 input features, ``order=3`` or ``order=2``
+        with ``return_delta=True``); ``delta_rfun="weighted_strength"`` or
+        the original pipeline's settings (``rfun="PCA", delta_rfun=None,
+        delta_weights_function=tc.eye_weights``) avoid it.  None (also as an
         order map value) is the same as ``rfun`` at that order.  A
         delta-kernel co-fluctuation matrix ``z z^T`` has rank one, so with
         ``eye_weights`` eigenvector centrality equals ``|z| / ||z||`` and the
@@ -1663,8 +1698,10 @@ def features(
         step (with the defaults, whenever ``order >= 2``, and at
         ``order=1`` with ``return_delta=True``, which computes the order-1
         feeding step and its reducer ``Communities()``); if the default
-        feeding reducer (``delta_rfun="auto"``) gets fewer than 4 features
-        or fewer than 40 timepoints at a computed feeding step (the message
+        feeding reducer (``delta_rfun="auto"``) gets fewer than 4 features,
+        fewer than 40 timepoints, or fewer distinct shift-null lags than
+        features at a computed feeding step, including a later order whose
+        input is fewer than 4 communities found at the previous order (the message
         names ``delta_rfun="weighted_strength"`` and the original pipeline's
         settings); for a ``Communities`` (or split ``WeightedStrength``) without
         ``n`` where the number of communities cannot be counted (analysis
@@ -1832,6 +1869,7 @@ def features(
         if isinstance(r, _Summary)
     )
     nan_warned = [False]  # one NaN-filling warning per call
+    previous_communities = None  # communities found by the previous feeding step
     for k in orders:
         # the outputs kept so far (each array once; the input data are the
         # caller's): X_1 .. X_{k-1}, and D_1 .. D_{k-1} when returned,
@@ -1859,8 +1897,14 @@ def features(
             events=resolved[k],
             retained_elements=_output_elements(*kept),
             reducers=held_reducers,
+            previous_communities=previous_communities,
         )
         X.append(x)
+        previous = feeding_rfun[k]
+        previous_communities = (
+            previous.fits_[-1]["n"]
+            if isinstance(previous, Communities) and previous.fits_ else None
+        )
         if delta is not None:
             fed_by = delta
             if return_delta:

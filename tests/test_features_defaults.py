@@ -190,3 +190,51 @@ def test_memory_estimate_counts_the_kernel_feeding_path(cfun):
         tc.features(data, order=1, rfun=None, delta_rfun=None, cfun=cfun,
                     weights_params={"var": 100}, return_delta=True,
                     max_memory_gb=(est + eye) / 2)
+
+
+# second review, F2: the default pipeline after community compression ---------
+
+
+def _alternatives_named(message):
+    assert 'delta_rfun="weighted_strength"' in message
+    assert 'rfun="PCA", delta_rfun=None' in message
+    assert "delta_weights_function=tc.eye_weights" in message
+
+
+@pytest.mark.parametrize("kw", [dict(order=3), dict(order=2, return_delta=True)],
+                         ids=["order3", "order2-return-delta"])
+def test_default_feeding_after_community_compression_raises(kw):
+    # 4 features: the order-1 communities keep at most 4 // 2 = 2 columns, so
+    # the order-2 feeding step gets fewer than 4 features
+    x = np.random.default_rng(0).normal(size=(100, 4))
+    with pytest.raises(ValueError, match="at order 2") as info:
+        quiet(tc.features, x, **kw)
+    message = str(info.value)
+    _alternatives_named(message)
+    assert "communities found at order 1" in message
+
+
+def test_default_order_two_without_the_last_feeding_step_completes():
+    x = np.random.default_rng(0).normal(size=(100, 4))
+    X = quiet(tc.features, x, order=2)
+    assert len(X) == 3
+
+
+def test_alternatives_complete_after_community_compression():
+    x = np.random.default_rng(0).normal(size=(100, 4))
+    X = quiet(tc.features, x, order=3, delta_rfun="weighted_strength")
+    assert X[3].shape == (100, 8)
+    X = quiet(tc.features, x, order=3, **LEGACY)
+    assert X[3].shape == (100, 4)
+
+
+def test_default_feeding_needs_k_distinct_shift_lags():
+    # T 40, standard deviation 5: L 10, so 21 distinct lags in [10, 30]; 22
+    # features need 22.  The check runs before anything is computed
+    x = [np.random.default_rng(1).normal(size=(40, 22)) for _ in range(2)]
+    with pytest.raises(ValueError, match="distinct lags") as info:
+        tc.features(x, order=1, return_delta=True, weights_params={"var": 10})
+    _alternatives_named(str(info.value))
+    X = quiet(tc.features, [a[:, :21] for a in x], order=1, return_delta=True,
+              weights_params={"var": 10})
+    assert len(X) == 2

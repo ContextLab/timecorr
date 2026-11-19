@@ -98,11 +98,15 @@ events of each order like the analysis kernel. ``rfun`` and ``delta_rfun``
 accept ``"auto"`` (the defaults; analysis path: PCA at order 1 and
 ``WeightedStrength(signed=True)`` above; feeding path: ``Communities()``,
 with the number of communities set by a shift null) and dicts keyed by order.
-The default feeding reducer needs at least 4 features and 40 timepoints;
-``delta_rfun="weighted_strength"`` takes any number. Steps reduced by a
-summary (with ``null_combine`` and ``cfun`` ``autofc``, ``isfc`` or
-``wisfc``) are computed in blocks of nodes, without holding the ``(K, K, T)``
-correlation array.
+The default feeding reducer needs at least 4 features, 40 timepoints and as
+many distinct shift-null lags in ``[L, T - L]`` as features. Its output width,
+the input of the next feeding step, is the number of communities found (at most
+half its input features), so a later order raises when fewer than 4 remain;
+``delta_rfun="weighted_strength"`` (any number of features) and the original
+pipeline's settings avoid this. Steps reduced by a summary (with
+``null_combine`` and ``cfun`` ``autofc``, ``isfc`` or ``wisfc``) are computed
+in blocks of rows of the ``(K, K, T)`` correlation array, so the whole array is
+held only when one block covers all K rows.
 
 .. currentmodule:: timecorr
 

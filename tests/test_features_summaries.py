@@ -728,3 +728,76 @@ def test_too_few_shift_lags_for_the_features_raises():
     with pytest.raises(ValueError, match="too short for the shift null"):
         quiet(tc.features, data, order=1, cfun=tc.autofc, weights_params=WIDE,
               rfun="PCA", delta_rfun=tc.Communities(), return_delta=True, **FEED)
+
+
+# review item 1: what the pipeline itself holds in a streamed step -----------
+
+
+def test_distinct_event_kernels_are_budgeted_before_they_are_built():
+    # 10 subjects with 10 distinct event sets: 10 T x T kernels (0.08 GB at
+    # T 1000) are built for the streamed step; the budget leaves 0.04 GB
+    # beyond one streamed row per block, so the step cannot hold them
+    S, T_, K_ = 10, 1000, 4
+    rng = np.random.default_rng(0)
+    data = [rng.standard_normal((T_, K_)) for _ in range(S)]
+    events = [[100 + 10 * s] for s in range(S)]
+    need = estimate_memory_gb(K_, 1, T_, S, streamed=True)[1]
+    kernels_gb = S * T_ * T_ * 8 / 1e9
+    calls = []
+    common = dict(order=1, cfun=tc.autofc, rfun=tc.WeightedStrength(),
+                  weights_function=recording_kernel(calls),
+                  weights_params={"var": 25}, events=events)
+    with pytest.raises(MemoryError, match="event kernels"):
+        tc.features(data, max_memory_gb=need + kernels_gb / 2, **common)
+    # the check ran before any kernel was built
+    assert calls == []
+    X = quiet(tc.features, data, max_memory_gb=need + 2 * kernels_gb, **common)
+    assert len(X[1]) == S and X[1][0].shape == (T_, K_)
+
+
+def test_distinct_event_kernels_of_the_streamed_feeding_step_are_budgeted():
+    S, T_, K_ = 10, 1000, 4
+    rng = np.random.default_rng(1)
+    data = [rng.standard_normal((T_, K_)) for _ in range(S)]
+    events = [[100 + 10 * s] for s in range(S)]
+    need = estimate_memory_gb(K_, 1, T_, S, streamed=True)[1]
+    kernels_gb = S * T_ * T_ * 8 / 1e9
+    calls = []
+    common = dict(order=1, cfun=tc.autofc, rfun="PCA", return_delta=True,
+                  delta_rfun="weighted_strength",
+                  delta_weights_function=recording_kernel(calls),
+                  delta_weights_params={"var": 25}, events=events)
+    with pytest.raises(MemoryError, match="event kernels"):
+        tc.features(data, max_memory_gb=need + kernels_gb / 2, **common)
+    assert calls == []
+
+
+def test_streamed_feeding_counts_a_callable_analysis_output():
+    # an identity callable keeps the unreduced (T, d(d+1)/2) correlations;
+    # they are held while the streamed feeding step runs
+    def identity(corrs):
+        return corrs
+
+    data = noise(S=2, T=2000, K=10)
+    need, held = _held_sizes()
+    common = dict(order=1, cfun=tc.autofc, rfun=identity, return_delta=True,
+                  delta_rfun="weighted_strength", **FEED)
+    assert estimate_memory_gb(10, 1, 2000, 2)[1] < need + held / 2  # analysis fits
+    with pytest.raises(MemoryError, match="results held"):
+        tc.features(data, max_memory_gb=need + held / 2, **common)
+    X, D = tc.features(data, max_memory_gb=need + 2 * held, **common)
+    assert X[1][0].shape == (2000, 55) and D[1][0].shape == (2000, 10)
+
+
+def test_retained_fits_are_counted():
+    # a summary used at both orders keeps the order-1 fit's (K, K) arrays per
+    # unit while order 2 runs; they are counted against the budget
+    from timecorr.higher_order import _fits_elements
+
+    data, _ = nested()
+    ws = tc.WeightedStrength(signed=True)
+    quiet(tc.features, data, order=2, cfun=tc.autofc, weights_params=WIDE,
+          rfun=ws, delta_rfun="weighted_strength", **FEED)
+    expected = sum(w.size for f in ws.fits_ for w in f["weights"] + f["mean_r"])
+    assert len(ws.fits_) == 2 and _fits_elements(ws) == expected
+    assert _fits_elements("weighted_strength", None, "PCA") == 0

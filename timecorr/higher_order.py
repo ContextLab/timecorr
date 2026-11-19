@@ -60,6 +60,7 @@ from .helpers import (
     wisfc,
 )
 from .events import (
+    distinct_event_sets,
     _check_params_keys,
     _has_features,
     _parse_spec,
@@ -76,7 +77,7 @@ from .summaries import (
     _streamed_summary,
     _Summary,
 )
-from .timecorr import _event_kernels, _shaped_kernel, timecorr
+from .timecorr import _event_kernels, _restricted, _shaped_kernel, timecorr
 
 _BYTES_PER_GB = 1e9
 
@@ -313,7 +314,8 @@ def _budget_left(max_memory_gb, held_elements, d, T, n_subjects, order, what):
         where = "" if order is None else f" at order {order}"
         raise MemoryError(
             f"The {what}{where} needs at least about {held + need:.3g} GB "
-            f"({held:.3g} GB of results held while it runs, plus {need:.3g} GB "
+            f"({held:.3g} GB of results held while it runs, with retained fits "
+            f"and event kernels, plus {need:.3g} GB "
             f"for one row of correlations per block; {d} input features, T={T}, "
             f"{S} subject{'s' if S > 1 else ''}), more than "
             f"max_memory_gb={max_memory_gb}. Reduce to fewer features (rfun, "
@@ -321,6 +323,39 @@ def _budget_left(max_memory_gb, held_elements, d, T, n_subjects, order, what):
             "max_memory_gb."
         )
     return max_memory_gb - held
+
+
+def _event_kernel_elements(T, n_subjects, events):
+    """
+    Elements of the kernels a step builds for RESOLVED ``events``: one T x T
+    array per distinct event set when the subjects' events differ, 0 when
+    one kernel is shared by every subject (as without events).
+    """
+    groups = distinct_event_sets(_restricted(events), int(n_subjects))
+    return len(groups) * int(T) * int(T) if len(groups) > 1 else 0
+
+
+def _fits_elements(*reducers):
+    """
+    Elements of the arrays kept in the ``fits_`` of the summary objects
+    among ``reducers`` (pair weights and mean correlations, (K, K) per unit
+    per fit); names, models, callables and None hold none.
+    """
+    total, seen = 0, set()
+    for r in reducers:
+        if not isinstance(r, _Summary) or id(r) in seen:
+            continue
+        seen.add(id(r))
+        for f in r.fits_:
+            for key in ("weights", "mean_r"):
+                if f.get(key) is not None:
+                    total += sum(int(np.asarray(a).size) for a in f[key])
+    return total
+
+
+def _output_elements(x):
+    """Elements of a step's output (an array or a list of arrays)."""
+    return sum(int(np.asarray(a).size) for a in _as_list(x))
 
 
 def _needs_shift_null(rfun):
@@ -497,16 +532,24 @@ def _analysis_path(
     """
     T, d = subjects[0].shape
     if _streams(rfun, cfun, combine, groups):
+        summary = _as_summary(rfun)
+        # the distinct event kernels and earlier fits are held while the step
+        # runs: checked before the kernels are built
+        budget = _budget_left(
+            max_memory_gb,
+            _event_kernel_elements(T, len(subjects), events) + _fits_elements(summary),
+            d, T, len(subjects), order, "streamed analysis step",
+        )
         kernels = _step_kernels(
             T, len(subjects), weights_function, weights_params,
             include_timepoints, include_zero, events,
         )
         return _run_streamed(
             subjects,
-            _as_summary(rfun),
+            summary,
             cfun,
             kernels,
-            max_memory_gb=max_memory_gb,
+            max_memory_gb=budget,
             order=order,
             path="analysis",
             auto_n=cfun is autofc,
@@ -639,6 +682,14 @@ def _delta_path(
     summary = _as_summary(rfun)
     if weights_function is not eye_weights:
         if summary is not None:
+            # what the caller holds (``held_elements``: results and retained
+            # fits) and the distinct event kernels: checked before the
+            # kernels are built
+            budget = _budget_left(
+                max_memory_gb,
+                held_elements + _event_kernel_elements(T, S, events),
+                d, T, S, order, "streamed feeding step",
+            )
             kernels = _step_kernels(
                 T, S, weights_function, weights_params, include_timepoints,
                 include_zero, events,
@@ -648,7 +699,7 @@ def _delta_path(
                 summary,
                 autofc,
                 kernels,
-                max_memory_gb=max_memory_gb,
+                max_memory_gb=budget,
                 order=order,
                 path="feeding",
                 auto_n=True,
@@ -1012,7 +1063,10 @@ def two_path_step(
         ``estimate_memory_gb``); both paths are checked before either
         computes anything.  With per-subject events, the kernels of the
         distinct event sets (one T x T array each) are not included in the
-        estimate of a materialized step.  None checks nothing.  Default: 4.0.
+        estimate of a materialized step; a streamed step counts them, the
+        analysis results held while the feeding path runs, and the (K, K)
+        arrays kept in summaries' ``fits_``, before its kernels are built.
+        None checks nothing.  Default: 4.0.
     events : None, array-like, or list
         Restricts the analysis kernel of this order, and the feeding kernel
         unless it is ``eye_weights``, to events (keyword-only; see
@@ -1216,27 +1270,40 @@ def _two_path_step(
     kernel_feeding = feed and feeding_function is not eye_weights
     S = len(subjects)
     v = d * (d + 1) // 2
-    # unreduced analysis results are held while the feeding path runs
-    unreduced = not analysis_streamed and analysis.get("rfun", "PCA") is None
-    held = S * T * v if unreduced else 0
-    feeding_budget = max_memory_gb
+    analysis_rfun = analysis.get("rfun", "PCA")
+    events = analysis.get("events")
+    kernel_elements = _event_kernel_elements(T, S, events)
+    # the analysis results are held while the feeding path runs: before
+    # anything is computed, their size where it is known in advance (an
+    # unreduced, model, graph-measure or weighted-strength output; 0
+    # otherwise), and their actual size once computed
+    width = _known_width(analysis_rfun, d, analysis.get("ndims"))
+    held = 0 if width is None else S * T * width
+    fits = _fits_elements(analysis_rfun, delta_rfun)
     if max_memory_gb is not None:
         if analysis_streamed:
-            _streamed_block_elements(d, T, S, max_memory_gb, order, "analysis")
+            _streamed_block_elements(
+                d, T, S,
+                _budget_left(max_memory_gb, kernel_elements + _fits_elements(analysis_rfun),
+                             d, T, S, order, "streamed analysis step"),
+                order, "analysis",
+            )
         else:
             _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
                                kernel_feeding)
         if feed and feeding_streamed:
-            feeding_budget = _budget_left(
-                max_memory_gb, held, d, T, S, order, "streamed feeding step"
+            _streamed_block_elements(
+                d, T, S,
+                _budget_left(max_memory_gb, held + kernel_elements + fits,
+                             d, T, S, order, "streamed feeding step"),
+                order, "feeding",
             )
-            _streamed_block_elements(d, T, S, feeding_budget, order, "feeding")
         elif feed:
             _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
                                kernel_feeding)
             if _needs_shift_null(delta_rfun):
                 _budget_left(
-                    max_memory_gb, held + S * T * v, d, T, S, order,
+                    max_memory_gb, held + fits + S * T * v, d, T, S, order,
                     "shift null of the feeding step",
                 )
     X_next = _analysis_path(
@@ -1245,11 +1312,12 @@ def _two_path_step(
     )
     if not feed:
         return X_next, None
+    held = _output_elements(X_next) + _fits_elements(analysis_rfun, delta_rfun)
     D_next = _delta_path(
         subjects,
         rfun=delta_rfun,
         ndims=analysis.get("ndims"),
-        max_memory_gb=feeding_budget,
+        max_memory_gb=max_memory_gb,
         n_outputs=n_outputs,
         order=order,
         nan_warned=nan_warned,
@@ -1439,7 +1507,10 @@ def features(
         (``estimate_memory_gb(..., streamed=True)``), it raises.  With
         per-subject events, the kernels of the distinct event sets (one T x
         T array each) are not included in the estimate of a step that holds
-        its correlations.  None checks nothing (a streamed step then uses
+        its correlations; a streamed step counts them, together with the
+        analysis results of the same order held while the feeding path
+        runs and the (K, K) arrays kept in summaries' ``fits_``, and is
+        checked before its kernels are built.  None checks nothing (a streamed step then uses
         the estimator's default block size).  Default: 4.0.
     events : None, dict, array-like, or list
         Restricts kernels to events (keyword-only; see ``timecorr`` for one

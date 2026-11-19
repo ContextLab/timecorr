@@ -401,16 +401,16 @@ def timecorr(
     )
 
     # event restriction: applied after the include/exclude options; subjects that
-    # share events share one masked kernel
+    # share events share one masked kernel (one array, or a list per subject)
     resolved = resolve_events(events, T, len(data), events_params)
-    groups = distinct_event_sets(_restricted(resolved), len(data))
-    if len(groups) == 1:
-        weights = mask_kernel(weights, groups[0][0])
+    kernels = _event_kernels(weights, resolved, len(data))
+    per_subject = isinstance(kernels, list)
 
     if cfun:
-        if len(groups) == 1:
-            corrs = cfun(data, weights)
+        if not per_subject or cfun in _KERNEL_LIST_CFUNS:
+            corrs = cfun(data, kernels)
         else:
+            groups = distinct_event_sets(_restricted(resolved), len(data))
             corrs = _per_subject_cfun(cfun, data, weights, groups)
         corrs = reduce(combine(corrs), rfun=rfun)
 
@@ -418,14 +418,10 @@ def timecorr(
         # smoothing path: kernel-weighted mean of the samples, using the same
         # kernel rows (after include_timepoints, include_zero, exclude_timepoints
         # and events) as the correlation path
-        if len(groups) == 1:
-            smoothed = [_kernel_smooth(x, weights) for x in data]
+        if per_subject:
+            smoothed = [_kernel_smooth(x, k) for x, k in zip(data, kernels)]
         else:
-            smoothed = [None] * len(data)
-            for boundaries, subjects in groups:
-                masked = _mask_for_subjects(weights, boundaries, subjects)
-                for s in subjects:
-                    smoothed[s] = _kernel_smooth(data[s], masked)
+            smoothed = [_kernel_smooth(x, kernels) for x in data]
         corrs = combine(smoothed)
 
     if isinstance(corrs, list) and len(corrs) == 1:

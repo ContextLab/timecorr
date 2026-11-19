@@ -592,8 +592,8 @@ class Communities(_Summary):
     not controlled.  ``fits_[-1]["n"]`` is the number of communities the
     clustering found.  Calling the instance fits to the given units and
     transforms the same units; the communities come from the data being
-    summarized.  ``fit`` and ``transform`` separate the two.  The correlations must be finite (NaN
-    raises ``ValueError``).
+    summarized.  ``fit`` and ``transform`` separate the two.  The
+    correlations must be finite (NaN raises ``ValueError``).
 
     Examples
     --------

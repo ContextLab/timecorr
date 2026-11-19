@@ -988,6 +988,9 @@ def _corr_row_blocks(a, b, weights, symmetric, rows_per_block=None):
     and the entries within the block's own rows and columns are averaged with
     their transpose.  Entries outside that square are computed once per
     orientation, so they equal ``_wcorr``'s mirrored values up to round-off.
+    With ``symmetric=True``, entries outside a block's own square are
+    computed in the transposed orientation, so they agree with the mirrored
+    autocorrelation output to round-off, not bit for bit.
 
     The kernel is prepared as in ``_wcorr``: NaN weights count as 0, a kernel
     with exactly one non-zero weight in every row gives the co-fluctuations

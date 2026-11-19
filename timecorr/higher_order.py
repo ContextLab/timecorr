@@ -67,7 +67,9 @@ _BYTES_PER_GB = 1e9
 
 # The feeding kernel used when delta_weights_function is None: "delta"
 # (eye_weights, co-fluctuations) or "gaussian" (gaussian_weights with
-# _DEFAULT_FEEDING_PARAMS).
+# _DEFAULT_FEEDING_PARAMS).  While it is "delta", delta_weights_params without
+# delta_weights_function raises ValueError (eye_weights takes no parameters);
+# that rule goes away when the default becomes "gaussian".
 _DEFAULT_FEEDING = "delta"
 _DEFAULT_FEEDING_PARAMS = {"var": 25}
 # kernel standard deviation assumed by the shift null for kernels without a
@@ -243,6 +245,38 @@ def _streamed_block_elements(d, T, n_subjects, max_memory_gb, order=None,
             "features (rfun, delta_rfun) or raise max_memory_gb."
         )
     return b * int(d) * int(T)
+
+
+def _budget_left(max_memory_gb, held_elements, d, T, n_subjects, order, what):
+    """
+    The budget (GB) left for a streamed computation on ``n_subjects`` (T, d)
+    inputs while ``held_elements`` float64 values are held (None: no limit).
+    Raise MemoryError, before anything is computed, when what is held plus one
+    row of correlations per block exceeds ``max_memory_gb``.
+    """
+    if max_memory_gb is None:
+        return None
+    S = int(n_subjects)
+    held = 8 * int(held_elements) / _BYTES_PER_GB
+    need = 8 * _streamed_peak_elements(T, d, S, 1) / _BYTES_PER_GB
+    if held + need > max_memory_gb:
+        where = "" if order is None else f" at order {order}"
+        raise MemoryError(
+            f"The {what}{where} needs at least about {held + need:.3g} GB "
+            f"({held:.3g} GB of results held while it runs, plus {need:.3g} GB "
+            f"for one row of correlations per block; {d} input features, T={T}, "
+            f"{S} subject{'s' if S > 1 else ''}), more than "
+            f"max_memory_gb={max_memory_gb}. Reduce to fewer features (rfun, "
+            "delta_rfun), give the number of communities n, or raise "
+            "max_memory_gb."
+        )
+    return max_memory_gb - held
+
+
+def _needs_shift_null(rfun):
+    """True for a reducer whose number of communities comes from the shift null."""
+    summary = _as_summary(rfun)
+    return summary is not None and summary._needs_communities and summary.n is None
 
 
 def _as_list(x):
@@ -501,6 +535,7 @@ def _delta_path(
     include_timepoints="all",
     include_zero=True,
     events=None,
+    held_elements=0,
 ):
     """
     Feeding (delta) path of one order: per-subject correlations with the
@@ -565,6 +600,14 @@ def _delta_path(
         return _as_list(_apply_reducer(corrs, rfun, ndims, order, "feeding"))
 
     _check_step_memory(d, T, S, n_outputs, max_memory_gb, order)
+    null_budget = None
+    if _needs_shift_null(rfun):
+        # the shift null runs while the co-fluctuations (and whatever the
+        # caller holds, ``held_elements``) are held: checked before computing
+        null_budget = _budget_left(
+            max_memory_gb, held_elements + S * T * (d * (d + 1) // 2), d, T, S,
+            order, "shift null of the feeding step",
+        )
     delta = _as_list(
         timecorr(
             subjects,
@@ -600,7 +643,7 @@ def _delta_path(
             eye_weights(T),
             bandwidth=_DEFAULT_BANDWIDTH,
             max_block_elements=_streamed_block_elements(
-                d, T, S, max_memory_gb, order, "feeding"
+                d, T, S, null_budget, order, "feeding"
             ),
         )
     return _as_list(
@@ -728,6 +771,11 @@ def _feeding_kernel(weights_function, weights_params):
     """
     if weights_function is None:
         if _DEFAULT_FEEDING == "delta":
+            if weights_params is not None:
+                raise ValueError(
+                    "delta_weights_params needs delta_weights_function: the "
+                    "default feeding kernel (eye_weights) takes no parameters."
+                )
             return eye_weights, weights_params
         if weights_params is None:
             return gaussian_weights, dict(_DEFAULT_FEEDING_PARAMS)
@@ -987,17 +1035,30 @@ def _two_path_step(
     )
     feeding_streamed = feeding_function is not eye_weights and _is_summary(delta_rfun)
     n_outputs = 2 if feed and not (analysis_streamed or feeding_streamed) else 1
+    T, d = subjects[0].shape
+    S = len(subjects)
+    v = d * (d + 1) // 2
+    # unreduced analysis results are held while the feeding path runs
+    unreduced = not analysis_streamed and analysis.get("rfun", "PCA") is None
+    held = S * T * v if unreduced else 0
+    feeding_budget = max_memory_gb
     if max_memory_gb is not None:
-        T, d = subjects[0].shape
-        S = len(subjects)
         if analysis_streamed:
             _streamed_block_elements(d, T, S, max_memory_gb, order, "analysis")
         else:
             _check_step_memory(d, T, S, n_outputs, max_memory_gb, order)
         if feed and feeding_streamed:
-            _streamed_block_elements(d, T, S, max_memory_gb, order, "feeding")
+            feeding_budget = _budget_left(
+                max_memory_gb, held, d, T, S, order, "streamed feeding step"
+            )
+            _streamed_block_elements(d, T, S, feeding_budget, order, "feeding")
         elif feed:
             _check_step_memory(d, T, S, n_outputs, max_memory_gb, order)
+            if _needs_shift_null(delta_rfun):
+                _budget_left(
+                    max_memory_gb, held + S * T * v, d, T, S, order,
+                    "shift null of the feeding step",
+                )
     X_next = _analysis_path(
         subjects, max_memory_gb=max_memory_gb, n_outputs=n_outputs, order=order,
         **analysis
@@ -1008,7 +1069,7 @@ def _two_path_step(
         subjects,
         rfun=delta_rfun,
         ndims=analysis.get("ndims"),
-        max_memory_gb=max_memory_gb,
+        max_memory_gb=feeding_budget,
         n_outputs=n_outputs,
         order=order,
         nan_warned=nan_warned,
@@ -1017,6 +1078,7 @@ def _two_path_step(
         include_timepoints=analysis.get("include_timepoints", "all"),
         include_zero=analysis.get("include_zero", True),
         events=analysis.get("events"),
+        held_elements=held,
     )
     return X_next, D_next
 

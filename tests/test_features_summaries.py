@@ -479,3 +479,50 @@ def test_default_feeding_constant_selects_the_gaussian_kernel(monkeypatch):
         eye[1], tc.timecorr(data, weights_function=tc.eye_weights, cfun=tc.autofc),
         rtol=0, atol=0,
     )
+
+
+# review follow-ups: memory held across the two paths, argument check -------
+
+def _held_sizes(d=10, T=2000, S=2):
+    """GB of one streamed step at one row per block, and of S (T, d(d+1)/2)
+    results held while it runs."""
+    need = estimate_memory_gb(d, 1, T, S, streamed=True)[1]
+    held = S * T * (d * (d + 1) // 2) * 8 / 1e9
+    return need, held
+
+
+def test_streamed_feeding_counts_the_unreduced_analysis_results():
+    # rfun=None materializes X unreduced; the streamed feeding step runs while
+    # X is held, so the budget must cover both
+    data = noise(S=2, T=2000, K=10)
+    need, held = _held_sizes()
+    common = dict(order=1, cfun=tc.autofc, rfun=None, return_delta=True,
+                  delta_rfun="weighted_strength", **FEED)
+    assert estimate_memory_gb(10, 1, 2000, 2)[1] < need + held / 2  # analysis fits
+    with pytest.raises(MemoryError, match="results held"):
+        tc.features(data, max_memory_gb=need + held / 2, **common)
+    X, D = tc.features(data, max_memory_gb=need + 2 * held, **common)
+    assert X[1][0].shape == (2000, 55) and D[1][0].shape == (2000, 10)
+
+
+def test_shift_null_on_the_eye_path_is_checked_before_computing():
+    data = noise(S=2, T=2000, K=10)
+    need, held = _held_sizes()
+    common = dict(order=1, cfun=tc.autofc, rfun="PCA", return_delta=True,
+                  delta_rfun=tc.Communities())
+    start = time.perf_counter()
+    with pytest.raises(MemoryError, match="shift null of the feeding step"):
+        tc.features(data, max_memory_gb=need + held / 2, **common)
+    assert time.perf_counter() - start < 1.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        X, D = tc.features(data, max_memory_gb=need + 2 * held + 0.2, **common)
+    assert len(D[1]) == 2
+
+
+def test_delta_weights_params_needs_delta_weights_function():
+    data = noise()
+    with pytest.raises(ValueError, match="delta_weights_params needs delta_weights_function"):
+        tc.features(data, order=1, cfun=tc.autofc, delta_weights_params={"var": 25})
+    with pytest.raises(ValueError, match="delta_weights_params needs delta_weights_function"):
+        two_path_step(data, cfun=tc.autofc, delta_weights_params={"var": 25})

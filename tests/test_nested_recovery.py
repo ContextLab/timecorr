@@ -47,11 +47,22 @@ standard error over seeds; the seed counts are given per row):
 | global 0.5, weighted strength | 24 | .549 +- .035 | -.039 +- .016 |
 | tau2 15, T 3000, communities (slow) | 12 | .844 +- .016 | -.031 +- .050 |
 | tau2 15, T 3000, weighted strength (slow) | 12 | .804 +- .022 | -.035 +- .048 |
-| isfc, shared="order1", T 3000, tau3 40 (sd 11), held out, communities (slow) | 12 | .366 +- .027 | .053 +- .025 |
+| isfc, shared="order1", T 3000, tau3 40 (sd 11), transductive time split, communities (slow) | 12 | .366 +- .027 | .053 +- .025 |
 | same, weighted strength (slow) | 12 | .261 +- .029 | .042 +- .018 |
+| isfc, same data, held out with training fits, communities (slow) | 12 | .337 +- .029 | .044 +- .023 |
+| same, weighted strength (slow) | 12 | .235 +- .030 | .038 +- .018 |
 
-The isfc development controls (.053 +- .025 and .042 +- .018) are about 2
-standard errors above 0.
+The transductive isfc rows (``isfc_scores``) fit the ridge map on the first
+40% of the timepoints and score it on the last 40%, but the summaries
+(communities, pair weights, signed means) are fitted on the whole
+recording, the scored part included.  The held-out rows
+(``held_out_isfc_scores``) split the recording first (first 40% train,
+last 40% test, the middle 20% dropped), fit every summary on the training
+part only, and compute the test part's features with those frozen fits
+(``transform``, step by step); on the development seeds the frozen route
+reproduced the pipeline's training features to within 1.3e-12.  The isfc
+development controls (.053 +- .025 and .042 +- .018 transductive, .044 +-
+.023 and .038 +- .018 held out) are about 2 standard errors above 0.
 
 Standard deviation of the control over seeds: .08-.12 at T 1000, .17 at
 T 3000.  The isfc rows use one control subject per seed (a group of 4
@@ -67,7 +78,15 @@ mean -.28 when the order-1 features came from the 6-subject call; that
 |score| .240 +- .028 for the shared-h subject and .213 +- .017 for the
 independent-h control subjects (difference .027 +- .034, sd .167); asserted
 on 30000-30015 that the difference is below 0.13 (about 3 standard errors
-at 16 seeds; measured .031).
+at 16 seeds; measured .031).  That statistic takes the absolute value after
+the mean over the 6 columns of ``h``, so ``h`` carried with opposite signs
+in different columns cancels.  With the absolute value taken per column
+before the mean (``order1_target_magnitudes``, ``_magnitude``): development
+seeds 20000-20023, shared .308 +- .022, control .331 +- .010, difference
+-.022 +- .025 (sd .122); asserted on 30000-30015 that the difference is
+below 0.09 (about 3 standard errors at 16 seeds; measured .074 +- .026,
+shared .381, control .307); 24 further seeds (40000-40023, not asserted):
+difference .001 +- .031 (shared .331, control .331).
 Adjusted Rand index of the order-1 communities against the modules: 1.000
 on all seeds (sustained, sign-flip, T 3000), .956 +- .005 with global
 signal 0.5 (not asserted).  Automatic count on independent autocorrelated
@@ -77,8 +96,10 @@ rows used 12 seeds to keep the development run near 15 minutes (6
 processes); the T 1000 rows used 24.
 
 Assertions run on the fixed seeds 30000-30003 (30000-30007 for the T 3000
-cases): mean score above half the development mean and |mean control| below
-0.15.  The T 3000 control has a development standard deviation of about .17
+cases; 30000-30003 for the isfc rows): mean score above half the
+development mean and |mean control| below 0.15.  Held-out isfc rows,
+measured on 30000-30003: communities score .387 +- .038, control -.026 +-
+.073; weighted strength score .293 +- .031, control -.026 +- .064.  The T 3000 control has a development standard deviation of about .17
 per seed (12 seeds, 4 control subjects each), so its standard error is about
 .085 at 4 seeds and .061 at 8 seeds.  Measured on 30000-30007: communities
 score .858 +- .016, control -.104 +- .046 (sd .131); weighted strength score
@@ -149,10 +170,28 @@ def _zscore(X):
     return (X - X.mean(0)) / (X.std(0) + 1e-12)
 
 
-def _score(pred, target):
-    return float(
-        np.mean([np.corrcoef(pred[:, c], target[:, c])[0, 1] for c in range(target.shape[1])])
+def _per_target(pred, target):
+    """corr(prediction, target) of each column of ``target``."""
+    return np.array(
+        [np.corrcoef(pred[:, c], target[:, c])[0, 1] for c in range(target.shape[1])]
     )
+
+
+def _score(pred, target):
+    """Mean over the columns of ``target`` of the per-target correlation."""
+    return float(np.mean(_per_target(pred, target)))
+
+
+def _magnitude(pred, target):
+    """Mean over the columns of ``target`` of the absolute per-target
+    correlation (signs of different targets do not cancel)."""
+    return float(np.mean(np.abs(_per_target(pred, target))))
+
+
+def decode_prediction(XA, XB, target, step=STEP):
+    """``decode_score``'s prediction for subject B and the subsampled target."""
+    XA, XB, y = (np.asarray(a, dtype=float)[::step] for a in (XA, XB, target))
+    return _ridge_predict(_zscore(XA), _zscore(XB), y), y
 
 
 def decode_score(XA, XB, target, step=STEP):
@@ -163,8 +202,7 @@ def decode_score(XA, XB, target, step=STEP):
     subject; the penalty is trace(Gram) / n.  Returns the mean over the
     columns of ``target`` of corr(prediction, target).
     """
-    XA, XB, y = (np.asarray(a, dtype=float)[::step] for a in (XA, XB, target))
-    return _score(_ridge_predict(_zscore(XA), _zscore(XB), y), y)
+    return _score(*decode_prediction(XA, XB, target, step))
 
 
 def reversed_decode_score(XA, XB, target, step=STEP):
@@ -240,7 +278,12 @@ def case_scores(name, seed):
 
 
 def isfc_scores(family, seed, T=3000, tau3=40, S=4):
-    """Time-held-out decode with ``cfun=isfc`` and ``shared="order1"``."""
+    """Transductive time split with ``cfun=isfc`` and ``shared="order1"``:
+    the ridge map is fitted on the first 40% of subject A's features and
+    scored on the last 40% of subject B's, but the features (communities,
+    pair weights, signed means) are fitted on the whole recording, the
+    scored part included.  ``held_out_isfc_scores`` fits them on the
+    training part only."""
     gen = dict(S=S, T=T, tau3=tau3, shared="order1")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -260,6 +303,79 @@ def isfc_scores(family, seed, T=3000, tau3=40, S=4):
         "score": held_out_decode_score(X2[0], X2[1], h),
         "control": held_out_decode_score(X2[0], N2[0], h),
     }
+
+
+def split_decode_score(XA, XB, yA, yB, step=STEP):
+    """Ridge map fitted on subject A's features ``XA`` to ``yA`` and applied
+    to subject B's features ``XB``, scored against ``yB`` (rows subsampled
+    every ``step`` timepoints, columns z-scored per subject and segment)."""
+    XA, XB, yA, yB = (np.asarray(a, dtype=float)[::step] for a in (XA, XB, yA, yB))
+    return _score(_ridge_predict(_zscore(XA), _zscore(XB), yA), yB)
+
+
+def frozen_order2(subjects, feeding, analysis, sd2):
+    """Order-2 features of ``subjects`` with frozen fits, step by step: the
+    feeding kernel (Gaussian, variance 25) and ``autofc``, then
+    ``feeding.transform``; the analysis kernel (standard deviation ``sd2``)
+    and ``isfc``, then ``analysis.transform``.  Each summary transforms with
+    its most recent fit (unit u with the fit's unit u when the number of
+    units matches)."""
+    c1 = tc.timecorr(subjects, weights_function=tc.gaussian_weights,
+                     weights_params={"var": 25}, cfun=tc.autofc, rfun=None)
+    D1 = feeding.transform(c1)
+    c2 = tc.timecorr(D1, weights_function=tc.gaussian_weights,
+                     weights_params={"var": sd2**2}, cfun=tc.isfc, rfun=None)
+    return analysis.transform(c2)
+
+
+def held_out_isfc_scores(family, seed, T=3000, tau3=40, S=4, check=False):
+    """
+    Time-held-out decode in which every learned summary is fitted on the
+    training part only.
+
+    The recording is split first: training rows are the first 40%, test rows
+    the last 40%, and the middle 20% is dropped (a guard of 600 samples at
+    T 3000, against kernel standard deviations of 5 and 11).  ``features``
+    runs on the training rows with summary instances (feeding: communities
+    with the automatic count, or weighted strength; analysis at order 2:
+    signed weighted strength), so their fits are recorded; the test rows'
+    order-2 features are computed with those frozen fits
+    (``frozen_order2``).  Ridge is fitted on subject 0's training features
+    and scored on subject 1's test features.  Control: the same map applied
+    to the test features (frozen fits) of subject 0 of an independent call
+    of ``simulate_nested`` (its own ``h``), scored against the first call's
+    ``h``.  With ``check``, also returns the largest difference between
+    ``frozen_order2`` on the training rows and the training features of
+    ``features`` (the frozen route reproduces the pipeline).
+    """
+    gen = dict(S=S, T=T, tau3=tau3, shared="order1")
+    sd2 = wide_sd(T, tau3)
+    a, b = int(0.4 * T), int(0.6 * T)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        data, truth = tc.simulate_nested(set_random_seed=seed, **gen)
+        other, _ = tc.simulate_nested(set_random_seed=seed + CONTROL_OFFSET, **gen)
+        feeding = tc.Communities() if family == "communities" else tc.WeightedStrength()
+        analysis = tc.WeightedStrength(signed=True)
+        train = [x[:a] for x in data]
+        X2_train = tc.features(
+            train, order=2, cfun=tc.isfc, weights_params={"var": sd2**2},
+            rfun={1: "PCA", 2: analysis}, delta_rfun=feeding,
+            delta_weights_function=tc.gaussian_weights,
+            delta_weights_params={"var": 25},
+        )[2]
+        X2_test = frozen_order2([x[b:] for x in data], feeding, analysis, sd2)
+        N2_test = frozen_order2([x[b:] for x in other], feeding, analysis, sd2)
+        if check:
+            again = frozen_order2(train, feeding, analysis, sd2)
+    h = truth["h"]
+    res = {
+        "score": split_decode_score(X2_train[0], X2_test[1], h[:a], h[b:]),
+        "control": split_decode_score(X2_train[0], N2_test[0], h[:a], h[b:]),
+    }
+    if check:
+        res["max_diff"] = float(max(np.max(np.abs(x - y)) for x, y in zip(again, X2_train)))
+    return res
 
 
 def noise_count(seed, T=1000, K=108, tau=5):
@@ -322,12 +438,15 @@ def order1_score(seed, T=1000):
     return decode_score(X1[0], X1[1], truth["h"])
 
 
-def order1_magnitudes(seed, T=1000):
-    """Mean |score| of the order-1 decode (PCA fitted on all six subjects of
-    one call) for the shared-h subject B and for the 4 independent-h control
-    subjects: ``(|score(A -> B)|, mean_j |score(A -> N_j)|)``.  A signed mean
-    over seeds misses h carried with a subject-specific sign; the magnitudes
-    do not."""
+_ORDER1_CACHE = {}
+
+
+def _order1_predictions(seed, T=1000):
+    """Order-1 decode predictions (PCA fitted on all six subjects of one
+    call) of ``h`` for the shared-h subject B and for the 4 independent-h
+    control subjects, with the subsampled ``h``: ``(pred_B, [pred_N_j], y)``."""
+    if (seed, T) in _ORDER1_CACHE:
+        return _ORDER1_CACHE[(seed, T)]
     gen = dict(T=T)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -339,8 +458,42 @@ def order1_magnitudes(seed, T=1000):
         X1 = tc.features([data[0], data[1]] + others, order=1, cfun=tc.autofc,
                          weights_params={"var": wide_sd(T) ** 2}, rfun="auto")[1]
     h = truth["h"]
-    return (abs(decode_score(X1[0], X1[1], h)),
-            float(np.mean([abs(decode_score(X1[0], N, h)) for N in X1[2:]])))
+    pred_b, y = decode_prediction(X1[0], X1[1], h)
+    preds_n = [decode_prediction(X1[0], N, h)[0] for N in X1[2:]]
+    _ORDER1_CACHE[(seed, T)] = (pred_b, preds_n, y)
+    return _ORDER1_CACHE[(seed, T)]
+
+
+def order1_magnitudes(seed, T=1000):
+    """|score| of the order-1 decode (see ``_order1_predictions``) for the
+    shared-h subject B and for the 4 independent-h control subjects:
+    ``(|score(A -> B)|, mean_j |score(A -> N_j)|)``.  The absolute value is
+    taken after the mean over the columns of ``h``, so h carried with
+    opposite signs in different columns cancels; ``order1_target_magnitudes``
+    takes it per column."""
+    pred_b, preds_n, y = _order1_predictions(seed, T)
+    return (abs(_score(pred_b, y)),
+            float(np.mean([abs(_score(p, y)) for p in preds_n])))
+
+
+def order1_target_magnitudes(seed, T=1000):
+    """As ``order1_magnitudes`` with ``_magnitude``: the mean over the
+    columns of ``h`` of the absolute per-column correlation."""
+    pred_b, preds_n, y = _order1_predictions(seed, T)
+    return (_magnitude(pred_b, y),
+            float(np.mean([_magnitude(p, y) for p in preds_n])))
+
+
+def test_magnitude_statistic_does_not_cancel_across_targets():
+    # predictions match three target columns and negate the other three:
+    # every column carries its target perfectly
+    rng = np.random.default_rng(0)
+    target = rng.standard_normal((100, 6))
+    pred = target * np.array([1, 1, 1, -1, -1, -1])
+    np.testing.assert_allclose(_per_target(pred, target), [1, 1, 1, -1, -1, -1])
+    assert abs(_score(pred, target)) < 1e-12
+    assert abs(abs(_score(pred, target)) - 0) < 1e-12  # the old statistic
+    assert _magnitude(pred, target) == pytest.approx(1.0)
 
 
 def test_raw_input_does_not_carry_h():
@@ -365,6 +518,18 @@ def test_order1_features_do_not_carry_h_in_magnitude():
     assert diff < 0.13, (diff, rows.mean(0))
 
 
+def test_order1_features_do_not_carry_h_in_per_target_magnitude():
+    # the magnitude taken per column of h before the mean over columns
+    # (``_magnitude``), so opposite signs in different columns do not cancel.
+    # Development (24 seeds): shared .308 +- .022, control .331 +- .010,
+    # difference -.022 +- .025 (sd .122, so se .031 at 16 seeds); margin
+    # 0.09 is about 3 standard errors at 16 seeds
+    rows = np.array([order1_target_magnitudes(s)
+                     for s in range(TEST_SEEDS[0], TEST_SEEDS[0] + 16)])
+    diff = np.mean(rows[:, 0] - rows[:, 1])
+    assert diff < 0.09, (diff, rows.mean(0))
+
+
 def test_communities_recover_the_modules():
     for s in TEST_SEEDS:
         assert _cached_case("sustained, communities", s)["ari"] >= 0.9
@@ -372,11 +537,27 @@ def test_communities_recover_the_modules():
 
 @pytest.mark.slow
 @pytest.mark.parametrize("family", ["communities", "weighted_strength"])
-def test_isfc_time_held_out(family):
+def test_isfc_transductive_time_split(family):
+    # transductive: the summaries are fitted on the whole recording (see
+    # isfc_scores); only the ridge map is fitted on the first 40%
     rows = [isfc_scores(family, s) for s in TEST_SEEDS]
     score = np.mean([r["score"] for r in rows])
     control = np.mean([r["control"] for r in rows])
     assert score > DEV_MEAN["isfc, " + family] / 2, (score, control)
+    assert abs(control) < 0.15, control
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("family", ["communities", "weighted_strength"])
+def test_isfc_held_out_with_training_fits(family):
+    # every summary is fitted on the first 40% only; the last 40% gets its
+    # features from the frozen fits (held_out_isfc_scores)
+    rows = [held_out_isfc_scores(family, s, check=s == TEST_SEEDS[0]) for s in TEST_SEEDS]
+    # the frozen route reproduces the pipeline on the training rows
+    assert rows[0]["max_diff"] < 1e-9, rows[0]["max_diff"]
+    score = np.mean([r["score"] for r in rows])
+    control = np.mean([r["control"] for r in rows])
+    assert score > DEV_MEAN["held-out isfc, " + family] / 2, (score, control)
     assert abs(control) < 0.15, control
 
 
@@ -450,6 +631,8 @@ DEV_MEAN = {
     "tau2 15, T 3000, weighted strength": 0.804,
     "isfc, communities": 0.366,
     "isfc, weighted_strength": 0.261,
+    "held-out isfc, communities": 0.337,
+    "held-out isfc, weighted_strength": 0.235,
 }
 
 
@@ -459,6 +642,8 @@ def _dev_job(job):
         return job, case_scores(name, seed)
     if kind == "isfc":
         return job, isfc_scores(name, seed)
+    if kind == "heldout":
+        return job, held_out_isfc_scores(name, seed)
     if kind == "order1":
         return job, {"score": order1_score(seed)}
     return job, {"n": noise_count(seed)}
@@ -471,7 +656,8 @@ def _development_table(n_seeds=24, n_seeds_t3000=12, processes=6):  # pragma: no
     for name, (gen, _) in CASES.items():
         n = n_seeds if gen["T"] <= 1000 else n_seeds_t3000
         jobs += [("case", name, DEV_SEED + i) for i in range(n)]
-    jobs += [("isfc", f, DEV_SEED + i) for f in ("communities", "weighted_strength")
+    jobs += [(kind, f, DEV_SEED + i) for kind in ("isfc", "heldout")
+             for f in ("communities", "weighted_strength")
              for i in range(n_seeds_t3000)]
     jobs += [("noise", "noise", DEV_SEED + i) for i in range(8)]
     jobs += [("order1", "order1", DEV_SEED + i) for i in range(n_seeds)]

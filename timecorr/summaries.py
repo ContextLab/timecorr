@@ -25,7 +25,6 @@ import numpy as np
 from sklearn.cluster import KMeans
 
 from .helpers import (
-    _SUMMARY_NAMES,
     _WCORR_NAN_PRODUCTS,
     _corr_row_blocks,
     _fisher_mean,
@@ -690,7 +689,6 @@ _NAMED = {
     "weighted_strength_split": lambda: WeightedStrength(split=True),
     "communities": lambda: Communities(),
 }
-assert set(_NAMED) == set(_SUMMARY_NAMES)
 
 
 def _from_name(name):

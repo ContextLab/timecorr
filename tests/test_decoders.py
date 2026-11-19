@@ -1076,7 +1076,7 @@ def test_decoders_segmentation_leaves_the_global_random_state_unchanged(name):
 
 
 def test_timepoint_decoder_accepts_a_summary_rfun():
-    data = shared_ramping_data(seed=3)
+    data = shared_ramping_data(K=10, seed=3)
     ws = tc.WeightedStrength()
     np.random.seed(3)
     results = tc.timepoint_decoder(

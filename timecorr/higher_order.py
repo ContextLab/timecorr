@@ -1226,9 +1226,10 @@ def features(
     the estimator's default: at most ``2**23`` correlations per block, a
     tenth of that with NaN samples, and at least one row), so the full (d,
     d, T) array of a subject is held only when one block holds all d rows.
-    Other steps hold their correlations in full and then call the reducer.  The summaries' weights and communities are fitted on
-    all timepoints and all events of a step (the fit is not causal, also
-    with ``include_timepoints="backward"``); ``fit`` and ``transform`` of an
+    Other steps hold their correlations in full and then call the reducer.
+    The summaries' weights and communities are fitted on all timepoints and
+    all events of a step (the fit is not causal, also with
+    ``include_timepoints="backward"``); ``fit`` and ``transform`` of an
     instance allow fitting on other data.
 
     Parameters

@@ -632,3 +632,9 @@ def test_no_warning_on_real_correlations(nested):
         warnings.simplefilter("error")
         tc.WeightedStrength(signed=True)(corrs)
         tc.Communities(n=6, signed=True)(corrs)
+
+
+def test_named_summaries_match_the_recognised_names():
+    from timecorr.helpers import _SUMMARY_NAMES
+
+    assert set(sm._NAMED) == set(_SUMMARY_NAMES)

@@ -247,9 +247,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   array is held only when one block covers all K rows;
   `estimate_memory_gb(..., streamed=True)` gives the smallest peak of a
   streamed step, and `features` checks every streamed step against
-  `max_memory_gb` before computing anything. The default order-1 reducer (PCA) still holds
-  `K(K+1)/2` columns per subject, so memory is bounded only when every step
-  uses a summary (for example `rfun=tc.WeightedStrength(signed=True)`).
+  `max_memory_gb` before computing anything. The default order-1 reducer (PCA)
+  still holds `K(K+1)/2` columns per subject, so memory is bounded only when
+  every step uses a summary (for example `rfun=tc.WeightedStrength(signed=True)`).
   The defaults of `features` are unchanged (`eye_weights` delta kernel,
   `rfun="PCA"`, `delta_rfun=None`); the new behavior is reached with explicit
   arguments.

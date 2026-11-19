@@ -136,6 +136,33 @@ K 702 (slow, 2 seeds, ``max_memory_gb=4``, OMP 2; one control subject, not
 asserted): seed 30000 score .825 (control -.014), peak resident memory
 growth 1.08 GB, wall 91 s; seed 30001 score .741 (control .320), growth
 1.09 GB, wall 91 s (250 s and 263 s in an earlier run alongside other jobs).
+That run uses ``cfun=tc.autofc``, the analysis kernel with standard
+deviation 33 and weighted strength on both paths at every order,
+order 1 included (``rfun=tc.WeightedStrength(signed=True)``,
+``delta_rfun="weighted_strength"``), not the default order-1 PCA.  With
+the literal defaults the order-1 analysis step (PCA) holds its correlations:
+``estimate_memory_gb(702, 1, 1000, 3)[1]`` is 10.31 GB, so the default
+``max_memory_gb=4`` raises ``MemoryError``; ``rfun=tc.WeightedStrength(
+signed=True)`` (or ``rfun={1: tc.WeightedStrength(signed=True)}``) makes
+every step streamed, as the default feeding steps already are.
+
+Literal defaults (``literal_default_scores``: ``tc.features(units, order=2,
+return_delta=True)`` with no other arguments, so ``cfun=tc.isfc``, the
+analysis kernel's default variance 100 (standard deviation 10),
+``rfun="auto"``, ``delta_rfun="auto"``; 108 nodes, T 1000, A, B and 4
+control subjects in one call).  Development seeds 20000-20011: ``X[2]``
+score -.035 +- .029, control .055 +- .019 (``h`` is not recovered from
+``X[2]``; no assertion); ``D[2]`` (the order-2 feeding features, 3 to 5
+community columns) score .201 +- .020, control .006 +- .017.  Asserted on
+30000-30003 for ``D[2]`` (slow; measured score .249 +- .049, control .051
++- .009; ``X[2]`` there: -.038 +- .038, control .018 +- .050).  Recovery of
+structure above order 2 was not measured with the default reducers.
+
+Separate validation of the per-target magnitude bound (slow,
+``test_order1_per_target_magnitude_advantage_validation``; criterion fixed
+before the run: seeds 50000-50063, mean + 1.669 se < 0.09): mean
+difference -.007, se .014 (sd .111), bound .016 (shared .327, control
+.334).
 """
 
 import multiprocessing
@@ -543,6 +570,25 @@ def test_order1_per_target_magnitude_advantage_is_bounded():
     assert diff < 0.09, (diff, rows.mean(0))
 
 
+@pytest.mark.slow
+def test_order1_per_target_magnitude_advantage_validation():
+    # Separate validation of the bound above, criterion fixed before any
+    # result was seen: 64 seeds 50000-50063 (not used elsewhere), the same
+    # protocol and statistic (order1_target_magnitudes), seeds as independent
+    # units; one-sided upper 95% bound mean + t_0.95,63 * se below 0.09
+    # (t_0.95,63 = 1.669).  Measured once before the test was added: mean
+    # -.007, se .014 (sd .111), bound .016 (shared .327, control .334).
+    seeds = range(50000, 50064)
+    diffs = np.array([np.subtract(*order1_target_magnitudes(s)) for s in seeds])
+    mean = diffs.mean()
+    se = diffs.std(ddof=1) / np.sqrt(len(diffs))
+    bound = mean + 1.669 * se
+    assert bound < 0.09, (
+        f"mean {mean:.4f}, se {se:.4f}, bound {bound:.4f}, seeds 50000-50063, "
+        f"per-seed differences {np.round(diffs, 4).tolist()}"
+    )
+
+
 def test_communities_recover_the_modules():
     for s in TEST_SEEDS:
         assert _cached_case("sustained, communities", s)["ari"] >= 0.9
@@ -629,6 +675,46 @@ def test_k702_streamed(seed):
     print(f"K 702 seed {seed}: {res}")
     assert res["score"] > 0.2, res
     assert res["growth_gb"] < 6, res
+
+
+def literal_default_scores(seed, T=1000):
+    """
+    Decode of ``h`` from the literal default call
+    ``tc.features(units, order=2, return_delta=True)`` (no other arguments:
+    analysis kernel ``gaussian_weights`` with its default variance 100,
+    ``cfun=tc.isfc``, ``rfun="auto"``, ``delta_rfun="auto"``, Gaussian
+    feeding kernel with variance 25) on ``simulate_nested`` data with the
+    generator's defaults (108 nodes) and the units of ``case_scores`` (A, B
+    and 4 independent-h control subjects in one call); scores and controls
+    for ``X[2]`` and ``D[2]``.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        data, truth = tc.simulate_nested(S=2, T=T, set_random_seed=seed)
+        others = [
+            tc.simulate_nested(S=1, T=T, set_random_seed=seed + CONTROL_OFFSET + j)[0][0]
+            for j in range(N_CONTROLS)
+        ]
+        X, D = tc.features([data[0], data[1]] + others, order=2, return_delta=True)
+    h = truth["h"]
+    res = {}
+    for name, F in (("X2", X[2]), ("D2", D[2])):
+        res[name + "_score"] = decode_score(F[0], F[1], h)
+        res[name + "_control"] = float(np.mean([decode_score(F[0], N, h) for N in F[2:]]))
+    return res
+
+
+@pytest.mark.slow
+def test_literal_defaults_recover_h_in_the_order2_feeding_features():
+    # Literal defaults (literal_default_scores), development seeds
+    # 20000-20011: X[2] score -.035 +- .029, control .055 +- .019 (no
+    # recovery: no assertion on X[2]); D[2] score .201 +- .020, control
+    # .006 +- .017.  Asserted for D[2] with the file's rule.
+    rows = [literal_default_scores(s) for s in TEST_SEEDS]
+    score = np.mean([r["D2_score"] for r in rows])
+    control = np.mean([r["D2_control"] for r in rows])
+    assert score > 0.201 / 2, (score, control, rows)
+    assert abs(control) < 0.15, (score, control, rows)
 
 
 # development table ---------------------------------------------------------

@@ -319,7 +319,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   across subjects on `simulate_nested` data, with controls from an
   independent `h`, the raw data and the order-1 features; recovery of the
   modules by `Communities`; the automatic community count on autocorrelated
-  noise; and a streamed run at K = 702 (marked slow).
+  noise; and a streamed run at K = 702 (marked slow). These use
+  `cfun=tc.autofc` (except the isfc cases) and an analysis kernel wider
+  than the default (standard deviation 33 at T 1000); the K = 702 run uses
+  weighted strength on both paths at every order, order 1 included (the
+  default order-1 PCA step is estimated at 10.31 GB there). With the
+  literal defaults, `h` was recovered from `D[2]` but not from `X[2]` (see
+  the module docstring); structure above order 2 was not measured with the
+  default reducers.
 
 ### Fixed
 

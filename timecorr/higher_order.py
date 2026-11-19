@@ -927,10 +927,15 @@ def _known_width(rfun, d, ndims):
     """
     Number of columns ``rfun`` returns for (T, d(d+1)/2) correlations when it
     is known in advance: d(d+1)/2 unreduced, ``ndims`` (d when None) for a
-    model, d for a graph measure; None for a summary or a callable.
+    model, d for a graph measure, d times 2 with ``split`` times 2 with
+    ``signed`` for weighted strength; None for ``Communities`` (the number
+    of communities kept is found by the fit) and for a callable.
     """
     if rfun is None:
         return d * (d + 1) // 2
+    summary = _as_summary(rfun)
+    if isinstance(summary, WeightedStrength):
+        return summary._n_columns(None, d)
     if _is_model(rfun):
         return d if ndims is None else int(ndims)
     if isinstance(rfun, str) and not _is_summary(rfun):
@@ -943,18 +948,25 @@ def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfu
     """
     Raise MemoryError, before anything is computed, for a streamed step of
     ``features`` that does not fit ``max_memory_gb`` with one row per block.
-    Input widths follow ``_known_width`` from K; where a width is not known
-    in advance, K is used (as ``estimate_memory_gb(..., streamed=True)``).
-    The steps are checked again, with their actual widths, when they run.
+    Input widths follow ``_known_width`` from K.  After ``Communities``,
+    whose output width is found by the fit, the width is unknown until it
+    runs, and the later steps whose width follows from it are not checked
+    here.  After a callable that is not a summary, K is used (as
+    ``estimate_memory_gb(..., streamed=True)``).  Every step is checked
+    again, with its actual width, when it runs.
     """
     d = int(K)
     for k in sorted(analysis):
-        if _streams(analysis[k], cfun, combine):
-            _streamed_block_elements(d, T, S, max_memory_gb, k, "analysis")
-        if k in fed and feeding_function is not eye_weights and _is_summary(feeding[k]):
-            _streamed_block_elements(d, T, S, max_memory_gb, k, "feeding")
-        width = _known_width(feeding[k], d, ndims)
-        d = int(K) if width is None else width
+        if d is not None:
+            if _streams(analysis[k], cfun, combine):
+                _streamed_block_elements(d, T, S, max_memory_gb, k, "analysis")
+            if (k in fed and feeding_function is not eye_weights
+                    and _is_summary(feeding[k])):
+                _streamed_block_elements(d, T, S, max_memory_gb, k, "feeding")
+            width = _known_width(feeding[k], d, ndims)
+            if width is None and not _is_summary(feeding[k]):
+                width = int(K)  # a callable: K, as estimate_memory_gb uses
+            d = width
 
 
 def _feeding_kernel(weights_function, weights_params, default=None):
@@ -1621,8 +1633,11 @@ def features(
         also checked before anything is computed, with its input width where
         it is known in advance (K at order 1; ``d(d+1)/2`` after an
         unreduced feeding step, ``ndims`` or ``d`` after a model-based one,
-        ``d`` after a graph measure) and K where it is not (after a summary
-        or a callable), as ``estimate_memory_gb(..., streamed=True)`` does.
+        ``d`` after a graph measure, ``d`` times 2 with ``split`` times 2
+        with ``signed`` after weighted strength) and K after a callable, as
+        ``estimate_memory_gb(..., streamed=True)`` does.  After
+        ``Communities``, whose width is found by the fit, the steps whose
+        width follows from it are checked when they run.
         The message gives the estimate and the largest number of features
         that would fit.
 

@@ -801,3 +801,37 @@ def test_retained_fits_are_counted():
     expected = sum(w.size for f in ws.fits_ for w in f["weights"] + f["mean_r"])
     assert len(ws.fits_) == 2 and _fits_elements(ws) == expected
     assert _fits_elements("weighted_strength", None, "PCA") == 0
+
+
+# review item 2: up-front checks use only widths known in advance -------------
+
+
+def test_compress_then_expand_completes_under_a_budget_that_fits_every_step():
+    # widths 24 -> 2 (Communities(n=2) on the feeding path) -> 3 (unreduced
+    # order 2) -> weighted strength at order 3 on 3 inputs.  Substituting K
+    # for the unknown width after the communities would give 24 -> 300 and
+    # check order 3 on 300 inputs, which this budget does not fit
+    data, _ = nested(T=2000)
+    K_, T_ = 24, 2000
+    first = estimate_memory_gb(K_, 1, T_, 2)[1]
+    on_k = estimate_memory_gb(K_, 1, T_, 2, streamed=True)[1]
+    on_guess = estimate_memory_gb(K_ * (K_ + 1) // 2, 1, T_, 2, streamed=True)[1]
+    budget = 2 * max(first, on_k)
+    assert budget < on_guess
+    comm = tc.Communities(n=2)
+    X = quiet(tc.features, data, order=3, cfun=tc.autofc, weights_params=WIDE,
+              rfun={1: "PCA", 2: None, 3: tc.WeightedStrength()},
+              delta_rfun={1: comm, 2: None}, max_memory_gb=budget, **FEED)
+    assert comm.fits_[0]["n"] == 2
+    assert X[2][0].shape == (T_, 3) and X[3][0].shape == (T_, 3)
+
+
+def test_weighted_strength_width_is_known_in_advance():
+    from timecorr.higher_order import _known_width
+
+    assert _known_width(tc.WeightedStrength(), 7, None) == 7
+    assert _known_width(tc.WeightedStrength(signed=True, split=True, n=2), 7, None) == 28
+    assert _known_width("weighted_strength", 7, None) == 7
+    assert _known_width("weighted_strength_split", 7, None) == 14
+    assert _known_width(tc.Communities(n=2), 7, None) is None
+    assert _known_width(lambda c: c, 7, None) is None

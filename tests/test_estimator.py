@@ -1088,3 +1088,129 @@ def test_one_sided_zero_variance_symmetrized_entry(cfun, kwargs, ref_weights):
         assert abs(c_j0) > 0.05
         assert np.isclose(m[0, j, 5], expected, atol=1e-10, rtol=0)
         assert np.isclose(m[j, 0, 5], expected, atol=1e-10, rtol=0)
+
+
+# ---------------------------------------------------------------------------
+# Row-block iterator (_corr_row_blocks): rows of _wcorr in blocks
+# ---------------------------------------------------------------------------
+
+
+def _iterator_kernels(T):
+    zero_rows = gaussian_weights(T, {"var": 9})
+    zero_rows[[0, 5, 6, 30]] = 0
+    return {
+        "gaussian": gaussian_weights(T, {"var": 9}),
+        "mexican_hat": mexican_hat_weights(T),
+        "eye": eye_weights(T),
+        "masked": tc.events.mask_kernel(gaussian_weights(T, {"var": 9}), [10, 25, 40]),
+        "zero_rows": zero_rows,
+    }
+
+
+def _iterator_data(T=50, K=7):
+    rng = _rng(3)
+    random = rng.randn(T, K)
+    constant = rng.randn(T, K)
+    constant[:, 2] = 4.0
+    identical = rng.randn(T, K)
+    identical[:, 5] = identical[:, 1]
+    nans = rng.randn(T, K)
+    nans[rng.rand(T, K) < 0.1] = np.nan
+    all_nan = rng.randn(T, K)
+    all_nan[:, 3] = np.nan
+    return {
+        "random": random,
+        "constant_column": constant,
+        "identical_columns": identical,
+        "scattered_nans": nans,
+        "all_nan_column": all_nan,
+    }
+
+
+def _stack_blocks(a, b, w, symmetric, rows_per_block):
+    from timecorr.helpers import _corr_row_blocks
+
+    blocks = list(_corr_row_blocks(a, b, w, symmetric, rows_per_block=rows_per_block))
+    expected_i0 = 0
+    for i0, i1, R, _, _ in blocks:
+        assert i0 == expected_i0 and i1 > i0
+        assert R.shape == (i1 - i0, b.shape[1], w.shape[0])
+        if rows_per_block is not None:
+            assert i1 - i0 <= rows_per_block
+        expected_i0 = i1
+    assert expected_i0 == a.shape[1]
+    R = np.concatenate([blk[2] for blk in blocks], axis=0)
+    cancelled = np.logical_and.reduce([blk[3] for blk in blocks])
+    sparse = np.logical_or.reduce([blk[4] for blk in blocks])
+    return R, cancelled, sparse
+
+
+class TestCorrRowBlocks:
+    T = 50
+    K = 7
+
+    @pytest.mark.parametrize("rows_per_block", [1, 2, 3, 7, None])
+    @pytest.mark.parametrize("data_name", list(_iterator_data().keys()))
+    @pytest.mark.parametrize("kernel_name", list(_iterator_kernels(50).keys()))
+    def test_symmetric_rows_equal_wcorr(self, kernel_name, data_name, rows_per_block):
+        from timecorr.helpers import _wcorr
+
+        w = _iterator_kernels(self.T)[kernel_name]
+        a = _iterator_data(self.T, self.K)[data_name]
+        expected, (cancelled, sparse) = _wcorr(
+            a, a, w, warn=False, return_cancelled=True
+        )
+        R, got_cancelled, got_sparse = _stack_blocks(a, a, w, True, rows_per_block)
+        assert np.allclose(R, expected, rtol=1e-9, atol=1e-12)
+        np.testing.assert_array_equal(got_cancelled, cancelled)
+        np.testing.assert_array_equal(got_sparse, sparse)
+        # unit diagonal where defined (a delta kernel gives co-fluctuations
+        # z_i**2 there instead), and the mirrored output
+        if kernel_name != "eye":
+            diag = np.einsum("iit->it", R)
+            assert np.all((diag == 1.0) | (diag == 0.0))
+        assert np.allclose(R, R.transpose(1, 0, 2), rtol=0, atol=1e-12)
+
+    @pytest.mark.parametrize("rows_per_block", [1, 2, 3, 7, None])
+    @pytest.mark.parametrize("data_name", list(_iterator_data().keys()))
+    @pytest.mark.parametrize("kernel_name", list(_iterator_kernels(50).keys()))
+    def test_cross_rows_equal_wcorr(self, kernel_name, data_name, rows_per_block):
+        from timecorr.helpers import _wcorr
+
+        w = _iterator_kernels(self.T)[kernel_name]
+        a = _iterator_data(self.T, self.K)[data_name]
+        b = _rng(11).randn(self.T, 4)
+        b[_rng(12).rand(self.T, 4) < 0.05] = np.nan
+        expected, (cancelled, sparse) = _wcorr(
+            a, b, w, warn=False, return_cancelled=True
+        )
+        R, got_cancelled, got_sparse = _stack_blocks(a, b, w, False, rows_per_block)
+        assert np.allclose(R, expected, rtol=1e-9, atol=1e-12)
+        np.testing.assert_array_equal(got_cancelled, cancelled)
+        np.testing.assert_array_equal(got_sparse, sparse)
+
+    def test_does_not_modify_the_kernel(self):
+        from timecorr.helpers import _corr_row_blocks
+
+        w = _iterator_kernels(self.T)["zero_rows"]
+        w[7, :] = 0
+        w[7, 7] = 1.0  # a row with one weight: zeroed inside the estimator
+        w[8, 3] = np.nan
+        before = w.copy()
+        a = _iterator_data(self.T, self.K)["random"]
+        list(_corr_row_blocks(a, a, w, True, rows_per_block=2))
+        np.testing.assert_array_equal(w, before)
+
+    def test_rejects_a_kernel_with_every_row_zero(self):
+        from timecorr.helpers import _corr_row_blocks
+
+        a = _iterator_data(self.T, self.K)["random"]
+        with pytest.raises(ValueError, match="Every row of the kernel is zero"):
+            _corr_row_blocks(a, a, np.zeros((self.T, self.T)), True)
+
+    def test_symmetric_requires_matching_shapes(self):
+        from timecorr.helpers import _corr_row_blocks
+
+        a = _iterator_data(self.T, self.K)["random"]
+        with pytest.raises(ValueError, match="symmetric"):
+            _corr_row_blocks(a, a[:, :3], gaussian_weights(self.T), True)

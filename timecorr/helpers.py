@@ -756,17 +756,187 @@ def _zscore_columns(x):
     return _safe_divide(x0, np.where(constant, 0.0, sd))
 
 
+def _delta_zscores(a, b, weights):
+    """
+    Z-scored columns of ``a`` and ``b`` at each kernel row's non-zero position
+    (a true delta kernel: one non-zero weight per row), shapes (T', Ka) and
+    (T', Kb).
+    """
+    idx = np.argmax(weights != 0, axis=1)
+    return _zscore_columns(a)[idx], _zscore_columns(b)[idx]
+
+
 def _delta_wcorr(a, b, weights):
     """Co-fluctuation estimate for a true delta kernel (one non-zero weight per row)."""
-    idx = np.argmax(weights != 0, axis=1)
-    za = _zscore_columns(a)[idx]
-    zb = _zscore_columns(b)[idx]
+    za, zb = _delta_zscores(a, b, weights)
     return np.einsum("ti,tj->ijt", za, zb)
 
 
 def _wcorr_block_rows(T, Kb, n_products=1):
     """Rows of ``a`` per block in ``_wcorr_blocks`` (each row pairs with Kb columns)."""
     return max(1, _WCORR_BLOCK_ELEMENTS // (n_products * T * Kb))
+
+
+def _wcorr_inputs(a, b, weights):
+    """
+    The estimator's inputs as float arrays: ``a`` and ``b`` as (T, K) matrices
+    and a copy of ``weights`` with NaN weights set to 0.  Returns
+    ``(a, b, weights, support)``, where ``support`` counts each kernel row's
+    non-zero weights.
+
+    Raises ``ValueError`` if the shapes do not match (T rows in ``a`` and
+    ``b``, T columns in ``weights``) or if every row of the kernel is zero.
+    """
+    a = np.asarray(a, dtype=np.float64)
+    b = np.asarray(b, dtype=np.float64)
+    if a.ndim == 1:
+        a = a[:, np.newaxis]
+    if b.ndim == 1:
+        b = b[:, np.newaxis]
+    weights = np.array(weights, dtype=np.float64, copy=True)
+    weights[np.isnan(weights)] = 0
+    if a.shape[0] != b.shape[0] or weights.ndim != 2 or weights.shape[1] != a.shape[0]:
+        raise ValueError(
+            "a and b must have the same number of rows (timepoints) T, and weights "
+            f"must have T columns; got a {a.shape}, b {b.shape}, weights {weights.shape}."
+        )
+
+    support = np.count_nonzero(weights, axis=1)
+    if np.all(support == 0):
+        raise ValueError(
+            "Every row of the kernel is zero; no correlation can be estimated."
+        )
+    return a, b, weights, support
+
+
+def _wcorr_setup(a, b, weights, autocorrelation):
+    """
+    The terms shared by every block of ``_wcorr_block``: the kernel, the
+    centered data and, without NaN samples, each feature's kernel-weighted
+    moments (computed once; with ``autocorrelation`` those of ``a`` serve for
+    ``b`` too).  Returns a dict.
+    """
+    W = weights
+    A = np.abs(W)
+    a = _nan_center(a)
+    b = _nan_center(b)
+    state = {"T": a.shape[0], "W": W, "A": A, "a": a, "b": b}
+    state["active"] = A.sum(axis=1) > 0
+    state["has_nan"] = bool(np.isnan(a).any() or np.isnan(b).any())
+
+    if not state["has_nan"]:
+        s = A.sum(axis=1)[:, np.newaxis]
+        state["sw"] = W.sum(axis=1)[:, np.newaxis]
+
+        def moments(x):
+            mean = _safe_divide(A @ x, s)
+            msq = A @ (x**2)
+            var = msq - s * mean**2
+            zero = var <= _ZERO_VARIANCE_TOL * msq
+            return mean, W @ x, np.where(zero, 0.0, var), zero
+
+        state["ma"], state["wa"], state["va"], state["za"] = moments(a)
+        if autocorrelation:
+            state["mb"], state["wb"], state["vb"], state["zb"] = (
+                state["ma"],
+                state["wa"],
+                state["va"],
+                state["za"],
+            )
+        else:
+            state["mb"], state["wb"], state["vb"], state["zb"] = moments(b)
+        state["n_products"] = 1
+    else:
+        state["ok_a"] = ~np.isnan(a)
+        state["ok_b"] = ~np.isnan(b)
+        state["a0"] = np.where(state["ok_a"], a, 0.0)
+        state["b0"] = np.where(state["ok_b"], b, 0.0)
+        # per pair and kernel row: the number of timepoints with non-zero weight
+        # where both features are observed
+        state["support"] = (A > 0).astype(np.float64)
+        state["n_products"] = 10
+    return state
+
+
+def _wcorr_block(state, i0, i1, j0):
+    """
+    Kernel-weighted correlations between rows ``i0:i1`` of ``a`` and columns
+    ``j0:`` of ``b`` (``state`` from ``_wcorr_setup``).
+
+    Returns ``(r, undefined, zero_all, few_any)``: ``r`` of shape
+    (T', i1 - i0, Kb - j0), with undefined entries set to 0 and the rest
+    clipped to [-1, 1]; the mask of the undefined entries; per kernel row,
+    whether every pair in the block has zero variance; and per kernel row,
+    whether some pair has fewer than 3 observed samples with non-zero weight
+    (always False without NaN samples).
+    """
+    T = state["T"]
+    W = state["W"]
+    A = state["A"]
+    Kb = state["b"].shape[1]
+    shape = (W.shape[0], i1 - i0, Kb - j0)
+
+    if not state["has_nan"]:
+        a, b = state["a"], state["b"]
+        ma, mb, wa, wb = state["ma"], state["mb"], state["wa"], state["wb"]
+        prod = (a[:, i0:i1, np.newaxis] * b[:, np.newaxis, j0:]).reshape(T, -1)
+        cross = (W @ prod).reshape(shape)
+        ma_i = ma[:, i0:i1, np.newaxis]
+        mb_j = mb[:, np.newaxis, j0:]
+        num = (
+            cross
+            - ma_i * wb[:, np.newaxis, j0:]
+            - mb_j * wa[:, i0:i1, np.newaxis]
+            + ma_i * mb_j * state["sw"][:, :, np.newaxis]
+        )
+        var_a = state["va"][:, i0:i1, np.newaxis]
+        var_b = state["vb"][:, np.newaxis, j0:]
+        zero = state["za"][:, i0:i1, np.newaxis] | state["zb"][:, np.newaxis, j0:]
+        undefined = zero
+        few_any = np.zeros(shape[0], dtype=bool)
+    else:
+        ok_a, ok_b = state["ok_a"], state["ok_b"]
+        pair_ok = ok_a[:, i0:i1, np.newaxis] & ok_b[:, np.newaxis, j0:]
+        x = state["a0"][:, i0:i1, np.newaxis] * pair_ok
+        y = state["b0"][:, np.newaxis, j0:] * pair_ok
+        n = x[0].size
+        terms = np.concatenate(
+            [t.reshape(T, -1) for t in (pair_ok.astype(float), x, y, x**2, y**2)],
+            axis=1,
+        )
+        s0, sx, sy, sxx, syy = np.split(A @ terms, 5, axis=1)
+        w0, wx, wy = np.split(W @ terms[:, : 3 * n], 3, axis=1)
+        wxy = W @ (x * y).reshape(T, -1)
+        mx = _safe_divide(sx, s0)
+        my = _safe_divide(sy, s0)
+        num = (wxy - mx * wy - my * wx + mx * my * w0).reshape(shape)
+        var_a = sxx - s0 * mx**2
+        var_b = syy - s0 * my**2
+        zero = (var_a <= _ZERO_VARIANCE_TOL * sxx) | (var_b <= _ZERO_VARIANCE_TOL * syy)
+        var_a, var_b, zero = (v.reshape(shape) for v in (var_a, var_b, zero))
+        # two samples always give r = +-1: fewer than 3 is undefined
+        few = (state["support"] @ terms[:, :n]).reshape(shape) < 3
+        few_any = few.reshape(shape[0], -1).any(axis=1)
+        undefined = zero | few
+
+    zero_all = zero.reshape(shape[0], -1).all(axis=1)
+    den = np.sqrt(np.where(undefined, 1.0, var_a * var_b))
+    r = np.where(undefined, 0.0, np.clip(num / den, -1.0, 1.0))
+    return r, undefined, zero_all, few_any
+
+
+def _symmetrize_block(r, undefined, offset):
+    """
+    In place, for an autocorrelation block from ``_wcorr_block`` whose rows
+    ``i0:i1`` start ``offset`` columns after its first column: set the
+    diagonal to 1 (0 where undefined) and replace the square of columns
+    ``offset:offset + (i1 - i0)`` by the mean of it and its transpose.
+    """
+    c = r.shape[1]
+    diag = np.arange(c)
+    r[:, diag, offset + diag] = np.where(undefined[:, diag, offset + diag], 0.0, 1.0)
+    square = r[:, :, offset : offset + c]
+    r[:, :, offset : offset + c] = (square + square.transpose(0, 2, 1)) / 2
 
 
 def _wcorr_blocks(a, b, weights, autocorrelation):
@@ -784,105 +954,100 @@ def _wcorr_blocks(a, b, weights, autocorrelation):
     """
     T, Ka = a.shape
     Kb = b.shape[1]
-    W = weights
-    A = np.abs(W)
-    out = np.zeros([Ka, Kb, W.shape[0]])
-    cancelled = A.sum(axis=1) > 0
+    state = _wcorr_setup(a, b, weights, autocorrelation)
+    out = np.zeros([Ka, Kb, weights.shape[0]])
+    cancelled = state["active"].copy()
     sparse = np.zeros_like(cancelled)
 
-    a = _nan_center(a)
-    b = _nan_center(b)
-    has_nan = np.isnan(a).any() or np.isnan(b).any()
-
-    if not has_nan:
-        # Per-feature terms are shared by every pair: compute them once.
-        s = A.sum(axis=1)[:, np.newaxis]
-        sw = W.sum(axis=1)[:, np.newaxis]
-
-        def moments(x):
-            mean = _safe_divide(A @ x, s)
-            msq = A @ (x**2)
-            var = msq - s * mean**2
-            zero = var <= _ZERO_VARIANCE_TOL * msq
-            return mean, W @ x, np.where(zero, 0.0, var), zero
-
-        ma, wa, va, za = moments(a)
-        mb, wb, vb, zb = (ma, wa, va, za) if autocorrelation else moments(b)
-        n_products = 1
-    else:
-        ok_a = ~np.isnan(a)
-        ok_b = ~np.isnan(b)
-        a0 = np.where(ok_a, a, 0.0)
-        b0 = np.where(ok_b, b, 0.0)
-        # per pair and kernel row: the number of timepoints with non-zero weight
-        # where both features are observed
-        support = (A > 0).astype(np.float64)
-        n_products = 10
-
-    rows_per_block = _wcorr_block_rows(T, Kb, n_products)
+    rows_per_block = _wcorr_block_rows(T, Kb, state["n_products"])
     for i0 in range(0, Ka, rows_per_block):
         i1 = min(Ka, i0 + rows_per_block)
         j0 = i0 if autocorrelation else 0
-        shape = (W.shape[0], i1 - i0, Kb - j0)
-
-        if not has_nan:
-            prod = (a[:, i0:i1, np.newaxis] * b[:, np.newaxis, j0:]).reshape(T, -1)
-            cross = (W @ prod).reshape(shape)
-            ma_i = ma[:, i0:i1, np.newaxis]
-            mb_j = mb[:, np.newaxis, j0:]
-            num = (
-                cross
-                - ma_i * wb[:, np.newaxis, j0:]
-                - mb_j * wa[:, i0:i1, np.newaxis]
-                + ma_i * mb_j * sw[:, :, np.newaxis]
-            )
-            var_a = va[:, i0:i1, np.newaxis]
-            var_b = vb[:, np.newaxis, j0:]
-            zero = za[:, i0:i1, np.newaxis] | zb[:, np.newaxis, j0:]
-            undefined = zero
-        else:
-            pair_ok = ok_a[:, i0:i1, np.newaxis] & ok_b[:, np.newaxis, j0:]
-            x = a0[:, i0:i1, np.newaxis] * pair_ok
-            y = b0[:, np.newaxis, j0:] * pair_ok
-            n = x[0].size
-            terms = np.concatenate(
-                [t.reshape(T, -1) for t in (pair_ok.astype(float), x, y, x**2, y**2)],
-                axis=1,
-            )
-            s0, sx, sy, sxx, syy = np.split(A @ terms, 5, axis=1)
-            w0, wx, wy = np.split(W @ terms[:, : 3 * n], 3, axis=1)
-            wxy = W @ (x * y).reshape(T, -1)
-            mx = _safe_divide(sx, s0)
-            my = _safe_divide(sy, s0)
-            num = (wxy - mx * wy - my * wx + mx * my * w0).reshape(shape)
-            var_a = sxx - s0 * mx**2
-            var_b = syy - s0 * my**2
-            zero = (var_a <= _ZERO_VARIANCE_TOL * sxx) | (
-                var_b <= _ZERO_VARIANCE_TOL * syy
-            )
-            var_a, var_b, zero = (v.reshape(shape) for v in (var_a, var_b, zero))
-            # two samples always give r = +-1: fewer than 3 is undefined
-            few = (support @ terms[:, :n]).reshape(shape) < 3
-            sparse |= few.reshape(shape[0], -1).any(axis=1)
-            undefined = zero | few
-
-        cancelled &= zero.reshape(shape[0], -1).all(axis=1)
-        den = np.sqrt(np.where(undefined, 1.0, var_a * var_b))
-        r = np.where(undefined, 0.0, np.clip(num / den, -1.0, 1.0))
+        r, undefined, zero_all, few_any = _wcorr_block(state, i0, i1, j0)
+        cancelled &= zero_all
+        sparse |= few_any
 
         if autocorrelation:
-            c = i1 - i0
-            diag = np.arange(c)
-            r[:, diag, diag] = np.where(undefined[:, diag, diag], 0.0, 1.0)
-            r[:, :, :c] = (r[:, :, :c] + r[:, :, :c].transpose(0, 2, 1)) / 2
+            _symmetrize_block(r, undefined, 0)
             out[i0:i1, i0:, :] = r.transpose(1, 2, 0)
             out[i0:, i0:i1, :] = r.transpose(2, 1, 0)
         else:
             out[i0:i1, :, :] = r.transpose(1, 2, 0)
 
     # rows without weight (undefined kernel rows) are reported as such
-    sparse &= A.sum(axis=1) > 0
+    sparse &= state["active"]
     return out, cancelled, sparse
+
+
+def _corr_row_blocks(a, b, weights, symmetric, rows_per_block=None):
+    """
+    The rows of ``_wcorr(a, b, weights)`` in blocks, without the full array.
+
+    ``symmetric=True`` declares that ``a`` and ``b`` are the same data (an
+    autocorrelation): each block's diagonal is set to 1 (0 where undefined)
+    and the entries within the block's own rows and columns are averaged with
+    their transpose.  Entries outside that square are computed once per
+    orientation, so they equal ``_wcorr``'s mirrored values up to round-off.
+
+    The kernel is prepared as in ``_wcorr``: NaN weights count as 0, a kernel
+    with exactly one non-zero weight in every row gives the co-fluctuations
+    of ``_delta_wcorr``, and otherwise rows with fewer than 3 non-zero
+    weights are set to 0.  ``weights`` is not modified.  The inputs are
+    checked when this function is called, before the first block.
+
+    Returns a generator of ``(i0, i1, R, cancelled_all, sparse_any)``, with
+    consecutive blocks covering rows ``0:Ka`` of ``a`` (``rows_per_block``
+    rows each, the last possibly fewer; ``None`` chooses the block size used
+    by ``_wcorr_blocks``).  ``R`` has shape (i1 - i0, Kb, T') and equals rows
+    ``i0:i1`` of ``_wcorr``'s output.  ``cancelled_all`` marks the kernel rows
+    with any weight where every correlation of the block was set to 0 because
+    the variances are zero; ``sparse_any`` marks those where some pair of the
+    block has fewer than 3 observed samples with non-zero weight.  AND-ing
+    ``cancelled_all`` and OR-ing ``sparse_any`` over all blocks gives the
+    masks ``_wcorr(..., return_cancelled=True)`` returns (all False for the
+    delta case).
+
+    Raises ``ValueError`` as ``_wcorr`` does, and if ``symmetric`` is True but
+    ``a`` and ``b`` differ in shape.
+    """
+    a, b, weights, support = _wcorr_inputs(a, b, weights)
+    if symmetric and a.shape != b.shape:
+        raise ValueError(
+            "symmetric=True requires a and b of the same shape; "
+            f"got a {a.shape}, b {b.shape}."
+        )
+    if rows_per_block is not None and int(rows_per_block) < 1:
+        raise ValueError(f"rows_per_block must be at least 1; got {rows_per_block}.")
+    T, Ka = a.shape
+    Kb = b.shape[1]
+
+    if np.all(support == 1):
+        za, zb = _delta_zscores(a, b, weights)
+        step = int(rows_per_block or _wcorr_block_rows(T, Kb))
+
+        def delta_blocks():
+            for i0 in range(0, Ka, step):
+                i1 = min(Ka, i0 + step)
+                none = np.zeros(weights.shape[0], dtype=bool)
+                R = np.einsum("ti,tj->ijt", za[:, i0:i1], zb)
+                yield i0, i1, R, none, none.copy()
+
+        return delta_blocks()
+
+    weights[support < 3] = 0
+    state = _wcorr_setup(a, b, weights, symmetric)
+    step = int(rows_per_block or _wcorr_block_rows(T, Kb, state["n_products"]))
+    active = state["active"]
+
+    def blocks():
+        for i0 in range(0, Ka, step):
+            i1 = min(Ka, i0 + step)
+            r, undefined, zero_all, few_any = _wcorr_block(state, i0, i1, 0)
+            if symmetric:
+                _symmetrize_block(r, undefined, i0)
+            yield i0, i1, r.transpose(1, 2, 0), active & zero_all, active & few_any
+
+    return blocks()
 
 
 def wcorr(a, b, weights):
@@ -1010,25 +1175,7 @@ def _wcorr(a, b, weights, warn=True, return_cancelled=False):
     has fewer than 3 observed samples (see ``_wcorr_blocks``) are returned too:
     ``(out, (cancelled, sparse))``.
     """
-    a = np.asarray(a, dtype=np.float64)
-    b = np.asarray(b, dtype=np.float64)
-    if a.ndim == 1:
-        a = a[:, np.newaxis]
-    if b.ndim == 1:
-        b = b[:, np.newaxis]
-    weights = np.array(weights, dtype=np.float64, copy=True)
-    weights[np.isnan(weights)] = 0
-    if a.shape[0] != b.shape[0] or weights.ndim != 2 or weights.shape[1] != a.shape[0]:
-        raise ValueError(
-            "a and b must have the same number of rows (timepoints) T, and weights "
-            f"must have T columns; got a {a.shape}, b {b.shape}, weights {weights.shape}."
-        )
-
-    support = np.count_nonzero(weights, axis=1)
-    if np.all(support == 0):
-        raise ValueError(
-            "Every row of the kernel is zero; no correlation can be estimated."
-        )
+    a, b, weights, support = _wcorr_inputs(a, b, weights)
     if np.all(support == 1):
         out = _delta_wcorr(a, b, weights)
         none = np.zeros(weights.shape[0], dtype=bool)

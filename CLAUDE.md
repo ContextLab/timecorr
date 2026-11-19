@@ -87,9 +87,9 @@ The estimator (`wcorr`) is a kernel-weighted Pearson correlation; a true delta k
 
 - Uses `pytest`; tests are in `tests/` (one file per area: estimator, kernels, formatting, reduce, features, decoders, simulate, higher-order recovery, events (`test_events.py`), segmentation and on-demand installation (`test_segment.py`), recovery with event-restricted kernels (`test_events_recovery.py`), summaries and their streaming (`test_summaries.py`, `test_summaries_streaming.py`), the feeding path and reducer grammar in `features` (`test_features_summaries.py`), the defaults of `features` and `two_path_step` (`test_features_defaults.py`), outputs and warnings of the original pipeline frozen at commit d4bb5ba (`test_legacy_pipeline.py`, `test_legacy_timecorr.py`), order-2 recovery on `simulate_nested` data (`test_nested_recovery.py`; its T 3000, isfc and K 702 cases are slow), plus coverage files)
 - Tests run real computations on simulated data; no mocks
-- `pytest.ini` registers the `slow` marker for long-running integration tests (continuous integration runs them)
+- `pytest.ini` registers the `slow` marker for long-running integration tests (continuous integration runs them in a separate job on Python 3.12)
 - Docstring examples are tested with `pytest --doctest-modules timecorr/`
-- CI: GitHub Actions on Python 3.10-3.13 (`.github/workflows/tests.yml`)
+- CI: GitHub Actions (`.github/workflows/tests.yml`): the tests without the slow ones (`-m "not slow"`) and the doctests on Python 3.10-3.13, and a separate `slow` job (`-m slow`) on Python 3.12
 
 ## Documentation
 

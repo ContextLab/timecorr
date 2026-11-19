@@ -26,10 +26,34 @@ jobs:
         python -m pip install --upgrade pip
         pip install ".[test]"
 
-    - name: Run tests with pytest
+    - name: Run tests with pytest (without the slow tests)
       run: |
-        pytest tests/ -v
+        pytest tests/ -m "not slow" -v --durations=25
 
     - name: Run docstring examples (doctests)
       run: |
         pytest --doctest-modules timecorr/ -v
+
+  slow:
+    runs-on: ubuntu-latest
+    env:
+      # the runner has 4 cores
+      OMP_NUM_THREADS: 4
+      OPENBLAS_NUM_THREADS: 4
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install ".[test]"
+
+    - name: Run the slow tests
+      run: |
+        pytest tests/ -m slow -v --durations=25

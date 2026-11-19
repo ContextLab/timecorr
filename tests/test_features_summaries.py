@@ -6,7 +6,7 @@ of the legacy pipeline, pinned by ``tests/test_legacy_pipeline.py``).
 Everything is computed for real on simulated data; nothing is mocked.
 """
 
-import time
+import tracemalloc
 import warnings
 
 import numpy as np
@@ -302,9 +302,25 @@ def test_direct_n_none_still_raises():
 
 def test_communities_on_isfc_analysis_needs_n():
     data, _ = nested()
-    with pytest.raises(ValueError, match="number of communities n"):
+    with pytest.raises(ValueError, match="number of communities n.*cfun=autofc "
+                       "and combine=null_combine"):
         tc.features(data, order=1, cfun=tc.isfc, weights_params=WIDE,
                     rfun=tc.Communities())
+
+
+@pytest.mark.parametrize("settings", [
+    dict(cfun=tc.isfc, rfun="communities"),
+    dict(cfun=tc.wisfc, rfun=tc.WeightedStrength(split=True)),
+    dict(cfun=tc.autofc, combine=tc.corrmean_combine, rfun=tc.Communities()),
+], ids=["isfc", "wisfc", "corrmean_combine"])
+def test_automatic_count_error_names_its_conditions(settings):
+    data, _ = nested()
+    with pytest.raises(ValueError) as err:
+        tc.features(data, order=1, weights_params=WIDE, **settings)
+    message = str(err.value)
+    assert "cfun=autofc and combine=null_combine" in message
+    assert "feeding path" in message
+    assert "available only inside features" not in message
 
 
 def test_communities_on_autofc_analysis_counts_automatically():
@@ -355,6 +371,12 @@ def test_ndims_with_a_summary_on_a_computed_step_raises():
                     ndims=3, return_delta=True, **FEED)
     with pytest.raises(ValueError, match="ndims"):
         two_path_step(data, rfun="PCA", delta_rfun="weighted_strength", ndims=3)
+
+
+def test_reduce_ndims_message_names_summaries():
+    corrs = tc.timecorr(noise(T=100, K=6), cfun=tc.autofc, weights_params={"var": 10})
+    with pytest.raises(ValueError, match="graph measure, summary or callable"):
+        tc.reduce(corrs, rfun="weighted_strength", ndims=3)
 
 
 def test_ndims_with_a_summary_only_at_an_uncomputed_step_does_not_raise():
@@ -432,18 +454,33 @@ def test_streamed_memory_estimate():
     assert two[1] == 8 * sm._streamed_peak_elements(T_, K_, 3, 1) / 1e9
 
 
+def recording_kernel(calls):
+    """A Gaussian kernel function that appends T to ``calls`` when called:
+    every correlation step builds its kernel before computing anything."""
+
+    def kernel(T, params=None):
+        calls.append(T)
+        return tc.gaussian_weights(T, tc.gaussian_params if params is None else params)
+
+    return kernel
+
+
 @pytest.mark.parametrize("path", ["analysis", "feeding"])
 def test_streamed_budget_too_small_raises_before_computing(path):
     rng = np.random.default_rng(0)
     data = rng.standard_normal((2000, 2000))
     need = estimate_memory_gb(2000, 1, 2000, streamed=True)[1]
+    calls = []
+    kernel = recording_kernel(calls)
     kw = (dict(rfun=tc.WeightedStrength(signed=True)) if path == "analysis"
           else dict(rfun=tc.WeightedStrength(), delta_rfun="weighted_strength",
-                    return_delta=True, **FEED))
-    start = time.perf_counter()
+                    return_delta=True, delta_weights_function=kernel,
+                    delta_weights_params={"var": 25}))
     with pytest.raises(MemoryError, match="streamed"):
-        tc.features(data, order=1, cfun=tc.autofc, max_memory_gb=0.9 * need, **kw)
-    assert time.perf_counter() - start < 2.0
+        tc.features(data, order=1, cfun=tc.autofc, max_memory_gb=0.9 * need,
+                    weights_function=kernel, **kw)
+    # no kernel was built, so no correlation was computed
+    assert calls == []
 
 
 def test_streamed_budget_that_fits_runs():
@@ -462,21 +499,27 @@ def test_delta_weights_function_must_be_callable():
         tc.features(noise(), order=1, delta_weights_function="gaussian")
 
 
-def test_default_feeding_constant_selects_the_gaussian_kernel(monkeypatch):
-    # the one switch for the later change of default: with "gaussian", None
-    # means gaussian_weights with {"var": 25}
-    from timecorr import higher_order
+def test_default_feeding_selection_gives_the_documented_kernels():
+    # _feeding_kernel(None, ...) selects the kernel named by _DEFAULT_FEEDING
+    # ("delta" or "gaussian"); the selection is passed here as an argument
+    from timecorr.higher_order import _DEFAULT_FEEDING, _feeding_kernel
 
     data = noise(T=100, K=5)
     common = dict(order=1, cfun=tc.autofc, rfun=None, return_delta=True)
     _, explicit = tc.features(data, **common, **FEED)
-    monkeypatch.setattr(higher_order, "_DEFAULT_FEEDING", "gaussian")
+    function, params = _feeding_kernel(None, None, default="gaussian")
+    assert function is tc.gaussian_weights and params == {"var": 25}
+    _, selected = tc.features(data, delta_weights_function=function,
+                              delta_weights_params=params, **common)
+    assert_lists_close(selected[1], explicit[1], rtol=0, atol=0)
+    assert _feeding_kernel(None, {"var": 4}, default="gaussian") == (
+        tc.gaussian_weights, {"var": 4})
+
+    assert _DEFAULT_FEEDING == "delta"
+    assert _feeding_kernel(None, None) == (tc.eye_weights, None)
     _, default = tc.features(data, **common)
-    assert_lists_close(default[1], explicit[1], rtol=0, atol=0)
-    monkeypatch.setattr(higher_order, "_DEFAULT_FEEDING", "delta")
-    _, eye = tc.features(data, **common)
     assert_lists_close(
-        eye[1], tc.timecorr(data, weights_function=tc.eye_weights, cfun=tc.autofc),
+        default[1], tc.timecorr(data, weights_function=tc.eye_weights, cfun=tc.autofc),
         rtol=0, atol=0,
     )
 
@@ -508,12 +551,13 @@ def test_streamed_feeding_counts_the_unreduced_analysis_results():
 def test_shift_null_on_the_eye_path_is_checked_before_computing():
     data = noise(S=2, T=2000, K=10)
     need, held = _held_sizes()
+    calls = []
     common = dict(order=1, cfun=tc.autofc, rfun="PCA", return_delta=True,
-                  delta_rfun=tc.Communities())
-    start = time.perf_counter()
+                  delta_rfun=tc.Communities(), weights_function=recording_kernel(calls))
     with pytest.raises(MemoryError, match="shift null of the feeding step"):
         tc.features(data, max_memory_gb=need + held / 2, **common)
-    assert time.perf_counter() - start < 1.0
+    # the analysis kernel was not built, so no correlation was computed
+    assert calls == []
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         X, D = tc.features(data, max_memory_gb=need + 2 * held + 0.2, **common)
@@ -526,3 +570,118 @@ def test_delta_weights_params_needs_delta_weights_function():
         tc.features(data, order=1, cfun=tc.autofc, delta_weights_params={"var": 25})
     with pytest.raises(ValueError, match="delta_weights_params needs delta_weights_function"):
         two_path_step(data, cfun=tc.autofc, delta_weights_params={"var": 25})
+
+
+def test_explicit_eye_feeding_kernel_takes_no_params():
+    data = noise()
+    with pytest.raises(ValueError, match="eye_weights takes no parameters"):
+        tc.features(data, order=1, cfun=tc.autofc, delta_weights_function=tc.eye_weights,
+                    delta_weights_params={"var": 4})
+    with pytest.raises(ValueError, match="eye_weights takes no parameters"):
+        two_path_step(data, cfun=tc.autofc, delta_weights_function=tc.eye_weights,
+                      delta_weights_params={})
+
+
+# final review fixes ---------------------------------------------------------
+
+
+def test_streamed_step_without_a_budget_holds_less_than_one_cube():
+    # max_memory_gb=None: the streamed step uses the estimator's block size
+    # (2**23 correlations), not one block of all K rows
+    K_, T_ = 700, 300
+    data = np.random.default_rng(11).standard_normal((T_, K_))
+    cube = 8 * K_ * K_ * T_
+    tracemalloc.start()
+    try:
+        X = quiet(tc.features, data, order=1, cfun=tc.autofc,
+                  weights_params={"var": 10}, rfun=tc.WeightedStrength(),
+                  max_memory_gb=None)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert X[1].shape == (T_, K_)
+    assert peak < cube, (peak / 1e6, cube / 1e6)
+
+
+def test_streamed_steps_are_checked_before_order_one():
+    # order 1 holds its correlations and fits the budget; the streamed order-2
+    # step (input width unknown in advance: K is used) does not
+    calls = []
+
+    def recording_pca(corrs):
+        calls.append(len(corrs))
+        return tc.reduce(corrs, rfun="PCA")
+
+    data = noise(S=2, T=2000, K=10)
+    first = estimate_memory_gb(10, 2, 2000, 2)[1]
+    streamed = estimate_memory_gb(10, 2, 2000, 2, streamed=True)[2]
+    assert first < streamed
+    with pytest.raises(MemoryError, match="streamed analysis step at order 2"):
+        tc.features(data, order=2, cfun=tc.autofc,
+                    rfun={1: recording_pca, 2: tc.WeightedStrength()},
+                    max_memory_gb=(first + streamed) / 2)
+    assert calls == []
+
+
+def test_streamed_feeding_steps_are_checked_before_order_one():
+    # a known width: unreduced order-1 features have d(d+1)/2 = 55 columns
+    data = noise(S=2, T=2000, K=10)
+    first = estimate_memory_gb(10, 2, 2000, 2)[1]
+    width_k = estimate_memory_gb(10, 1, 2000, 2, streamed=True)[1]
+    width_55 = estimate_memory_gb(55, 1, 2000, 2, streamed=True)[1]
+    # fits order 1 and a streamed step on K = 10 inputs, not one on 55 inputs
+    budget = (width_k + width_55) / 2
+    assert first < budget and width_k < budget < width_55
+    calls = []
+    with pytest.raises(MemoryError, match="streamed feeding step at order 2"):
+        tc.features(data, order=2, cfun=tc.autofc, rfun={1: None, 2: "PCA"},
+                    delta_rfun={1: None, 2: "weighted_strength"}, return_delta=True,
+                    delta_weights_function=recording_kernel(calls),
+                    delta_weights_params={"var": 25}, max_memory_gb=budget)
+    assert calls == []
+
+
+def test_direct_calls_keep_the_latest_fit_and_fit_appends():
+    data = noise(T=100, K=6)
+    corrs = tc.timecorr(data, cfun=tc.autofc, weights_params={"var": 10})
+    ws = tc.WeightedStrength()
+    for _ in range(3):
+        quiet(ws, corrs)
+    assert len(ws.fits_) == 1
+    for _ in range(2):
+        quiet(tc.reduce, corrs, rfun=ws)
+    assert len(ws.fits_) == 1
+    quiet(tc.timecorr, data, cfun=tc.autofc, weights_params={"var": 10}, rfun=ws)
+    assert len(ws.fits_) == 1
+    ws.fit(corrs)
+    ws.fit(corrs, order=2, path="analysis")
+    assert len(ws.fits_) == 3 and ws.fits_[-1]["order"] == 2
+    comm = tc.Communities(n=2)
+    comm(corrs)
+    comm(corrs[0])
+    assert len(comm.fits_) == 1 and len(comm.fits_[0]["weights"]) == 1
+
+
+def test_two_path_step_appends_one_fit_per_step():
+    data = noise(T=100, K=6)
+    ws = tc.WeightedStrength()
+    for k in (1, 2):
+        quiet(two_path_step, data, cfun=tc.autofc, weights_params={"var": 10},
+              rfun=ws, delta_rfun="PCA", order=k, **FEED)
+    assert [(f["order"], f["path"]) for f in ws.fits_] == [
+        (1, "analysis"), (2, "analysis")]
+
+
+def test_order_map_missing_order_uses_auto_on_the_feeding_path():
+    # delta_rfun={2: ...} leaves order 1 to "auto": "communities" (automatic
+    # count) on the feeding path, while rfun is a plain reducer
+    data, _ = nested()
+    common = dict(order=2, cfun=tc.autofc, weights_params=WIDE, rfun="PCA",
+                  return_delta=True, **FEED)
+    X, D = quiet(tc.features, data, delta_rfun={2: "PCA"}, **common)
+    comm = tc.Communities()
+    X_ref, D_ref = quiet(tc.features, data, delta_rfun={1: comm, 2: "PCA"}, **common)
+    assert D[1][0].shape == (T, comm.fits_[0]["n"]) and comm.fits_[0]["n"] == 6
+    for k in (1, 2):
+        assert_lists_close(D[k], D_ref[k], rtol=0, atol=0)
+        assert_lists_close(X[k], X_ref[k], rtol=0, atol=0)

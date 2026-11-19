@@ -4,7 +4,7 @@ Order-2 recovery of nested structure with the squared-correlation summaries.
 Data: ``tc.simulate_nested`` (K = 108: 6 supergroups x 3 modules x 6 nodes
 unless noted).  The subjects share only the order-2 signal ``truth["h"]``
 (T, 6), except in the isfc case (``shared="order1"``).  Features come from
-``tc.features(order=2)`` with the explicit arguments of the future defaults:
+``tc.features(order=2)`` with these explicit arguments:
 ``cfun=tc.autofc`` (unless noted), a Gaussian analysis kernel with standard
 deviation ``sd2 = max(10, round(tau3 / 3.75))`` (``tau3 = T // 8`` unless
 given; 33 at T 1000), ``rfun="auto"`` (PCA at order 1,
@@ -39,7 +39,7 @@ standard error over seeds; the seed counts are given per row):
 
 | case | seeds | score | control (mean of 4 subjects) |
 |-|-|-|-|
-| sustained, communities (defaults-to-be) | 24 | .753 +- .019 | -.025 +- .018 |
+| sustained, communities (`rfun="auto"`, `delta_rfun="auto"`) | 24 | .753 +- .019 | -.025 +- .018 |
 | sustained, weighted strength | 24 | .645 +- .028 | -.025 +- .017 |
 | sign-flip, communities | 24 | .690 +- .018 | .000 +- .025 |
 | sign-flip, weighted strength | 24 | .563 +- .026 | .005 +- .020 |
@@ -83,6 +83,25 @@ per seed (12 seeds, 4 control subjects each), so its standard error is about
 .085 at 4 seeds and .061 at 8 seeds.  Measured on 30000-30007: communities
 score .858 +- .016, control -.104 +- .046 (sd .131); weighted strength score
 .819 +- .029, control -.092 +- .056 (sd .158).
+
+Control of the T 3000 cases pooled over the development and asserted seeds
+(20000-20011 and 30000-30007, 20 seeds; mean and standard error over seeds):
+
+| case | seeds | control (mean of 4 subjects) |
+|-|-|-|
+| tau2 15, T 3000, communities | 20 | -.060 +- .035 (sd .158) |
+| tau2 15, T 3000, weighted strength | 20 | -.058 +- .036 (sd .162) |
+
+Time-reversed control (``"reversed"`` in ``case_scores``; not asserted): the
+prediction for subject B (the map fitted on A to ``h``) scored against the
+subsampled ``h`` reversed in time.  Development seeds (20000-20023): sustained,
+communities -.231 +- .052 (sd .257); sustained, weighted strength -.246 +-
+.049 (sd .242).  This is not centered on 0: ``h`` itself correlates with its
+own time reversal at -.213 +- .048 over the same seeds (mean over the
+columns of ``h``, subsampled every 10th timepoint; T 1000), and the
+prediction follows ``h`` (score .753 and .645), so the reversed score is
+expected near that value rather than near 0.  Measured on 30000-30003:
+-.293 +- .157 (communities) and -.233 +- .161 (weighted strength).
 
 K 702 (slow, 2 seeds, ``max_memory_gb=4``, OMP 2; one control subject, not
 asserted): seed 30000 score .825 (control -.014), peak resident memory
@@ -148,6 +167,13 @@ def decode_score(XA, XB, target, step=STEP):
     return _score(_ridge_predict(_zscore(XA), _zscore(XB), y), y)
 
 
+def reversed_decode_score(XA, XB, target, step=STEP):
+    """``decode_score``'s prediction for subject B scored against the
+    subsampled ``target`` reversed in time."""
+    XA, XB, y = (np.asarray(a, dtype=float)[::step] for a in (XA, XB, target))
+    return _score(_ridge_predict(_zscore(XA), _zscore(XB), y), y[::-1])
+
+
 def held_out_decode_score(XA, XB, target, step=STEP):
     """``decode_score`` fitted on the first 40% of the (subsampled) timepoints
     of subject A and scored on the last 40% of subject B."""
@@ -203,6 +229,7 @@ def case_scores(name, seed):
     X1, X2 = out[1], out[2]
     res = {
         "score": decode_score(X2[0], X2[1], h),
+        "reversed": reversed_decode_score(X2[0], X2[1], h),
         "control": float(np.mean([decode_score(X2[0], N, h) for N in X2[2:]])),
         "raw": decode_score(data[0], data[1], h),
         "order1": decode_score(X1[0], X1[1], h),

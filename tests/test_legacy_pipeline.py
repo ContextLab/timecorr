@@ -3,9 +3,13 @@
 ``tests/fixtures/legacy_features.npz`` holds the outputs of ``tc.features`` and
 ``tc.two_path_step`` computed at commit d4bb5ba for the calls in ``CASES``.  The
 test recomputes each call and compares every output array at 1e-12.
+``WARNINGS`` holds the warnings (category and start of the message) that some
+of these calls, and three more calls with default settings, issued at commit
+d4bb5ba.
 """
 
 import os
+import warnings
 
 import numpy as np
 import pytest
@@ -15,8 +19,7 @@ from timecorr.higher_order import two_path_step
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "legacy_features.npz")
 
-# Arguments that reproduce the legacy pipeline once the defaults change; merged
-# into every call.
+# Arguments merged into every call (empty: the package defaults).
 LEGACY = {}
 
 T, K = 60, 5
@@ -139,3 +142,44 @@ def test_matches_frozen_outputs(index):
         np.testing.assert_allclose(
             got[key], frozen[key], rtol=1e-12, atol=1e-12, equal_nan=True, err_msg=key
         )
+
+
+# ------------------------------------------------------------------ warnings
+
+_NAN_FILL = "NaN samples: their co-fluctuations are set to 0 before the delta path's"
+_SPARSE = "2 of 60 timepoints have fewer than 3 non-zero kernel weights"
+
+# Warnings recorded at commit d4bb5ba (warnings.simplefilter("always")):
+# name -> (call, [(category, start of the message), ...])
+WARNINGS = {
+    "array_order3": (lambda: run_case(*CASES[0][1:]), []),
+    "nan_list_no_reduction": (lambda: run_case(*CASES[3][1:]), []),
+    "list_events": (lambda: run_case(*CASES[5][1:]), []),
+    "nan_list_defaults": (
+        lambda: _call_features(_nan_list(104), order=2, return_delta=True),
+        [(UserWarning, _NAN_FILL)],
+    ),
+    "backward_list": (
+        lambda: _call_features(
+            _list(108, 3), order=2, include_timepoints="backward",
+            weights_params={"var": 10}, return_delta=True,
+        ),
+        [(UserWarning, _SPARSE), (UserWarning, _SPARSE)],
+    ),
+    "nan_step_defaults": (
+        lambda: _call_step(_nan_list(109)), [(UserWarning, _NAN_FILL)]
+    ),
+}
+
+
+@pytest.mark.parametrize("name", list(WARNINGS))
+def test_warnings_match_the_legacy_pipeline(name):
+    call, expected = WARNINGS[name]
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        call()
+    got = [(r.category, str(r.message)) for r in record]
+    assert len(got) == len(expected), got
+    for (category, message), (want_category, start) in zip(got, expected):
+        assert category is want_category, got
+        assert message.startswith(start), got

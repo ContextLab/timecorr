@@ -1070,3 +1070,27 @@ def test_decoders_segmentation_leaves_the_global_random_state_unchanged(name):
     np.random.seed(11)
     assert np.array_equal(get_xval_assignments(6, 2), folds)
     assert len(with_events) == len(_seeded(lambda: run(data)))
+
+
+# ------------------------------------------------------ summaries as rfun
+
+
+def test_timepoint_decoder_accepts_a_summary_rfun():
+    data = shared_ramping_data(seed=3)
+    ws = tc.WeightedStrength()
+    np.random.seed(3)
+    results = tc.timepoint_decoder(
+        data, nfolds=2, level=[0, 1, 2], weights_fun=tc.laplace_weights,
+        weights_params={"scale": 5}, rfun="weighted_strength",
+    )
+    assert list(results.columns) == ["rank", "accuracy", "error", "level", "folds"]
+    assert results["level"].tolist() == [0, 1, 2, 0, 1, 2]
+    assert results["folds"].tolist() == [0, 0, 0, 1, 1, 1]
+    values = results[["rank", "accuracy", "error"]].to_numpy(dtype=float)
+    assert np.isfinite(values).all()
+    assert ((values >= 0) & (values <= 1)).all()
+    # an instance: each call keeps only its latest fit
+    np.random.seed(3)
+    tc.timepoint_decoder(data, nfolds=2, level=1, weights_fun=tc.laplace_weights,
+                         weights_params={"scale": 5}, rfun=ws)
+    assert len(ws.fits_) == 1 and len(ws.fits_[0]["weights"]) > 0

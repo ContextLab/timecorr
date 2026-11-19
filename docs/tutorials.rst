@@ -14,6 +14,7 @@ Google Colab, where its first code cell installs timecorr.
    tutorial/timecorr_notebook
    tutorial/synthetic_data_tutorial
    tutorial/higher_order_tutorial
+   tutorial/event_kernels_tutorial
    tutorial/applications_tutorial
 
 Using timecorr
@@ -41,6 +42,18 @@ structure exists only at a chosen order and recovering it; and the limits of the
 approach (the number of features an order needs, the memory of unreduced runs,
 and how much of the structure variance-based reduction keeps at orders 2 and 3,
 as measured there).
+
+Event-restricted kernels
+------------------------
+
+``event_kernels_tutorial.ipynb``: what restricting a kernel to events (blocks
+of consecutive timepoints) does to it; passing boundaries to ``timecorr``;
+segmenting synthetic stimulus embeddings with ``tc.segment`` (ordered events,
+with the number of events given or chosen automatically, and recurring states);
+recovery of block-wise correlations in synthetic brain data with the
+restricted kernel, compared with the unrestricted kernel and with wrong
+boundaries; per-subject events and cross-subject correlations; and different
+events at each order in ``tc.features``.
 
 Applications
 ------------

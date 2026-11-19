@@ -24,7 +24,7 @@ Dynamic correlations
    autofc
 
 ``timecorr`` builds the kernel, restricts it (``include_timepoints``,
-``include_zero``, ``exclude_timepoints``), applies the correlation function
+``include_zero``, ``exclude_timepoints``, and ``events``: see Events below), applies the correlation function
 (``cfun``) to every subject, combines the subjects (``combine``) and reduces the
 result (``rfun``). ``wcorr`` is the estimator: a kernel-weighted Pearson
 correlation in which row ``t`` of the kernel weights the means, covariances and
@@ -89,12 +89,18 @@ Events
 ``segment`` divides a timepoints-by-features timeseries into events with a
 hidden Markov model (``hmmlearn``, installed on demand) and returns the block
 starts, which ``timecorr`` accepts as ``events`` to confine its kernel to
-blocks.
+blocks: the kernel gives no weight to timepoints outside the current block.
+``events`` also accepts boundary indices directly, a features array (segmented
+with ``events_params``), or a list with one entry per subject; in ``features``
+it may be a dict keyed by order. The :doc:`tutorial <tutorial/event_kernels_tutorial>`
+shows each form.
 
 .. code-block:: python
 
    boundaries = tc.segment(embedding, n=6)                 # e.g. array([0, 48, ...])
    corrs = tc.timecorr(data, events=boundaries)
+   corrs = tc.timecorr(data, events=[40, 70])              # blocks 0-39, 40-69, 70 to the end
+   X = tc.features(data, order=2, events={1: boundaries, 2: [50]})
 
 Kernels
 -------

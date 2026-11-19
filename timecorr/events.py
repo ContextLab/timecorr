@@ -243,7 +243,12 @@ def _segment_features(entry, params):
 
 
 def _params_key(params):
-    """Hashable key for segmentation parameters (unhashable values by identity)."""
+    """Hashable key for segmentation parameters (unhashable values by identity).
+
+    Each value's type is part of the key: equal values of different types (``3`` and
+    ``3.0``, ``1`` and ``True``) are distinct, so a cached result for a valid value is
+    never reused for an invalid one, which then reaches :func:`segment`'s validation.
+    """
     out = []
     for k in sorted(params):
         v = params[k]
@@ -251,7 +256,7 @@ def _params_key(params):
             hash(v)
         except TypeError:
             v = ("id", id(v))
-        out.append((k, v))
+        out.append((k, type(params[k]), v))
     return tuple(out)
 
 

@@ -66,6 +66,9 @@ def test_ordered_known_events_n_given():
 
 
 def test_ordered_known_events_n_chosen():
+    # Measured over data seeds 0..9 (2026-11-19): n=6 was chosen every time, but its
+    # Wasserstein score beat n=7's by only 0.002 to 0.013, so a change in the fit that
+    # shifts scores slightly can flip this choice to 7.
     data, truth = ordered_data(seed=0)
     b = tc.segment(data)
     assert len(b) == 6, b
@@ -244,6 +247,16 @@ def test_finish_cache_holds_one_entry_per_object_and_params():
     assert res[0] is res[1] is res[2]
     _finish(feat, {"n": 4}, cache)
     assert len(cache) == 2  # different parameters: segmented again
+
+
+@pytest.mark.parametrize("valid, invalid", [(3, 3.0), (3, np.float64(3.0)), (1, True)])
+def test_cache_does_not_let_invalid_params_skip_validation(valid, invalid):
+    # Equal but invalid values (3.0 == 3, True == 1) must not reuse a cached valid result.
+    data, _ = ordered_data(seed=0)
+    with pytest.raises(ValueError):
+        resolve_events_by_order(
+            {1: data, 2: data}, 300, 1, 2, events_params={1: {"n": valid}, 2: {"n": invalid}}
+        )
 
 
 def test_same_features_different_params_per_order():

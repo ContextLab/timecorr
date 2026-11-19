@@ -513,14 +513,17 @@ def _kernel_row_problems(weights):
     return undefined, ~undefined & (ess < 2)
 
 
-def _estimator_message(weights, cancelled=None):
+def _estimator_message(weights, cancelled=None, sparse=None):
     """
     The one warning of a correlation call, or None.
 
     It names the kernel rows with fewer than 3 non-zero weights (undefined, set
-    to 0), the other rows whose effective sample size is below 2, and the
-    timepoints (``cancelled``, a boolean mask) where every correlation was set
-    to 0 because the kernel-weighted variances there are zero.
+    to 0), the other rows whose effective sample size is below 2, the
+    timepoints (``sparse``, a boolean mask) where some pairs of features have
+    fewer than 3 observed samples with non-zero weight because of NaN samples
+    (undefined, set to 0), and the timepoints (``cancelled``, a boolean mask)
+    where every correlation was set to 0 because the kernel-weighted variances
+    there are zero.
     """
     T = np.shape(weights)[0]
     parts = []
@@ -539,6 +542,12 @@ def _estimator_message(weights, cancelled=None):
                 "((sum |w|)**2 / sum w**2 over the kernel row) below 2; the kernel "
                 "is too narrow to estimate correlations reliably there."
             )
+    if sparse is not None and np.any(sparse):
+        parts.append(
+            f"{int(np.sum(sparse))} of {T} timepoints have, for some pairs of "
+            "features, fewer than 3 observed (non-NaN) samples with non-zero "
+            "kernel weight; those correlations are undefined and set to 0."
+        )
     if cancelled is not None and np.any(cancelled):
         parts.append(
             f"{int(np.sum(cancelled))} of {T} timepoints have zero kernel-weighted "
@@ -765,9 +774,13 @@ def _wcorr_blocks(a, b, weights, autocorrelation):
     Kernel-weighted correlations, computed with matrix products over blocks of
     feature pairs.  NaN samples are excluded pairwise (they carry no weight).
 
-    Returns ``(out, cancelled)``: the (Ka, Kb, T) correlations, and a mask of
-    the kernel rows with any weight where every correlation was set to 0
-    because the variances there are zero.
+    Returns ``(out, cancelled, sparse)``: the (Ka, Kb, T) correlations; a mask
+    of the kernel rows with any weight where every correlation was set to 0
+    because the variances there are zero; and a mask of the kernel rows with
+    any weight where some pair of features has fewer than 3 observed samples
+    with non-zero weight (NaN samples; those correlations are set to 0, the
+    diagonal of an autocorrelation included).  Without NaN samples ``sparse``
+    is all False.
     """
     T, Ka = a.shape
     Kb = b.shape[1]
@@ -775,6 +788,7 @@ def _wcorr_blocks(a, b, weights, autocorrelation):
     A = np.abs(W)
     out = np.zeros([Ka, Kb, W.shape[0]])
     cancelled = A.sum(axis=1) > 0
+    sparse = np.zeros_like(cancelled)
 
     a = _nan_center(a)
     b = _nan_center(b)
@@ -800,7 +814,10 @@ def _wcorr_blocks(a, b, weights, autocorrelation):
         ok_b = ~np.isnan(b)
         a0 = np.where(ok_a, a, 0.0)
         b0 = np.where(ok_b, b, 0.0)
-        n_products = 9
+        # per pair and kernel row: the number of timepoints with non-zero weight
+        # where both features are observed
+        support = (A > 0).astype(np.float64)
+        n_products = 10
 
     rows_per_block = _wcorr_block_rows(T, Kb, n_products)
     for i0 in range(0, Ka, rows_per_block):
@@ -822,6 +839,7 @@ def _wcorr_blocks(a, b, weights, autocorrelation):
             var_a = va[:, i0:i1, np.newaxis]
             var_b = vb[:, np.newaxis, j0:]
             zero = za[:, i0:i1, np.newaxis] | zb[:, np.newaxis, j0:]
+            undefined = zero
         else:
             pair_ok = ok_a[:, i0:i1, np.newaxis] & ok_b[:, np.newaxis, j0:]
             x = a0[:, i0:i1, np.newaxis] * pair_ok
@@ -843,22 +861,28 @@ def _wcorr_blocks(a, b, weights, autocorrelation):
                 var_b <= _ZERO_VARIANCE_TOL * syy
             )
             var_a, var_b, zero = (v.reshape(shape) for v in (var_a, var_b, zero))
+            # two samples always give r = +-1: fewer than 3 is undefined
+            few = (support @ terms[:, :n]).reshape(shape) < 3
+            sparse |= few.reshape(shape[0], -1).any(axis=1)
+            undefined = zero | few
 
         cancelled &= zero.reshape(shape[0], -1).all(axis=1)
-        den = np.sqrt(np.where(zero, 1.0, var_a * var_b))
-        r = np.where(zero, 0.0, np.clip(num / den, -1.0, 1.0))
+        den = np.sqrt(np.where(undefined, 1.0, var_a * var_b))
+        r = np.where(undefined, 0.0, np.clip(num / den, -1.0, 1.0))
 
         if autocorrelation:
             c = i1 - i0
             diag = np.arange(c)
-            r[:, diag, diag] = np.where(zero[:, diag, diag], 0.0, 1.0)
+            r[:, diag, diag] = np.where(undefined[:, diag, diag], 0.0, 1.0)
             r[:, :, :c] = (r[:, :, :c] + r[:, :, :c].transpose(0, 2, 1)) / 2
             out[i0:i1, i0:, :] = r.transpose(1, 2, 0)
             out[i0:, i0:i1, :] = r.transpose(2, 1, 0)
         else:
             out[i0:i1, :, :] = r.transpose(1, 2, 0)
 
-    return out, cancelled
+    # rows without weight (undefined kernel rows) are reported as such
+    sparse &= A.sum(axis=1) > 0
+    return out, cancelled, sparse
 
 
 def wcorr(a, b, weights):
@@ -893,7 +917,10 @@ def wcorr(a, b, weights):
       correlations are set to 0.  If every row is all zeros, ``ValueError``
       is raised.
     - NaN samples carry no weight: each pair of features uses only the
-      timepoints where both are observed.  NaN kernel weights count as 0.
+      timepoints where both are observed.  A pair with fewer than 3 observed
+      samples with non-zero weight in a kernel row is undefined there, like a
+      row with fewer than 3 weights: its correlation is set to 0 (the diagonal
+      of an autocorrelation included).  NaN kernel weights count as 0.
     - A feature is treated as constant at timepoint ``t`` when its
       kernel-weighted variance there is at most 1e-10 times its
       kernel-weighted mean square (after the feature's overall mean is
@@ -912,7 +939,8 @@ def wcorr(a, b, weights):
     timepoints have an effective sample size ``(sum |w|)**2 / sum w**2``
     below 2 (a kernel too narrow for a reliable estimate: for example a
     Gaussian with ``var=0.05``, whose rows are one sample plus weights below
-    1e-4); and how
+    1e-4); how many timepoints have, because of NaN samples, pairs of
+    features with fewer than 3 observed samples with non-zero weight; and how
     many timepoints have zero kernel-weighted variance in every feature, so
     that all their correlations are 0.  A true delta kernel never warns.
 
@@ -945,8 +973,11 @@ def wcorr(a, b, weights):
         has fewer than 3 non-zero kernel weights (their correlations are
         undefined and set to 0); other timepoints whose effective sample size
         ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
-        estimate correlations reliably there); and timepoints with zero
-        kernel-weighted variance in every feature (their correlations are set
+        estimate correlations reliably there);
+        timepoints where, because of NaN samples, some pairs of features
+        have fewer than 3 observed samples with non-zero kernel weight
+        (those correlations are undefined and set to 0); and timepoints
+        with zero kernel-weighted variance in every feature (their correlations are set
         to 0).  Never for a delta kernel.
 
     Raises
@@ -975,8 +1006,10 @@ def wcorr(a, b, weights):
 def _wcorr(a, b, weights, warn=True, return_cancelled=False):
     """
     ``wcorr``.  With ``warn=False`` the warning is left to the caller; with
-    ``return_cancelled=True`` the mask of timepoints whose correlations all
-    cancelled (see ``_wcorr_blocks``) is returned too.
+    ``return_cancelled=True`` the masks ``(cancelled, sparse)`` of the
+    timepoints whose correlations all cancelled and of those where some pair
+    has fewer than 3 observed samples (see ``_wcorr_blocks``) are returned too:
+    ``(out, (cancelled, sparse))``.
     """
     a = np.asarray(a, dtype=np.float64)
     b = np.asarray(b, dtype=np.float64)
@@ -999,7 +1032,8 @@ def _wcorr(a, b, weights, warn=True, return_cancelled=False):
         )
     if np.all(support == 1):
         out = _delta_wcorr(a, b, weights)
-        return (out, np.zeros(weights.shape[0], dtype=bool)) if return_cancelled else out
+        none = np.zeros(weights.shape[0], dtype=bool)
+        return (out, (none, none.copy())) if return_cancelled else out
 
     kernel = weights.copy() if warn else None
     weights[support < 3] = 0
@@ -1007,12 +1041,12 @@ def _wcorr(a, b, weights, warn=True, return_cancelled=False):
     autocorrelation = a is b or (
         a.shape == b.shape and np.array_equal(a, b, equal_nan=True)
     )
-    out, cancelled = _wcorr_blocks(a, b, weights, autocorrelation)
+    out, cancelled, sparse = _wcorr_blocks(a, b, weights, autocorrelation)
     if warn:
-        message = _estimator_message(kernel, cancelled)
+        message = _estimator_message(kernel, cancelled, sparse)
         if message is not None:
             _warn_user(message)
-    return (out, cancelled) if return_cancelled else out
+    return (out, (cancelled, sparse)) if return_cancelled else out
 
 
 def _nan_weighted_mean(x, weights, tol=1e-5):
@@ -1140,8 +1174,11 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         has fewer than 3 non-zero kernel weights (their correlations are
         undefined and set to 0); other timepoints whose effective sample size
         ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
-        estimate correlations reliably there); and timepoints with zero
-        kernel-weighted variance in every feature (their correlations are set
+        estimate correlations reliably there);
+        timepoints where, because of NaN samples, some pairs of features
+        have fewer than 3 observed samples with non-zero kernel weight
+        (those correlations are undefined and set to 0); and timepoints
+        with zero kernel-weighted variance in every feature (their correlations are set
         to 0).  Never for a delta kernel.  With several different kernels,
         the one warning names, for each kernel with a problem, the subjects
         that use it.
@@ -1217,11 +1254,13 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     stacked = np.stack(data, axis=2)
     corrs = []
     cancelled = [False] * len(kernels)
+    sparse = [False] * len(kernels)
     for s, a in enumerate(data):
         g = group_of[s]
         b = _nan_weighted_mean(stacked, subject_weights[s, :])
-        wc, c = _wcorr(a, b, kernels[g], warn=False, return_cancelled=True)
+        wc, (c, few) = _wcorr(a, b, kernels[g], warn=False, return_cancelled=True)
         cancelled[g] = cancelled[g] | c
+        sparse[g] = sparse[g] | few
         if not np.array_equal(a, b, equal_nan=True):
             wc = _fisher_symmetrize(wc)
         corrs.append(mat2vec(wc))
@@ -1229,7 +1268,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         del wc
 
     # one warning per call, covering every kernel
-    message = _kernels_message(kernels, group_of, cancelled)
+    message = _kernels_message(kernels, group_of, cancelled, sparse)
     if message is not None:
         _warn_user(message)
     return corrs
@@ -1267,17 +1306,20 @@ def _subject_kernels(timepoint_weights, S):
     return kernels, group_of
 
 
-def _kernels_message(kernels, group_of, cancelled):
+def _kernels_message(kernels, group_of, cancelled, sparse=None):
     """
     The one warning of a correlation call with one or several kernels, or None.
     With one kernel it is ``_estimator_message``; with several, each kernel's
-    message is prefixed by the subjects that use it.
+    message is prefixed by the subjects that use it.  ``cancelled`` and ``sparse``
+    hold one mask (see ``_wcorr_blocks``) per kernel.
     """
+    if sparse is None:
+        sparse = [None] * len(kernels)
     if len(kernels) == 1:
-        return _estimator_message(kernels[0], cancelled[0])
+        return _estimator_message(kernels[0], cancelled[0], sparse[0])
     parts = []
     for g, kernel in enumerate(kernels):
-        message = _estimator_message(kernel, cancelled[g])
+        message = _estimator_message(kernel, cancelled[g], sparse[g])
         if message is not None:
             subjects = [s for s, k in enumerate(group_of) if k == g]
             label = "Subject" if len(subjects) == 1 else "Subjects"
@@ -1328,8 +1370,11 @@ def isfc(data, timepoint_weights):
         has fewer than 3 non-zero kernel weights (their correlations are
         undefined and set to 0); other timepoints whose effective sample size
         ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
-        estimate correlations reliably there); and timepoints with zero
-        kernel-weighted variance in every feature (their correlations are set
+        estimate correlations reliably there);
+        timepoints where, because of NaN samples, some pairs of features
+        have fewer than 3 observed samples with non-zero kernel weight
+        (those correlations are undefined and set to 0); and timepoints
+        with zero kernel-weighted variance in every feature (their correlations are set
         to 0).  Never for a delta kernel.  With several different kernels,
         the one warning names, for each kernel with a problem, the subjects
         that use it.
@@ -1404,8 +1449,11 @@ def autofc(data, timepoint_weights):
         has fewer than 3 non-zero kernel weights (their correlations are
         undefined and set to 0); other timepoints whose effective sample size
         ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
-        estimate correlations reliably there); and timepoints with zero
-        kernel-weighted variance in every feature (their correlations are set
+        estimate correlations reliably there);
+        timepoints where, because of NaN samples, some pairs of features
+        have fewer than 3 observed samples with non-zero kernel weight
+        (those correlations are undefined and set to 0); and timepoints
+        with zero kernel-weighted variance in every feature (their correlations are set
         to 0).  Never for a delta kernel.  With several different kernels,
         the one warning names, for each kernel with a problem, the subjects
         that use it.

@@ -385,8 +385,11 @@ def two_path_step(
         timepoints of a backward kernel; their correlations are undefined and
         set to 0); other timepoints whose effective sample size
         ``(sum |w|)**2 / sum w**2`` is below 2 (the kernel is too narrow to
-        estimate correlations reliably there); and timepoints with zero
-        kernel-weighted variance in every feature (their correlations are set
+        estimate correlations reliably there);
+        timepoints where, because of NaN samples, some pairs of features
+        have fewer than 3 observed samples with non-zero kernel weight
+        (those correlations are undefined and set to 0); and timepoints
+        with zero kernel-weighted variance in every feature (their correlations are set
         to 0).  Never for the delta path.
 
     Raises
@@ -568,8 +571,11 @@ def features(
         kernel row has fewer than 3 non-zero kernel weights (their
         correlations are undefined and set to 0); other timepoints whose
         effective sample size ``(sum |w|)**2 / sum w**2`` is below 2 (the
-        kernel is too narrow to estimate correlations reliably there); and
-        timepoints with zero kernel-weighted variance in every feature (their
+        kernel is too narrow to estimate correlations reliably there);
+        timepoints where, because of NaN samples, some pairs of features
+        have fewer than 3 observed samples with non-zero kernel weight
+        (those correlations are undefined and set to 0); and timepoints
+        with zero kernel-weighted variance in every feature (their
         correlations are set to 0).  Never for the delta path.
     UserWarning
         Once per call, when NaN co-fluctuations are set to 0 before a

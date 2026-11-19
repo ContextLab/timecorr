@@ -336,6 +336,98 @@ def test_row_with_exactly_two_weights_is_undefined():
     assert np.all(np.diag(out[:, :, 11]) == 1.0)
 
 
+def _nan_reduced_support_case():
+    """T = 30, K = 3; kernel row 5 has exactly 3 non-zero weights, at timepoints
+    {4, 5, 6} (the other rows are a wide Gaussian), and feature 0 is NaN at
+    timepoint 5."""
+    rng = _rng(32)
+    T = 30
+    x = rng.randn(T, 3)
+    w = gaussian_weights(T, {"var": 10})
+    w[5, :] = 0
+    w[5, [4, 5, 6]] = 1.0
+    xn = x.copy()
+    xn[5, 0] = np.nan
+    return x, xn, w
+
+
+def test_nan_reduced_support_is_undefined():
+    # resolution 5: a row with 3 kernel weights, one of whose samples is NaN, leaves
+    # 2 observed samples for the pairs with feature 0; two samples always give
+    # r = +-1, so those correlations are undefined (0) and the call warns
+    x, xn, w = _nan_reduced_support_case()
+    T = x.shape[0]
+    with pytest.warns(UserWarning) as rec:
+        out = wcorr(xn, xn, w)
+    messages = [str(r.message) for r in rec if issubclass(r.category, UserWarning)]
+    assert len(messages) == 1
+    assert f"1 of {T} timepoints" in messages[0] and "fewer than 3" in messages[0]
+    assert np.all(out[0, :, 5] == 0) and np.all(out[:, 0, 5] == 0)
+    # the pair without feature 0 is unaffected
+    ref = _weighted_pearson(x[:, 1:], x[:, 1:], w[5])
+    assert np.isclose(out[1, 2, 5], ref[0, 1], atol=1e-10, rtol=0)
+    assert np.isclose(out[2, 1, 5], ref[0, 1], atol=1e-10, rtol=0)
+    assert out[1, 1, 5] == 1.0 and out[2, 2, 5] == 1.0
+    # the other rows keep their support: feature 0 is defined there
+    for t in (4, 6, 20):
+        ok = ~np.isnan(xn[:, 0])
+        ref = _weighted_pearson(x[ok][:, :2], x[ok][:, :2], w[t, ok])
+        assert np.isclose(out[0, 1, t], ref[0, 1], atol=1e-10, rtol=0)
+        assert out[0, 0, t] == 1.0
+
+
+def test_nan_reduced_support_cross_correlation():
+    # the same rule when a and b differ (the cross-subject path): only pairs with
+    # feature 0 of a lose their support
+    x, xn, w = _nan_reduced_support_case()
+    b = x[:, ::-1] + 0.5 * _rng(33).randn(*x.shape)
+    with pytest.warns(UserWarning, match="fewer than 3") as rec:
+        out = wcorr(xn, b, w)
+    assert len([r for r in rec if issubclass(r.category, UserWarning)]) == 1
+    assert np.all(out[0, :, 5] == 0)
+    ref = _weighted_pearson(x[:, 1:], b, w[5])
+    assert np.allclose(out[1:, :, 5], ref, atol=1e-10, rtol=0)
+
+
+def test_nan_support_count_changes_only_undefined_pairs():
+    # bit for bit: the rows that keep 3 observed samples per pair equal the same
+    # call with a kernel that gives row 5 full support, and the pair without
+    # feature 0 at row 5 equals the call on the features without NaN samples
+    # (empty NaN mask, so the estimator's no-NaN path)
+    x, xn, w = _nan_reduced_support_case()
+    T = x.shape[0]
+    with pytest.warns(UserWarning, match="fewer than 3"):
+        out = wcorr(xn, xn, w)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        wide = wcorr(xn, xn, gaussian_weights(T, {"var": 10}))
+        observed = wcorr(xn[:, 1:], xn[:, 1:], w)
+    rows = [t for t in range(T) if t != 5]
+    assert np.array_equal(out[:, :, rows], wide[:, :, rows])
+    assert np.array_equal(out[1:, 1:, 5], observed[:, :, 5])
+
+
+@pytest.mark.parametrize("cfun", [isfc, wisfc, autofc])
+def test_nan_reduced_support_in_correlation_functions(cfun):
+    # one warning per call, counted through the multi-subject path; the subject
+    # whose feature 0 is NaN at timepoint 5 gets 0 for the pairs with feature 0
+    x, xn, w = _nan_reduced_support_case()
+    rng = _rng(34)
+    data = [xn] + [x + 0.3 * rng.randn(*x.shape) for _ in range(2)]
+    with pytest.warns(UserWarning, match="fewer than 3 observed") as rec:
+        out = cfun(data, w)
+    assert len([r for r in rec if issubclass(r.category, UserWarning)]) == 1
+    m = vec2mat(out[0])
+    if cfun is autofc:
+        assert np.all(m[0, :, 5] == 0)
+    else:
+        # the cross-correlation C[0, j] is undefined (0) but C[j, 0] (the subject's
+        # feature j with the reference's feature 0) is not, and the Fisher-z
+        # symmetrization averages the two, as for a feature constant in one of them
+        assert m[0, 0, 5] == 0
+    assert np.all(np.isfinite(np.asarray(out)))
+
+
 def test_nan_kernel_weights_are_zero():
     rng = _rng(15)
     x = rng.randn(20, 3)

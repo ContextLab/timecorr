@@ -200,9 +200,10 @@ FEATURE_ENTRIES = {
 
 @pytest.mark.parametrize("name", list(FEATURE_ENTRIES))
 def test_features_entry_reaches_segmentation(name):
-    # Review focus 4; the NotImplementedError branch is replaced when segmentation exists.
-    with pytest.raises(NotImplementedError, match="segmentation is added in a later task"):
-        resolve_events(FEATURE_ENTRIES[name], T, 2)
+    # Review focus 4: a features entry is segmented with tc.segment.
+    out = resolve_events(FEATURE_ENTRIES[name], T, 2)
+    assert isinstance(out, np.ndarray) and out.dtype == np.int64 and out[0] == 0
+    np.testing.assert_array_equal(out, tc.segment(FEATURE_ENTRIES[name]))
 
 
 @pytest.mark.parametrize("name", list(FEATURE_ENTRIES))
@@ -213,8 +214,9 @@ def test_features_entry_wrong_rows(name):
 
 
 def test_features_in_per_subject_list_reach_segmentation():
-    with pytest.raises(NotImplementedError):
-        resolve_events([FEATURES, [3]], T, 2)
+    out = resolve_events([FEATURES, [3]], T, 2)
+    np.testing.assert_array_equal(out[0], tc.segment(FEATURES))
+    np.testing.assert_array_equal(out[1], [0, 3])
 
 
 def test_features_wrong_rows_message_names_both_lengths():
@@ -229,15 +231,16 @@ def test_events_params_unknown_key():
 
 
 def test_events_params_validated_before_segmentation():
-    # Unknown key is a ValueError, not the later-task NotImplementedError.
+    # Unknown key is a ValueError raised before any segmentation.
     with pytest.raises(ValueError):
         resolve_events(FEATURES, T, 2, events_params={"nn": 3})
 
 
 def test_events_params_allowed_keys_reach_segmentation():
     params = {"n": 3, "kind": "ordered", "max_events": 5, "random_state": 0}
-    with pytest.raises(NotImplementedError):
-        resolve_events(FEATURES, T, 2, events_params=params)
+    out = resolve_events(FEATURES, T, 2, events_params=params)
+    np.testing.assert_array_equal(out, tc.segment(FEATURES, **params))
+    assert len(out) == 3
 
 
 def test_events_params_without_features():
@@ -301,23 +304,28 @@ def test_by_order_validates_order():
 
 
 def test_by_order_features_reach_segmentation():
-    with pytest.raises(NotImplementedError):
-        resolve_events_by_order({2: FEATURES}, T, 2, 2)
-    with pytest.raises(NotImplementedError):
-        resolve_events_by_order(FEATURES, T, 2, 2)
+    expected = tc.segment(FEATURES)
+    out = resolve_events_by_order({2: FEATURES}, T, 2, 2)
+    assert out[1] is None
+    np.testing.assert_array_equal(out[2], expected)
+    out = resolve_events_by_order(FEATURES, T, 2, 2)
+    np.testing.assert_array_equal(out[1], expected)
+    np.testing.assert_array_equal(out[2], expected)
 
 
 def test_by_order_flat_params_need_features_somewhere():
     with pytest.raises(ValueError, match="features"):
         resolve_events_by_order({1: [3]}, T, 1, 2, events_params={"n": 2})
     # features at one order, boundaries at another: flat params are valid
-    with pytest.raises(NotImplementedError):
-        resolve_events_by_order({1: [3], 2: FEATURES}, T, 1, 2, events_params={"n": 2})
+    out = resolve_events_by_order({1: [3], 2: FEATURES}, T, 1, 2, events_params={"n": 2})
+    np.testing.assert_array_equal(out[1], [0, 3])
+    np.testing.assert_array_equal(out[2], tc.segment(FEATURES, n=2))
 
 
 def test_by_order_params_keyed_by_order():
-    with pytest.raises(NotImplementedError):
-        resolve_events_by_order({1: [3], 2: FEATURES}, T, 1, 2, events_params={2: {"n": 2}})
+    out = resolve_events_by_order({1: [3], 2: FEATURES}, T, 1, 2, events_params={2: {"n": 2}})
+    np.testing.assert_array_equal(out[1], [0, 3])
+    np.testing.assert_array_equal(out[2], tc.segment(FEATURES, n=2))
     # keyed by an order that holds no features
     with pytest.raises(ValueError, match="features"):
         resolve_events_by_order({1: [3], 2: FEATURES}, T, 1, 2, events_params={1: {"n": 2}})

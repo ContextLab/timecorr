@@ -32,9 +32,11 @@ setup(
         "matplotlib",
     ],
     extras_require={
+        "segment": ["hmmlearn"],
         "test": [
             "pytest",
             "polars",
+            "hmmlearn",
         ],
         "docs": [
             "sphinx>=4.0.0",
@@ -45,6 +47,7 @@ setup(
             "seaborn>=0.8.1",
             "ipykernel",
             "nbconvert",
+            "hmmlearn",
         ],
     },
     packages=find_packages(exclude=("tests", "docs")),

@@ -77,6 +77,25 @@ The building blocks are in ``timecorr.higher_order``:
 
 .. currentmodule:: timecorr
 
+Events
+------
+
+.. autosummary::
+   :toctree: generated/
+   :nosignatures:
+
+   segment
+
+``segment`` divides a timepoints-by-features timeseries into events with a
+hidden Markov model (``hmmlearn``, installed on demand) and returns the block
+starts, which ``timecorr`` accepts as ``events`` to confine its kernel to
+blocks.
+
+.. code-block:: python
+
+   boundaries = tc.segment(embedding, n=6)                 # e.g. array([0, 48, ...])
+   corrs = tc.timecorr(data, events=boundaries)
+
 Kernels
 -------
 

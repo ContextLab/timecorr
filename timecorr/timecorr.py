@@ -191,9 +191,11 @@ def timecorr(
         ``t`` and ``u`` lie in different blocks, after ``include_timepoints``,
         ``include_zero`` and ``exclude_timepoints`` are applied (the estimator
         normalizes each row, so no renormalization is needed).  The smoothing
-        path (``cfun=None``) uses the same restricted kernel.  2-D arrays and
-        DataFrames (features to segment into events) raise
-        ``NotImplementedError`` in this version.  See
+        path (``cfun=None``) uses the same restricted kernel.  A 2-D array or a
+        DataFrame with T rows (shared, or as a per-subject entry) holds features
+        that are segmented into events with ``segment`` (with
+        ``events_params``) before any correlations are computed; the same
+        features object is segmented once.  See
         ``timecorr.events.resolve_events`` for the full grammar.  Default:
         None (no restriction).
     events_params : dict or None
@@ -243,9 +245,10 @@ def timecorr(
         malformed ``events`` specification; when ``events`` leave every kernel
         row with fewer than 3 non-zero weights (no block is long enough to
         estimate a correlation); and, with per-subject events, when a custom
-        ``cfun`` does not return a list with one array per subject.
-    NotImplementedError
-        If an entry of ``events`` holds features to segment.
+        ``cfun`` does not return a list with one array per subject; and as
+        raised by ``segment`` for features entries of ``events``.
+    RuntimeError, ImportError
+        As raised by ``segment`` for features entries of ``events``.
 
     Notes
     -----

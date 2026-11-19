@@ -36,6 +36,7 @@ from .helpers import (
     weighted_timepoint_decoder,
     wisfc,
 )
+from .events import segment
 from .higher_order import features
 from .simulate import (
     carrier_columns,

@@ -832,22 +832,99 @@ def test_nested_global_signal_adds_across_module_correlation():
 @pytest.mark.parametrize(
     "kwargs, match",
     [
-        ({"coupling": "bogus"}, "coupling"),
-        ({"shared": "bogus"}, "shared"),
-        ({"S": 0}, "S"),
-        ({"T": 0}, "T"),
-        ({"n_supergroups": 0}, "n_supergroups"),
-        ({"modules_per_supergroup": -1}, "modules_per_supergroup"),
-        ({"nodes_per_module": 0}, "nodes_per_module"),
-        ({"tau2": 0}, "tau2"),
-        ({"flip": 0}, "flip"),
-        ({"duty": 0.0}, "duty"),
-        ({"duty": 1.0}, "duty"),
-        ({"T": 39, "tau2": 5}, "T"),
-        ({"T": 100, "tau3": 20}, "T"),
-        ({"global_signal": "x"}, "global_signal"),
+        ({"coupling": "bogus"}, "coupling must be 'sustained', 'transient' or 'signflip'"),
+        ({"shared": "bogus"}, "shared must be 'order2' or 'order1'"),
+        ({"S": 0}, "S must be a positive integer"),
+        ({"T": 0}, "T must be a positive integer"),
+        ({"n_supergroups": 0}, "n_supergroups must be a positive integer"),
+        ({"modules_per_supergroup": -1}, "modules_per_supergroup must be a positive integer"),
+        ({"nodes_per_module": 0}, "nodes_per_module must be a positive integer"),
+        ({"tau2": 0}, "tau2 must be a positive integer"),
+        ({"flip": 0}, "flip must be a positive integer"),
+        ({"duty": 0.0}, "duty must be in the open interval"),
+        ({"duty": 1.0}, "duty must be in the open interval"),
+        ({"T": 39, "tau2": 5}, r"T must be at least 8 \* max\(tau2, tau3\) = 40"),
+        ({"T": 100, "tau3": 20}, r"T must be at least 8 \* max\(tau2, tau3\) = 160"),
+        ({"global_signal": "x"}, "global_signal must be a number"),
     ],
 )
 def test_nested_errors(kwargs, match):
     with pytest.raises(ValueError, match=match):
         tc.simulate_nested(**{"set_random_seed": 0, **kwargs})
+
+
+def _pair_corr(g, supergroup_of_module, rows):
+    """Mean over supergroups and within-supergroup module pairs of corr(g_m, g_m')
+    over the timepoints in ``rows`` (a boolean (T, n_supergroups) mask)."""
+    out = []
+    for s in range(rows.shape[1]):
+        mods = np.where(supergroup_of_module == s)[0]
+        for a, b in itertools.combinations(mods, 2):
+            out.append(np.corrcoef(g[rows[:, s], a], g[rows[:, s], b])[0, 1])
+    return np.mean(out)
+
+
+def test_nested_order2_coupling_between_modules_follows_h():
+    # T=6000, seeds 0-2, measured: top-third mean pair corr 0.85-0.87, bottom
+    # third 0.08-0.11; mean |corr| of g across supergroups 0.036-0.041.
+    data, truth = tc.simulate_nested(S=1, T=6000, set_random_seed=0)
+    g, h = truth["g"][0], truth["h"]
+    sg = np.arange(g.shape[1]) // 3
+    lo, hi = np.quantile(h, [1 / 3, 2 / 3], axis=0)
+    top = _pair_corr(g, sg, h >= hi)
+    bottom = _pair_corr(g, sg, h <= lo)
+    assert top > 0.6
+    assert bottom < 0.3
+    assert top - bottom > 0.4
+    c = np.corrcoef(g.T)
+    assert np.abs(c[sg[:, None] != sg[None, :]]).mean() < 0.08
+
+
+def test_nested_shared_order2_g_is_private_though_h_is_shared():
+    # measured mean |corr| of g between subjects, per module: 0.029-0.037
+    _, truth = tc.simulate_nested(S=2, T=6000, shared="order2", set_random_seed=0)
+    c = [abs(np.corrcoef(truth["g"][0][:, m], truth["g"][1][:, m])[0, 1]) for m in range(18)]
+    assert np.mean(c) < 0.08
+    _, truth = tc.simulate_nested(S=2, T=300, shared="order1", set_random_seed=0)
+    np.testing.assert_array_equal(truth["g"][0], truth["g"][1])
+
+
+def _windowed_module_corr(x, module, width):
+    same = module[:, None] == module[None, :]
+    off = ~np.eye(len(module), dtype=bool)
+    w = []
+    for i in range(0, len(x) - width + 1, width):
+        c = np.abs(np.corrcoef(x[i : i + width].T))
+        w.append((c[same & off].mean(), c[~same].mean()))
+    return np.mean(w, axis=0)
+
+
+def test_nested_signflip_structure_is_local_in_time():
+    # T=4000, 20-sample windows, measured (within, across): signflip
+    # (0.46, 0.19), sustained (0.51, 0.19); the across value is the noise floor
+    # of a 20-sample correlation.
+    data, truth = tc.simulate_nested(S=1, T=4000, coupling="signflip", flip=40, set_random_seed=0)
+    within, across = _windowed_module_corr(data[0], truth["module"], 20)
+    assert within > across + 0.15
+    assert within > 0.3
+
+
+def test_nested_signflip_with_flip_beyond_T_is_sustained():
+    # measured whole-recording within-module mean |corr|: 0.495-0.505
+    data, truth = tc.simulate_nested(
+        S=1, T=4000, coupling="signflip", flip=10**6, set_random_seed=0
+    )
+    within, across = _mean_abs_corr(data[0], truth["module"])
+    assert within > 0.2
+    assert across < 0.05
+
+
+@pytest.mark.parametrize("duty", [0.1, 0.3])
+def test_nested_transient_fraction_on_matches_duty(duty):
+    # T=6000, 2 subjects, 3 seeds, measured fraction of g > 0.5: 0.098-0.100
+    # (duty 0.1) and 0.299-0.303 (duty 0.3); tolerance 0.03.
+    _, truth = tc.simulate_nested(
+        S=2, T=6000, coupling="transient", duty=duty, set_random_seed=0
+    )
+    frac = np.mean([(g > 0.5).mean() for g in truth["g"]])
+    assert abs(frac - duty) < 0.03

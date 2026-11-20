@@ -25,6 +25,7 @@ from fractions import Fraction
 import numpy as np
 from sklearn.cluster import KMeans
 
+from ._kernels import LagKernel
 from .helpers import (
     _WCORR_NAN_PRODUCTS,
     _corr_row_blocks,
@@ -1065,7 +1066,10 @@ class _Units:
         S = len(self.subjects)
         if grouping is None:
             self.kernels, self.group_of = _subject_kernels(kernels, S)
-            self.kernels = [np.asarray(k, dtype=np.float64) for k in self.kernels]
+            self.kernels = [
+                k if isinstance(k, LagKernel) else np.asarray(k, dtype=np.float64)
+                for k in self.kernels
+            ]
         else:
             # (kernels, group_of) of another _Units with the same subjects' kernels
             self.kernels, self.group_of = grouping

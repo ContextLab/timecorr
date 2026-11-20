@@ -53,6 +53,7 @@ from .helpers import (
     _check_ndims,
     _check_rfun,
     _is_model,
+    _lag_kernel,
     _wcorr_block_rows,
     _warn_user,
     autofc,
@@ -827,7 +828,7 @@ def _delta_path(
         summary._check_fit(d, 0.0)
         null_threshold = _shift_null_threshold(
             subjects,
-            eye_weights(T),
+            _lag_kernel(T, eye_weights, None),
             n_null=summary.n_null,
             bandwidth=_DEFAULT_BANDWIDTH,
             max_block_elements=_streamed_block_elements(

@@ -4,8 +4,12 @@ import warnings
 
 import numpy as np
 
+from ._kernels import LagKernel
 from .events import distinct_event_sets, mask_kernel, resolve_events
 from .helpers import (
+    _TIME_CHUNK,
+    _as_kernel_array,
+    _lag_kernel,
     autofc,
     format_data,
     gaussian_weights,
@@ -27,11 +31,30 @@ def _kernel_smooth(x, weights):
     Row t of ``weights`` is the kernel used at timepoint t.  NaN samples get no
     weight.  Entries with no weighted, observed sample are undefined; they are
     set to 0 and one warning reports how many timepoints were affected.
+    ``weights`` is an array or a ``LagKernel`` (read a chunk of rows at a
+    time, over the columns where the chunk can have weight).
     """
-    w = np.abs(weights)
     valid = ~np.isnan(x)
-    num = w @ np.where(valid, x, 0.0)
-    den = w @ valid.astype(np.float64)
+    observed = np.where(valid, x, 0.0)
+    valid = valid.astype(np.float64)
+    if isinstance(weights, LagKernel):
+        num = np.zeros(observed.shape)
+        den = np.zeros(observed.shape)
+        seen = {}
+        for t0, t1, c0, c1, key in weights.chunks(_TIME_CHUNK):
+            if c1 <= c0:
+                continue
+            w = seen.get(key)
+            if w is None:
+                w = np.abs(weights.block(t0, t1, c0, c1))
+                if key is not None:
+                    seen[key] = w
+            num[t0:t1] = w @ observed[c0:c1]
+            den[t0:t1] = w @ valid[c0:c1]
+    else:
+        w = np.abs(weights)
+        num = w @ observed
+        den = w @ valid
     out = np.zeros_like(num)
     np.divide(num, den, out=out, where=den > 0)
     undefined = np.any(den <= 0, axis=1)
@@ -85,24 +108,32 @@ def _shaped_kernel(
     """
     The T x T kernel of ``timecorr`` before the events restriction:
     ``weights_function(T, weights_params)`` shaped by ``include_timepoints``,
-    ``include_zero`` and ``exclude_timepoints``.
+    ``include_zero`` and ``exclude_timepoints``.  For a built-in kernel
+    function it is a ``LagKernel``, whose rows are computed when they are
+    read (no T x T array); for any other function, the array it returns.
     """
-    weights = weights_function(T, weights_params)
-
     include_timepoints = include_timepoints.lower()
+    sides = {"all": "all", "backward": "backward", "pre": "backward",
+             "forward": "forward", "post": "forward"}
+    if include_timepoints not in sides:
+        raise ValueError(
+            f"Invalid option for include_timepoints: '{include_timepoints}'.  "
+            "Must be one of: 'all', 'backward', 'pre', 'forward', or 'post'."
+        )
+    lazy = _lag_kernel(T, weights_function, weights_params, sides[include_timepoints],
+                       include_zero, exclude_timepoints)
+    if lazy is not None:
+        return lazy
+
+    weights = weights_function(T, weights_params)
     if include_timepoints == "all":
         if not include_zero:
             weights = weights.copy()
             np.fill_diagonal(weights, 0)
     elif include_timepoints in ("backward", "pre"):
         weights = one_sided(weights, "backward", include_zero)
-    elif include_timepoints in ("forward", "post"):
-        weights = one_sided(weights, "forward", include_zero)
     else:
-        raise ValueError(
-            f"Invalid option for include_timepoints: '{include_timepoints}'.  "
-            "Must be one of: 'all', 'backward', 'pre', 'forward', or 'post'."
-        )
+        weights = one_sided(weights, "forward", include_zero)
 
     if not (exclude_timepoints is None):
         weights = np.multiply(_temporal_filter(T, exclude_timepoints), weights)
@@ -403,6 +434,16 @@ def timecorr(
     per_subject = isinstance(kernels, list)
 
     if cfun:
+        if cfun not in _KERNEL_LIST_CFUNS:
+            # a correlation function of the user's receives T x T arrays
+            if per_subject:
+                arrays = {}
+                for k in kernels:  # subjects that share events share one array
+                    if id(k) not in arrays:
+                        arrays[id(k)] = _as_kernel_array(k)
+                kernels = [arrays[id(k)] for k in kernels]
+            else:
+                kernels = _as_kernel_array(kernels)
         if not per_subject or cfun in _KERNEL_LIST_CFUNS:
             corrs = cfun(data, kernels)
         else:

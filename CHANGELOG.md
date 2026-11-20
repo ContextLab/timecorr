@@ -118,6 +118,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Nunito Sans, lowercase light headings, green brand colors) in place of
   `sphinx-book-theme`; the `docs` extra installs `furo`.
 
+- **Tutorials are the gallery.** `docs/tutorials.rst` shows the notebooks
+  as a gallery of cards (nbsphinx `nbgallery`); each card shows a figure of
+  its notebook (the cell tagged `nbsphinx-thumbnail`) and opens it. The
+  tutorials were rewritten with shorter text: `timecorr_notebook` became
+  `subjects`, `synthetic_data_tutorial` became `kernels`,
+  `higher_order_tutorial` became `higher_order` and `event_kernels_tutorial`
+  became `events`.
+- **Documentation extras.** The `docs` extra holds only what the Sphinx build
+  needs (sphinx, furo, numpydoc, nbsphinx, ipython); the notebooks are
+  rendered from their saved outputs. `.readthedocs.yaml` installs the
+  package with the `docs` extra, installs pandoc, and fails on warnings.
+
 ### Added
 
 - Tutorial `docs/tutorial/htfa_network_animations.ipynb`: features of
@@ -126,9 +138,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Chang & Manning (2021), downloaded from the data archive of the paper's
   repository; which nodes each order's features belong to; and one
   animation per order on the brain, drawn with the htfa toolbox (1920 x
-  1080 H.264 videos at 30 frames per second, with linearly interpolated
-  frames between timepoints, in `docs/_static/tutorial_media/`). The `docs`
-  extra now includes `htfa[plot,brain3d]>=0.1.0`.
+  1080 H.264 videos at 30 frames per second, one frame per timepoint
+  (300 frames, 10 s), with edges at every order (order-k correlations
+  between order-(k-1) features), in `docs/_static/tutorial_media/`).
+- Tutorials `quickstart` (one dataset, several subjects, higher orders),
+  `kernels`, `subjects`, `reduce`, `simulate` and `decoding` in
+  `docs/tutorial/`. Every public name of the package is used (as
+  `tc.<name>`, imported or called) in a code cell of at least one tutorial;
+  `tests/test_docs_tutorials.py` checks this, that the gallery and the
+  notebooks match, and that each notebook has one thumbnail cell with an
+  image, a Colab badge naming its own file and no error outputs.
+- Tutorial `docs/tutorial/stocks.ipynb`: 20 years (2005-2024) of daily
+  returns of the 49 US industry portfolios of the Kenneth R. French Data
+  Library (downloaded at run time): correlations between industries and
+  around market crises, `tc.features` at orders 1 to 3, and a video of the
+  market as a network (`docs/_static/tutorial_media/stocks_network.mp4`).
+- Tutorial `docs/tutorial/trajectories.ipynb`: features of orders 1 to 4
+  of three real datasets (story-listening brain data, the stock market,
+  human movement from the CMU Motion Capture Database), reduced to three
+  dimensions and animated as trajectories with hypertools (three videos in
+  `docs/_static/tutorial_media/`).
+- `tutorials` extra (`htfa[plot,brain3d]>=0.1.0`, `hypertools>=1.1`,
+  `pyvista>=0.43`, imageio-ffmpeg, pillow, joblib, ipython): what the
+  real-data notebooks (`htfa_network_animations`, `stocks`,
+  `trajectories`) import beyond the runtime dependencies. In Google Colab,
+  their first code cell installs `timecorr[tutorials]`; the other notebooks
+  install `timecorr` (with `polars` for `subjects`, and
+  `timecorr[segment]` for `events`).
+
+### Removed
+
+- The sphinx-gallery example gallery (`examples/`, `docs/auto_examples/`)
+  and the `sphinx-gallery` dependency. What the examples showed is in the
+  tutorials. The simulated-domains tutorial (`applications_tutorial.ipynb`)
+  is removed.
 
 ## [0.3.0] - 2026-11-17
 
@@ -156,7 +199,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   most half the step's input features; one when no eigenvalue exceeds the
   shift null), the step emits `WeightedStrength(split=False, signed=False,
   center=False)` of the same correlations instead (one column per input
-  feature, from the same pair weights, used uncentered: no median
+  feature, from the same pair weights, used uncentered: no centering or
   clipping), so the feeding width never drops below 4 and, for example, 4 to 7
   input features complete at `order=3`. This also changes calls that
   completed before the fallback was added (earlier in the development of
@@ -184,9 +227,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subject's features with the other subjects' (structure shared across
   subjects) and `cfun=autofc` computes within-subject correlations, with
   measured recovery of `h` on `simulate_nested` data (12 seeds, 108 nodes,
-  T 1000): from `X[2]`, -.035 +- .029 with `isfc` and .559 +- .022 with
+  T 1000): from `X[2]`, -.031 +- .033 with `isfc` and .552 +- .023 with
   `autofc` when the order-1 couplings are drawn per subject
-  (`shared="order2"`), .638 +- .028 and .702 +- .012 when they are shared
+  (`shared="order2"`), .652 +- .026 and .700 +- .012 when they are shared
   (`shared="order1"`); from `D[2]`, .199 +- .021 and .293 +- .027.
   `delta_weights_params` without `delta_weights_function` sets the
   parameters of the Gaussian feeding kernel. The decoders are unchanged
@@ -455,10 +498,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Squared-correlation summaries (`timecorr.summaries`, exported from
   `timecorr`): `tc.WeightedStrength(split=False, signed=False, n=None,
   n_null=5, center=True)` (weighted sums of each node's squared
-  correlations, with pair weights `mean_t r_ij**2` centered on their median
-  and clipped at 0 for K >= 4 nodes, or used as they are with
-  `center=False`; with centering, coupling equal for every pair gives zero
-  magnitude columns; `signed=True` adds the correlations weighted by
+  correlations, with pair weights `mean_t r_ij**2` centered and clipped
+  at 0 for K >= 4 nodes, or used as they are with `center=False`;
+  with centering, coupling equal for every pair gives zero magnitude
+  columns; `signed=True` adds the correlations weighted by
   `mean_t r_ij`) and `tc.Communities(n=None, signed=False, n_null=5)`
   (mean squared correlation within each community of nodes,
   found by spectral k-means on the pair weights). Both are accepted as `rfun`
@@ -537,6 +580,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `signs="private"` output). `taus` and `branching` are lists, tuples or
   1-D numpy arrays of positive integers; other types (0-d arrays, sets,
   strings, ranges) raise `ValueError`.
+- Centering of the `WeightedStrength` pair weights (`center`, K >= 4
+  nodes): with `center=True` (the default, and the analysis reducer of
+  `features` at orders >= 2), the sorted pair weights are split into a
+  lower and an upper group with the least total within-group sum of
+  squares, and the lower group's mean is subtracted before clipping at 0;
+  `center="median"` subtracts the median instead; `center=False` uses
+  the weights as they are; other values raise `ValueError`.
+  `Communities` centers its matrix `C` on the median. Median centering
+  removes every weight of a smaller, more weakly coupled community when
+  more than half the pairs lie within one larger community. Measured on
+  16 held-out seeds (planted communities of 18 and 6 nodes, coupling 0.5
+  and 0.25 varying over time, 2 subjects, T 1000): the small community's
+  columns tracked its coupling at .425 +- .021 with the default (median
+  centering: .000, all of its weights 0), with the large community
+  unchanged (.833 +- .007 versus .834 +- .007). On the six T 1000
+  order-2 recovery cases of `tests/test_nested_recovery.py` the decode
+  scores of the default were .002 to .006 below those of median
+  centering, each difference below the standard error of its score (.022
+  to .038). The `WeightedStrength` Notes give the full comparison.
+- Graph measure `rfun="pagerank_centrality_abs"` (in `reduce`, `timecorr`
+  and as `rfun` or `delta_rfun` in `features`): PageRank (damping 0.85,
+  uniform prior) on the absolute correlations `|r|`. It is defined for
+  every finite matrix, so it never falls back and never warns, unlike
+  `"pagerank_centrality"` on signed correlations. It equals
+  `"pagerank_centrality"` up to round-off when no weight is negative.
+  Timepoints with a
+  non-finite entry give NaNs.
+- Keyword `fit_index` of `WeightedStrength.transform` and
+  `Communities.transform`: names the fitted unit whose pair weights (and,
+  when signed, mean correlations) each unit uses. An int applies one fitted
+  unit to every unit (for example a held-out subject), a sequence gives one
+  fitted unit per unit (so a reordered list can keep each subject's own
+  fit), and `"mean"` applies the mean over the fitted units. A sequence
+  with the wrong number of entries, an index with no fitted unit, or any
+  other value raises `ValueError`. The default (None) matches units by
+  position when the counts are equal and uses the mean otherwise.
 - `tests/test_nested_recovery.py`: decoding of `h` from order-2 features
   across subjects on `simulate_nested` data, with controls from an
   independent `h`, the raw data and the order-1 features; recovery of the
@@ -552,6 +631,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Graph measures (`rfun` `"strength"`, `"eigenvector_centrality"`,
+  `"pagerank_centrality"`, `"pagerank_centrality_abs"`) with one feature
+  (K = 1) raised `TypeError` or `ValueError`: the 1 x 1 matrix of each
+  timepoint was squeezed to a scalar. They now return one column:
+  `"strength"` gives the matrix entry (1 for correlations) and the other
+  measures give 1.
 - `t_weights` used the exponent `-(df - 1) / 2` with the normalizing constant
   of Student's t density, so its rows were not a t density (with `df=1` every
   weight was equal). Each row is now Student's t density of the lag,
@@ -648,7 +733,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `WeightedStrength.transform` and `Communities.transform`: the docstrings
   and the API overview state that, when the new list has as many units as
   the fit, units are matched to the fitted units by position (unit u gets
-  the weights fitted to unit u, whether or not it is the same subject).
+  the weights fitted to unit u, whether or not it is the same subject);
+  `fit_index` chooses the fitted units explicitly.
 - Every user-facing name now has an API page, including the default kernel
   parameter dictionaries (`gaussian_params`, `laplace_params`, `eye_params`,
   `t_params`, `mexican_hat_params`, `uniform_params`, `boxcar_params`), which

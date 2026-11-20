@@ -269,7 +269,8 @@ def timecorr(
         ``helpers.reduce``): a hypertools / scikit-learn model name such as
         "PCA", "FastICA", "FactorAnalysis" or "IncrementalPCA"; a dict such as
         ``{"model": "PCA", "params": {"whiten": True}}``; a graph measure
-        ("eigenvector_centrality", "pagerank_centrality", "strength"); a
+        ("eigenvector_centrality", "pagerank_centrality",
+        "pagerank_centrality_abs", "strength"); a
         squared-correlation summary (``tc.WeightedStrength``,
         ``tc.Communities``, or the strings "weighted_strength",
         "weighted_strength_split", "communities"); or a callable

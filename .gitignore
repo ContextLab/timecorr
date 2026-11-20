@@ -110,9 +110,3 @@ ENV/
 
 *Untitled*
 
-# sphinx-gallery build byproducts (the .py, .ipynb, .rst and images are tracked)
-docs/auto_examples/*.zip
-docs/auto_examples/*.codeobj.json
-docs/auto_examples/*.cost.json
-docs/auto_examples/*.py.md5
-docs/sg_execution_times.rst

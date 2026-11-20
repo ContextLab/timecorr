@@ -124,7 +124,7 @@ communities found at a feeding step would emit fewer than 4 columns (at most
 half its input features; one when the shift null finds no structure), that step
 emits ``WeightedStrength(split=False, signed=False, center=False)`` of the same
 correlations instead (one column per input feature; uncentered pair weights,
-without median clipping), so the feeding width never
+without centering or clipping), so the feeding width never
 drops below 4; a ``UserWarning`` is issued only when the shift null found no
 structure, and ``return_info=True`` records every fallback. The fallback also
 changes calls that completed without it: on 4 independent noise features
@@ -148,10 +148,10 @@ standard error, control in parentheses):
 ========================  ==========  ==============================  ==============================
 data (``shared=``)        ``cfun``    ``X[2]`` score                  ``D[2]`` score
 ========================  ==========  ==============================  ==============================
-``"order2"`` (default)    ``isfc``    -.035 +- .029 (.055 +- .019)    .199 +- .021 (.013 +- .015)
-``"order2"``              ``autofc``  .559 +- .022 (-.008 +- .025)    .199 +- .021 (.013 +- .015)
-``"order1"``              ``isfc``    .638 +- .028 (.074 +- .009)     .293 +- .027 (.012 +- .014)
-``"order1"``              ``autofc``  .702 +- .012 (-.008 +- .025)    .293 +- .027 (.012 +- .014)
+``"order2"`` (default)    ``isfc``    -.031 +- .033 (.059 +- .020)    .199 +- .021 (.013 +- .015)
+``"order2"``              ``autofc``  .552 +- .023 (-.008 +- .025)    .199 +- .021 (.013 +- .015)
+``"order1"``              ``isfc``    .652 +- .026 (.078 +- .010)     .293 +- .027 (.012 +- .014)
+``"order1"``              ``autofc``  .700 +- .012 (-.008 +- .025)    .293 +- .027 (.012 +- .014)
 ========================  ==========  ==============================  ==============================
 
 Under ``shared="order2"`` the order-1 couplings are drawn per subject, and
@@ -184,7 +184,7 @@ the decoders the events are resolved once, on the full subject list, before the
 folds are formed; a per-subject entry stays with its subject in every fold; the
 boundaries are external information supplied by the caller, used as given in
 every fold and not estimated from held-out data; and segmentation does not
-advance NumPy's global random state. The :doc:`tutorial <tutorial/event_kernels_tutorial>`
+advance NumPy's global random state. The :doc:`tutorial <tutorial/events>`
 shows each form.
 
 .. code-block:: python
@@ -338,13 +338,18 @@ Dimensionality reduction and smoothing
 ``reduce`` accepts a hypertools / scikit-learn model name (for example
 ``"PCA"``, ``"FastICA"``, ``"FactorAnalysis"``, ``"IncrementalPCA"``), a dict
 such as ``{"model": "PCA", "params": {"whiten": True}}``, a graph measure
-(``"eigenvector_centrality"``, ``"pagerank_centrality"``, ``"strength"``), a
+(``"eigenvector_centrality"``, ``"pagerank_centrality"``,
+``"pagerank_centrality_abs"``, ``"strength"``), a
 squared-correlation summary (below), or a callable that maps a list of arrays
-to a list of arrays.  PageRank on signed correlations is not always defined:
+to a list of arrays.  PageRank on signed correlations
+(``"pagerank_centrality"``) is not always defined:
 for some valid correlation matrices its linear system is singular.  Those
 timepoints get the minimum-norm least-squares solution when it solves the
 system, and otherwise the uniform vector 1/K, with one ``UserWarning`` per
 ``reduce`` call giving the counts (see ``reduce``).
+``"pagerank_centrality_abs"`` is PageRank on the absolute values ``|r|``: it
+is defined for every finite matrix, never falls back and never warns, and it
+equals ``"pagerank_centrality"`` up to round-off when no weight is negative.
 
 Squared-correlation summaries
 -----------------------------
@@ -367,15 +372,22 @@ correlations and apply them to another (when the new list has as many
 units as the fit, ``transform`` matches them by position: the unit at
 position u gets the weights fitted to the unit at position u, whether or not
 it is the same subject; with a different number of units every unit gets
-the mean over the fitted units), and ``fits_`` records the fits
+the mean over the fitted units; ``transform(corrs, fit_index=...)`` names the
+fitted unit instead: an int for every unit, a list with one fitted unit per
+unit, or ``"mean"``), and ``fits_`` records the fits
 (calling an instance keeps only that call's fit; ``fit`` and each step of
 ``features`` and ``two_path_step`` append one). ``WeightedStrength(center=False)``
-uses the pair weights without median centering (with ``center=True``, the
-default, coupling equal for every pair gives zero magnitude columns for
-K >= 4 nodes, and when more than half the pairs lie within one community the
-median is a weight of that community, so centering removes most of its
-weights and zeroes those of a more weakly coupled smaller community; see the
-``WeightedStrength`` Notes); ``n_null`` sets the number of shift-null surrogates of the
+uses the pair weights without centering. With ``center=True``, the default,
+the pair weights are centered on the mean of their lower cluster (the lower
+group of the split of the sorted weights into two groups with the least
+within-group sum of squares) and clipped at 0; with ``center="median"`` they
+are centered on their median. Both give zero
+magnitude columns for K >= 4 nodes when the coupling is equal for every pair.
+When more than half the pairs lie within one community, the median is a
+weight of that community, so median centering removes most of its weights
+and zeroes those of a more weakly coupled smaller community; the lower
+cluster keeps both (see the ``WeightedStrength`` Notes for the measured
+comparison). ``n_null`` sets the number of shift-null surrogates of the
 automatic count of communities (default 5). ``Communities(signed=True)``
 emits a magnitude and a signed column per community, both computed from the
 correlations within that community; on the feeding path of ``features``, the
@@ -469,7 +481,6 @@ Utilities
 See Also
 --------
 
-* :doc:`tutorials`: tutorials
-* :doc:`auto_examples/index`: example gallery
+* :doc:`tutorials`: the tutorial gallery
 * `GitHub repository <https://github.com/ContextLab/timecorr>`_: source code and issues
 * `Owen, Chang & Manning (2021) <https://doi.org/10.1038/s41467-021-25876-x>`_: the paper describing the method

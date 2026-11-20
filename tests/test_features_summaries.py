@@ -1010,3 +1010,25 @@ def test_views_of_one_array_are_counted_once():
     assert _output_elements([a, a[:5], a[:, :2]]) == 40
     assert _output_elements([a[:5], a[5:]]) == 40
     assert _output_elements([a, np.zeros(3)]) == 43
+
+
+# ------------------------------------------------ PageRank on |r| as a reducer
+
+
+@pytest.mark.parametrize("path", ["rfun", "delta_rfun"])
+def test_abs_pagerank_works_as_a_reducer_in_features(path):
+    data = noise(S=2, T=80, K=5, seed=4)
+    kwargs = {"rfun": "PCA", "delta_rfun": "weighted_strength"}
+    kwargs[path] = "pagerank_centrality_abs"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        X, D = tc.features(data, order=2, return_delta=True, **kwargs)
+    assert len(X) == 3 and len(D) == 3
+    for k in (1, 2):
+        for x in X[k] + D[k]:
+            assert x.shape == (80, 5) and np.all(np.isfinite(x))
+    # one PageRank value per node, summing to 1
+    pageranked = X[1] + X[2] if path == "rfun" else D[1] + D[2]
+    for x in pageranked:
+        assert np.all(x > 0)
+        np.testing.assert_allclose(x.sum(axis=1), 1.0, rtol=0, atol=1e-12)

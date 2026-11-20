@@ -1,4 +1,4 @@
-timecorr.simulate\_hierarchy
+﻿timecorr.simulate\_hierarchy
 ============================
 
 .. currentmodule:: timecorr

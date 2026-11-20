@@ -2067,10 +2067,8 @@ def apply_by_row(corrs, f):
         return list(map(lambda x: apply_by_row(x, f), corrs))
 
     corrs = vec2mat(corrs)
-    return np.stack(
-        list(map(lambda x: f(np.squeeze(x)), np.split(corrs, corrs.shape[2], axis=2))),
-        axis=0,
-    )
+    # index the timepoint axis (np.squeeze would also drop K = 1 axes)
+    return np.stack([f(corrs[:, :, t]) for t in range(corrs.shape[2])], axis=0)
 
 
 def corrmean_combine(corrs):
@@ -2255,7 +2253,10 @@ def null_combine(corrs):
 
 
 # Graph measures accepted (as strings) by ``reduce``.
-_GRAPH_MEASURES = ("eigenvector_centrality", "pagerank_centrality", "strength")
+_GRAPH_MEASURES = (
+    "eigenvector_centrality", "pagerank_centrality", "pagerank_centrality_abs",
+    "strength",
+)
 # strings that create a fresh summary instance (timecorr.summaries)
 _SUMMARY_NAMES = ("weighted_strength", "weighted_strength_split", "communities")
 
@@ -2427,10 +2428,12 @@ def reduce(corrs, rfun=None, ndims=None):
           where the installed UMAP has it, ``compatibility_layout=True`` (its
           current layout pipeline), unless the dict's ``'kwargs'`` give them.
         - One of the graph measures ``'eigenvector_centrality'``,
-          ``'pagerank_centrality'``, or ``'strength'`` (strings only), computed
+          ``'pagerank_centrality'``, ``'pagerank_centrality_abs'``, or
+          ``'strength'`` (strings only), computed
           per node for each timepoint from the K x K matrix (diagonal
-          included), with signed weights used as they are, without taking
-          absolute values: ``'strength'`` is the row sum, so negative
+          included).  All but ``'pagerank_centrality_abs'`` use signed
+          weights as they are, without taking absolute values: ``'strength'``
+          is the row sum, so negative
           correlations subtract; ``'eigenvector_centrality'`` is the absolute
           value of the unit eigenvector of the largest (most positive)
           eigenvalue of the symmetrized matrix; ``'pagerank_centrality'``
@@ -2449,10 +2452,22 @@ def reduce(corrs, rfun=None, ndims=None):
           singular-value cutoff 1e-14), normalized, when it passes the same
           residual and sum tests, and otherwise the uniform vector 1/K; one
           ``UserWarning`` per call gives the counts.  Other timepoints are
-          computed as before (``scipy.linalg.solve``).  A delta-kernel co-fluctuation matrix
+          computed as before (``scipy.linalg.solve``).
+          ``'pagerank_centrality_abs'`` is PageRank on the non-negative
+          weights ``|W|`` (damping 0.85, uniform prior, diagonal included;
+          a node whose weights are all zero spreads its rank uniformly).  It
+          is well-posed for every finite matrix (the system is strictly
+          diagonally dominant by columns, with 1-norm condition number at
+          most ``(1 + 0.85) / (1 - 0.85)``, about 12.3), so it never falls back or
+          warns; a timepoint with a non-finite entry gives NaNs.  It equals
+          ``'pagerank_centrality'`` up to round-off when every weight is
+          non-negative, and
+          ignores the sign of the correlations otherwise.  A delta-kernel co-fluctuation matrix
           ``z z^T`` has rank one, so on the delta path of ``features`` with
           ``delta_weights_function=eye_weights`` eigenvector centrality equals ``|z| / ||z||`` and the graph measures
-          carry no network structure.
+          carry no network structure.  With one node (K = 1, the 1 x 1
+          matrix ``[[w]]``), ``'strength'`` is ``w`` and the other three
+          measures are 1 at every timepoint.
         - A squared-correlation summary (see ``timecorr.summaries``): a
           ``WeightedStrength`` or ``Communities`` instance, or the strings
           ``'weighted_strength'`` (``WeightedStrength()``),
@@ -2592,6 +2607,35 @@ def reduce(corrs, rfun=None, ndims=None):
         r /= np.sum(r)
         return r
 
+    def pagerank_centrality_abs(W, d=0.85):
+        """
+        PageRank centrality on the non-negative weights ``|W|``.
+
+        Uniform prior; a node whose weights are all zero spreads its rank
+        uniformly (equivalently, the solution of the linear system below is
+        normalized to sum to 1).  ``|W|`` is divided by its largest entry
+        first (PageRank does not depend on the scale of the weights), so the
+        column sums neither overflow nor underflow.  With column sums
+        ``s_j`` of the scaled weights (zero sums replaced by 1), the matrix
+        ``B = I - d |W| diag(1 / s)`` is strictly diagonally dominant by
+        columns for ``d < 1``, so the system ``B r = (1 - d) / K`` always has
+        a unique, positive solution and its 1-norm condition number is at
+        most ``(1 + d) / (1 - d)``.  Returns NaNs when ``W`` has a non-finite
+        entry.
+        """
+        N = len(W)
+        A = np.abs(W)
+        if not np.all(np.isfinite(A)):
+            return np.full(N, np.nan)
+        top = np.max(A) if N else 0.0
+        if top > 0:
+            A = A / top
+        deg = np.sum(A, axis=0)
+        deg[deg == 0] = 1
+        B = np.eye(N) - d * (A / deg[None, :])
+        r = linalg.solve(B, np.full(N, (1 - d) / N))
+        return r / np.sum(r)
+
     def strengths_und(W):
         """
         Compute node strength for undirected graph.
@@ -2613,6 +2657,7 @@ def reduce(corrs, rfun=None, ndims=None):
     graph_measures = {
         "eigenvector_centrality": eigenvector_centrality_und,
         "pagerank_centrality": lambda x: pagerank_centrality(x, d=0.85),
+        "pagerank_centrality_abs": lambda x: pagerank_centrality_abs(x, d=0.85),
         "strength": strengths_und,
     }
 
@@ -2654,7 +2699,8 @@ def reduce(corrs, rfun=None, ndims=None):
                 f"{n_lstsq} used the minimum-norm least-squares solution and "
                 f"{n_uniform} the uniform vector 1/K.  PageRank on signed "
                 "correlations is not always defined (negative weights can "
-                "cancel the column sums); rfun='strength' and "
+                "cancel the column sums); rfun='pagerank_centrality_abs' "
+                "(PageRank on |W|), rfun='strength' and "
                 "rfun='eigenvector_centrality' are defined for every matrix.",
                 UserWarning,
                 stacklevel=2,

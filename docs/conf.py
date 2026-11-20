@@ -43,7 +43,6 @@ extensions = [
     "numpydoc",
     "sphinx.ext.autosummary",
     "sphinx.ext.viewcode",
-    "sphinx_gallery.gen_gallery",
     "nbsphinx",
 ]
 
@@ -98,12 +97,7 @@ exclude_patterns = [
     "_build",
     "Thumbs.db",
     ".DS_Store",
-    # sphinx-gallery writes these next to each example page; only the .rst is a page
-    "auto_examples/*.ipynb",
-    "auto_examples/*.py",
-    "auto_examples/*.json",
-    "auto_examples/*.zip",
-    "auto_examples/*.md5",
+    "**.ipynb_checkpoints",
 ]
 
 # The name of the Pygments (syntax highlighting) style to use.
@@ -179,9 +173,6 @@ html_theme_options = {
 
 html_css_files = ["custom.css"]
 
-# sphinx_gallery_conf is not picklable into the environment cache.
-suppress_warnings = ["config.cache"]
-
 # Add any paths that contain custom static files (such as style sheets) here,
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
@@ -247,10 +238,3 @@ texinfo_documents = [
         "Miscellaneous",
     ),
 ]
-
-sphinx_gallery_conf = {
-    # path to your examples scripts
-    "examples_dirs": "../examples",
-    # path where to save gallery generated examples
-    "gallery_dirs": "auto_examples",
-}

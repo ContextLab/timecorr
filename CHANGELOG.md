@@ -14,7 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   HTFA node weights of the story-listening fMRI data analyzed by Owen,
   Chang & Manning (2021), downloaded from the data archive of the paper's
   repository; which nodes each order's features belong to; and one
-  animation per order on the brain, drawn with the htfa toolbox. The `docs`
+  animation per order on the brain, drawn with the htfa toolbox (1920 x
+  1080 H.264 videos at 30 frames per second, with linearly interpolated
+  frames between timepoints, in `docs/_static/tutorial_media/`). The `docs`
   extra now includes `htfa[plot,brain3d]>=0.1.0`.
 
 ### Fixed

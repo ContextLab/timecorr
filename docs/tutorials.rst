@@ -75,7 +75,8 @@ node weights of the story-listening fMRI data analyzed by Owen, Chang &
 Manning (2021), downloaded from the data archive of the paper's repository;
 the record of each step (``return_info=True``); which nodes each order's
 features belong to; and an animation of each order on the brain, drawn with
-the `htfa <https://htfa.readthedocs.io/en/latest/>`_ toolbox.
+the `htfa <https://htfa.readthedocs.io/en/latest/>`_ toolbox (1920 x 1080
+videos at 30 frames per second, in ``docs/_static/tutorial_media/``).
 
 Running the tutorials
 ---------------------
@@ -89,4 +90,5 @@ From the root of the repository:
 
 Each notebook runs top to bottom in under about two minutes, except
 ``htfa_network_animations.ipynb``: it downloads a 460 MB archive on its first
-run, and its last full run took about 7 minutes after the download.
+run, and its last full run, which renders 3,592 video frames with 3 parallel
+workers, took about 45 minutes after the download.

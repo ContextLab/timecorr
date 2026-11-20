@@ -905,13 +905,13 @@ def _order_map(value, name, max_order):
 
 def _resolve_auto(value, k, path):
     """``"auto"``: PCA at order 1 and ``WeightedStrength(signed=True)`` above
-    on the analysis path, ``Communities()`` on the feeding path (marked with
-    ``_from_auto`` so that ``_check_auto_feeding`` can name the
-    alternatives)."""
+    on the analysis path; on the feeding path ``Communities()`` at order 1
+    and ``Communities(signed="only")`` above (marked with ``_from_auto`` so
+    that ``_check_auto_feeding`` can name the alternatives)."""
     if not _is_auto(value):
         return value
     if path == "feeding":
-        summary = Communities()
+        summary = Communities() if k == 1 else Communities(signed="only")
         summary._from_auto = True
         return summary
     return "PCA" if k == 1 else WeightedStrength(signed=True)
@@ -1190,10 +1190,131 @@ def _feeding_kernel(weights_function, weights_params, default=None):
     return weights_function, weights_params
 
 
+# Automatic kernels (weights_params="auto", delta_weights_params="auto"):
+# the feeding kernel's standard deviation is this many autocorrelation widths
+# of the step's input,
+_AUTO_WIDTHS = 5
+# the analysis kernel's is that or the Gaussian kernel's default (10 samples),
+# whichever is larger,
+_AUTO_ANALYSIS_SD = 10.0
+# both are at most this fraction of the number of timepoints,
+_AUTO_MAX_FRACTION = 1 / 8
+# and features passes the feeding features on at every floor(sd / 2)-th
+# timepoint while at least this many timepoints remain
+_AUTO_MIN_ROWS = 100
+
+
+def _autocorrelation_width(subjects):
+    """
+    Autocorrelation width of the columns, in samples: the lag at which the
+    autocorrelation, averaged over every column of every subject, first
+    falls below ``exp(-1/2)``, linearly interpolated between lags and at
+    least 1 (white noise gives 1; a Gaussian autocorrelation with standard
+    deviation w gives w).  Constant columns are left out and NaN samples
+    count as the column's mean.  Lags beyond the largest automatic kernel
+    are not examined: the result is at most ``T * _AUTO_MAX_FRACTION /
+    _AUTO_WIDTHS + 1``.
+    """
+    threshold = np.exp(-0.5)
+    T = subjects[0].shape[0]
+    columns = []
+    for x in subjects:
+        x = np.asarray(x, dtype=float)
+        valid = ~np.isnan(x)
+        mean = np.where(valid, x, 0).sum(axis=0) / np.maximum(valid.sum(axis=0), 1)
+        x = np.where(valid, x - mean, 0)
+        scale = np.sqrt((x * x).sum(axis=0))
+        columns.append(x[:, scale > 0] / scale[scale > 0])
+    n = sum(c.shape[1] for c in columns)
+    last = int(T * _AUTO_MAX_FRACTION / _AUTO_WIDTHS) + 1
+    if n == 0:
+        return 1.0
+    previous = 1.0
+    for lag in range(1, min(last, T - 1) + 1):
+        acf = sum(float(np.einsum("tk,tk->", c[lag:], c[:-lag])) for c in columns) / n
+        if acf < threshold:
+            return max(1.0, lag - 1 + (previous - threshold) / (previous - acf))
+        previous = acf
+    return float(last)
+
+
+def _auto_sd(subjects):
+    """
+    Standard deviation of the automatic feeding kernel of a step with these
+    inputs: ``_AUTO_WIDTHS`` autocorrelation widths, at most
+    ``_AUTO_MAX_FRACTION`` of the number of timepoints.
+    """
+    T = subjects[0].shape[0]
+    return float(min(_AUTO_WIDTHS * _autocorrelation_width(subjects),
+                     T * _AUTO_MAX_FRACTION))
+
+
+def _auto_kernels(weights_function, weights_params, delta_weights_function,
+                  delta_weights_params):
+    """
+    Resolve ``"auto"`` kernel parameters: ``(weights_params,
+    delta_weights_params, analysis, feeding)``.
+
+    ``analysis`` / ``feeding``: whether that path's Gaussian kernel is set
+    from the data at each step (``_auto_sd``).  That holds for ``"auto"``
+    with a Gaussian kernel on that path, and for the analysis path only when
+    the feeding kernel is not ``eye_weights`` (the original pipeline keeps
+    the kernel's defaults).  ``"auto"`` is otherwise replaced by None (the
+    kernel's default parameters); other values are returned unchanged.
+    """
+    feeding_function, _ = _feeding_kernel(delta_weights_function, None)
+    feeding = _is_auto(delta_weights_params) and feeding_function is gaussian_weights
+    analysis = (
+        _is_auto(weights_params)
+        and weights_function is gaussian_weights
+        and feeding_function is not eye_weights
+    )
+    return (
+        None if _is_auto(weights_params) else weights_params,
+        None if _is_auto(delta_weights_params) else delta_weights_params,
+        analysis,
+        feeding,
+    )
+
+
+def _auto_params(subjects, analysis, feeding):
+    """
+    ``(analysis params, feeding params, sd)`` of a step with automatic
+    kernels on the paths flagged True: Gaussian variances from ``_auto_sd``
+    of the step's inputs (None for a path that is not automatic).
+    """
+    sd = _auto_sd(subjects)
+    wide = max(sd, _AUTO_ANALYSIS_SD)
+    return (
+        {"var": wide ** 2} if analysis else None,
+        {"var": sd ** 2} if feeding else None,
+        sd,
+    )
+
+
+def _at_every_timepoint(out, rows, T):
+    """
+    An output computed at the timepoints ``rows`` (increasing indices),
+    linearly interpolated to all ``T`` timepoints; after the last of
+    ``rows`` its value is held.  ``out``: an array or a list of arrays.
+    """
+    if isinstance(out, list):
+        return [_at_every_timepoint(o, rows, T) for o in out]
+    out = np.asarray(out)
+    if len(rows) == T:
+        return out
+    if len(rows) == 1:
+        return np.repeat(out, T, axis=0)
+    t = np.arange(T)
+    i = np.clip(np.searchsorted(rows, t, side="right") - 1, 0, len(rows) - 2)
+    w = np.clip((t - rows[i]) / (rows[i + 1] - rows[i]), 0.0, 1.0)[:, None]
+    return out[i] * (1 - w) + out[i + 1] * w
+
+
 def two_path_step(
     data,
     weights_function=gaussian_weights,
-    weights_params=None,
+    weights_params="auto",
     cfun=isfc,
     rfun="auto",
     delta_rfun="auto",
@@ -1206,7 +1327,7 @@ def two_path_step(
     events=None,
     events_params=None,
     delta_weights_function=None,
-    delta_weights_params=None,
+    delta_weights_params="auto",
     order=1,
 ):
     """
@@ -1420,11 +1541,22 @@ def two_path_step(
     _check_ndims_steps(
         ndims, [(analysis[order], "rfun", order), (feeding[order], "delta_rfun", order)]
     )
+    weights_params, delta_weights_params, auto_analysis, auto_feeding = _auto_kernels(
+        weights_function, weights_params, delta_weights_function, delta_weights_params
+    )
     feeding_function, feeding_params = _feeding_kernel(
         delta_weights_function, delta_weights_params
     )
     single = not isinstance(data, (list, tuple))
     subjects = format_data(data, fill_nan=False)
+    if auto_analysis or auto_feeding:
+        analysis_auto, feeding_auto, _ = _auto_params(
+            subjects, auto_analysis, auto_feeding
+        )
+        if auto_analysis:
+            weights_params = analysis_auto
+        if auto_feeding:
+            feeding_params = feeding_auto
     resolved = resolve_events(
         events, subjects[0].shape[0], len(subjects), events_params
     )
@@ -1672,7 +1804,7 @@ def features(
     data,
     order=1,
     weights_function=gaussian_weights,
-    weights_params=None,
+    weights_params="auto",
     cfun=isfc,
     rfun="auto",
     delta_rfun="auto",
@@ -1686,7 +1818,7 @@ def features(
     events=None,
     events_params=None,
     delta_weights_function=None,
-    delta_weights_params=None,
+    delta_weights_params="auto",
     return_info=False,
 ):
     """
@@ -2153,6 +2285,9 @@ def features(
         [(analysis_rfun[k], "rfun", k) for k in orders]
         + [(feeding_rfun[k], "delta_rfun", k) for k in fed],
     )
+    weights_params, delta_weights_params, auto_analysis, auto_feeding = _auto_kernels(
+        weights_function, weights_params, delta_weights_function, delta_weights_params
+    )
     analysis_map = _params_by_order(weights_params, "weights_params", order)
     feeding_map = _params_by_order(delta_weights_params, "delta_weights_params", order)
     # kernel parameters of each order: an order map's value (None, the
@@ -2223,7 +2358,21 @@ def features(
     nan_warned = [False]  # one NaN-filling warning per call
     info = []  # with return_info: one dict per computed step and path
     previous_communities = None  # communities found by the previous feeding step
+    # with both kernels automatic and no events, each order's feeding
+    # features are passed on at a lower rate; rows: the timepoints (indices
+    # into the T of the data) of the rows of the current feeding features
+    thin = auto_analysis and auto_feeding and events is None
+    rows = np.arange(T)
+    computed_at = [rows]  # the timepoints of the rows of X[k] and D[k]
     for k in orders:
+        if auto_analysis or auto_feeding:
+            analysis_auto, feeding_auto, sd = _auto_params(
+                fed_by, auto_analysis, auto_feeding
+            )
+            if auto_analysis:
+                analysis_params[k] = analysis_auto
+            if auto_feeding:
+                feeding_params[k] = feeding_auto
         # the outputs kept so far (each array once; the input data are the
         # caller's): X_1 .. X_{k-1}, and D_1 .. D_{k-1} when returned,
         # otherwise only the feeding features this order reads
@@ -2255,6 +2404,7 @@ def features(
             previous_communities=previous_communities,
         )
         X.append(x)
+        computed_at.append(rows)
         previous = feeding_rfun[k]
         # explicit Communities only: the automatic feeding reducer keeps at
         # least 4 columns (see summaries._auto_emitter)
@@ -2264,15 +2414,29 @@ def features(
             and not getattr(previous, "_from_auto", False) else None
         )
         if return_info:
-            info.extend(_step_info(
+            entries = _step_info(
                 k, fed_by, x, delta, analysis_rfun[k], feeding_rfun[k],
                 _requested(rfun, k), _requested(delta_rfun, k),
-            ))
+            )
+            for entry, automatic in zip(entries, (auto_analysis, auto_feeding)):
+                if automatic:
+                    params = (analysis_params if entry["path"] == "analysis"
+                              else feeding_params)[k]
+                    entry["kernel_sd"] = float(np.sqrt(params["var"]))
+                    entry["sampling"] = int(rows[1] - rows[0]) if len(rows) > 1 else 1
+            info.extend(entries)
         if delta is not None:
             fed_by = delta
             if return_delta:
                 D.append(delta)
+            if thin:
+                stride = max(1, min(int(sd // 2), len(rows) // _AUTO_MIN_ROWS))
+                fed_by = [d[::stride] for d in delta]
+                rows = rows[::stride]
 
+    if thin:
+        X = [_at_every_timepoint(x, at, T) for x, at in zip(X, computed_at)]
+        D = [_at_every_timepoint(d, at, T) for d, at in zip(D, computed_at)]
     if single:
         X = [x[0] if isinstance(x, list) else x for x in X]
         D = [d[0] for d in D]

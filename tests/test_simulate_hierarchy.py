@@ -4,6 +4,8 @@
 Real draws from the generator, no mocks.
 """
 
+import os
+
 import numpy as np
 import pytest
 from scipy.stats import norm
@@ -139,39 +141,54 @@ def test_returned_signals_are_not_shared_objects(shared):
                                       before[subject][-1])
 
 
-# sha256 of the data and signals of small(S=3, shared=...) at seeds 0-2,
-# computed before the signs option was added (the default, signs="private",
-# must reproduce them bit for bit)
-PRIVATE_SIGNS_CHECKSUMS = {
-    ("top", 0): "185fa47d62c472dd9c6bcb96f9e5358374245aef1800ad4ad73ae4ec078324ce",
-    ("top", 1): "8af486680dc4ab6e69ee1993e73434489b11dc6e215dbd918733bb0c38811e79",
-    ("top", 2): "47d4c3a11e559be08cd527d50fae26a73089b276e9bd5553dfb0bbf9bb2e6b0b",
-    ("all", 0): "6835ba749dcec23d7acfca2086c97cd776cef509f5f8780c630952180acb1432",
-    ("all", 1): "15aab2206f00ea2da1fc8736b5fd429c4e8d32c4e845f11f12bd58cbffbaaeb1",
-    ("all", 2): "e4106505ccf2320e2901d45460aa8fb1c2d0b06e2e98142f50214897a25f85c6",
-    ("none", 0): "eb4ca1fb93b28f5e75e9788236cc95327d4e047712553a863b230fdd97254efc",
-    ("none", 1): "e9ea404acc4eebe44b4ebf04ee33e25d2721b7d3a8b507943d7dd2756e6e0dfe",
-    ("none", 2): "4ed8798e96cde7adbddfcc2d4fd6db827ece40ac6e06eaad653555bfe2fecd21",
-}
+# Reference values of small(S=3, shared=..., set_random_seed=seed) for these
+# keys, written by tests/fixtures/make_private_signs_reference.py with the
+# package at commit 012f5e0^ (before the signs option was added): for each
+# subject's data and each of its signals, 8 fixed entries and the sum.  The
+# default, signs="private", must reproduce them: the same random draws in the
+# same order.  They are compared up to round-off (rtol 1e-9, atol 1e-12), not
+# bit for bit: transcendental functions and sums round differently in their
+# last bits across platforms and NumPy/SciPy builds.
+PRIVATE_SIGNS_KEYS = [(shared, seed) for shared in ("top", "all", "none")
+                      for seed in (0, 1, 2)]
+PRIVATE_SIGNS_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures",
+                                     "private_signs_reference.npz")
 
 
-def _checksum(data, truth):
-    import hashlib
-    h = hashlib.sha256()
-    for x in data:
-        h.update(np.ascontiguousarray(x).tobytes())
-    for s in truth["signals"]:
-        for a in s:
-            h.update(np.ascontiguousarray(a).tobytes())
-    return h.hexdigest()
+def reference_values(data, truth):
+    """(arrays, 9): 8 entries at fixed flat positions and the sum of each
+    subject's data, then of each subject's signals (level by level)."""
+    arrays = list(data) + [a for s in truth["signals"] for a in s]
+    out = []
+    for x in arrays:
+        flat = np.ravel(x)
+        idx = np.linspace(0, flat.size - 1, 8).round().astype(int)
+        out.append(np.concatenate([flat[idx], [flat.sum()]]))
+    return np.stack(out)
 
 
-@pytest.mark.parametrize("key", sorted(PRIVATE_SIGNS_CHECKSUMS))
+def private_signs_reference_name(key):
+    return f"{key[0]}_{key[1]}"
+
+
+@pytest.mark.parametrize("key", PRIVATE_SIGNS_KEYS)
 def test_private_signs_are_the_previous_output(key):
     shared, seed = key
-    for kwargs in ({}, {"signs": "private"}):
-        data, truth = small(S=3, shared=shared, set_random_seed=seed, **kwargs)
-        assert _checksum(data, truth) == PRIVATE_SIGNS_CHECKSUMS[key]
+    with np.load(PRIVATE_SIGNS_FIXTURE) as f:
+        expected = f[private_signs_reference_name(key)]
+    data, truth = small(S=3, shared=shared, set_random_seed=seed)
+    got = reference_values(data, truth)
+    assert got.shape == expected.shape
+    np.testing.assert_allclose(got, expected, rtol=1e-9, atol=1e-12)
+    # signs="private" is the default call exactly (same process, same code)
+    data_p, truth_p = small(S=3, shared=shared, set_random_seed=seed,
+                            signs="private")
+    for x, y in zip(data, data_p):
+        assert np.array_equal(x, y)
+    for s, sp in zip(truth["signals"], truth_p["signals"]):
+        for x, y in zip(s, sp):
+            assert np.array_equal(x, y)
+    assert np.array_equal(truth["signs"], truth_p["signs"])
     assert truth["signs"].shape == (3, data[0].shape[1])
     assert set(np.unique(truth["signs"])) <= {-1.0, 1.0}
 

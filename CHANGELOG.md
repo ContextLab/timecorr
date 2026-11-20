@@ -250,7 +250,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   their squares or their cross products are not all finite (where the full
   products give `0 * inf = NaN`), the full products are computed as before.
   Results equal the full computation up to the order of floating-point
-  summation, and the warnings are unchanged. The spans are found one chunk
+  summation. Entries whose kernel-weighted variance nearly cancels (a small
+  fraction of the kernel-weighted mean square: data constant within most of
+  the kernel, or observed samples that carry only tail weights) are
+  sensitive to that order in either path: measured on Linux x86-64 with
+  OpenBLAS, such entries differed by up to 2.4e-6, while entries whose
+  variance is at least 1e-3 of the mean square differed by at most 1e-12.
+  The warnings are the same unless a variance lies within round-off of the
+  estimator's zero tolerance (1e-10 of the mean square), where the two
+  orders can disagree about setting an entry to 0. The spans are found one chunk
   of rows at a time and the chunk products are written in place, so the
   peak memory measured with `tracemalloc` is the same with and without
   slicing to within 0.01% (`autofc` on one subject of T 2000, K 4 with a

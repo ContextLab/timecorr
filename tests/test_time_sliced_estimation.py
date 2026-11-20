@@ -3,6 +3,15 @@ Time-sliced estimation: the estimator processes the output timepoints in
 chunks, each against the span of kernel columns where the chunk has non-zero
 weight.  These tests compare it with the full products (the private switch
 ``helpers._TIME_SLICING = False``) on real computations.
+
+The two differ only in the order of floating-point summation.  Where a
+kernel-weighted variance nearly cancels (it is a small fraction of the
+kernel-weighted mean square: data constant within most of the kernel, or a
+kernel row whose observed samples carry only tail weights), that round-off is
+amplified, and either path can differ from the other visibly (by up to about
+1e-6 measured on Linux x86-64 with OpenBLAS).  ``_check_conditioned``
+compares such data entry by entry according to a conditioning measure
+computed from the data and the kernel.
 """
 
 import warnings
@@ -155,26 +164,135 @@ def test_event_masked_kernels(x):
     )
 
 
-def test_nan_data(x, y):
+# The conditioning of entry (i, j) at kernel row t: the smaller, over the two
+# features, of the kernel-weighted variance (computed in two passes) divided
+# by the kernel-weighted mean square, over the samples where both features
+# are observed, of the column-centered data (as the estimator centers them).
+# Round-off of the estimator's one-pass variance is about eps / conditioning
+# relative to the correlation; at conditioning >= _WELL_CONDITIONED (1e-3)
+# the sliced and full products differ by at most about 1e-12 (measured: at
+# most 9.8e-13 on Linux x86-64 with OpenBLAS, while entries below 1.1e-4
+# differed by up to 2.4e-6).  The estimator sets an entry to 0 when a
+# variance is at most _ZERO_VARIANCE_TOL (1e-10) of its mean square: entries
+# well below that are 0 in both paths, entries well above it are not.
+_WELL_CONDITIONED = 1e-3
+_SURELY_ZERO = helpers._ZERO_VARIANCE_TOL / 10
+_SURELY_NONZERO = helpers._ZERO_VARIANCE_TOL * 10
+
+
+def _conditioning(a, b, w):
+    """
+    ``(cond, undefined)``, both (Ka, Kb, T'): the conditioning of each entry
+    (see above) and the entries with fewer than 3 observed samples with
+    non-zero weight (undefined; the estimator sets them to 0).  Computed from
+    the data and the kernel only.
+    """
+    a = a - np.nanmean(a, axis=0)
+    b = b - np.nanmean(b, axis=0)
+    A = np.abs(np.nan_to_num(w, nan=0.0))
+    T_out, T = A.shape
+    cond = np.empty((a.shape[1], b.shape[1], T_out))
+    undefined = np.empty(cond.shape, dtype=bool)
+    for i in range(a.shape[1]):
+        for j in range(b.shape[1]):
+            ok = ~np.isnan(a[:, i]) & ~np.isnan(b[:, j])
+            Wk = A * ok
+            s = Wk.sum(axis=1)
+            ratios = []
+            for v in (a[:, i], b[:, j]):
+                v = np.where(ok, v, 0.0)
+                mean = np.divide(Wk @ v, s, out=np.zeros(T_out), where=s > 0)
+                var = (Wk * (v[np.newaxis, :] - mean[:, np.newaxis]) ** 2).sum(axis=1)
+                msq = Wk @ v**2
+                ratios.append(np.divide(var, msq, out=np.zeros(T_out), where=msq > 0))
+            cond[i, j] = np.minimum(*ratios)
+            undefined[i, j] = (Wk > 0).sum(axis=1) < 3
+    return cond, undefined
+
+
+def _well_conditioned_close(s, f, good):
+    return bool(np.allclose(s[good], f[good], rtol=RTOL, atol=ATOL))
+
+
+def _check_conditioned(a, b, w):
+    """
+    ``_check`` for ``_wcorr(a, b, w)`` on data with ill-conditioned entries:
+    well-conditioned entries agree at RTOL / ATOL; every entry is finite and
+    within [-1, 1] in both paths; entries the estimator defines as 0
+    (undefined, or variance far below its zero tolerance) are 0 in both, and
+    entries with variance far above it are non-zero in both; the warnings are
+    the same.
+    """
+    (s, ws), (f, wf) = _sliced_and_full(lambda: _wcorr(a, b, w))
+    assert s.shape == f.shape
+    cond, undefined = _conditioning(a, b, w)
+    good = ~undefined & (cond >= _WELL_CONDITIONED)
+    # most entries are well conditioned, and some are not (the case is real)
+    assert good.mean() > 0.6 and not good.all()
+    assert _well_conditioned_close(s, f, good)
+    for r in (s, f):
+        assert np.all(np.isfinite(r)) and np.all(np.abs(r) <= 1)
+        assert np.all(r[undefined | (cond <= _SURELY_ZERO)] == 0)
+        assert np.all(r[~undefined & (cond >= _SURELY_NONZERO)] != 0)
+    assert ws == wf
+    return s, ws, good
+
+
+def _shortened_slices(monkeypatch):
+    """Make every non-empty span of ``_time_slices`` one column too short."""
+    original = helpers._time_slices
+
+    def short(weights, finite=True):
+        slices = original(weights, finite)
+        if slices is None:
+            return None
+        return [(t0, t1, c0, c1 - 1 if c1 > c0 else c1) for t0, t1, c0, c1 in slices]
+
+    monkeypatch.setattr(helpers, "_time_slices", short)
+
+
+def _assert_dropped_column_detected(a, b, w, monkeypatch):
+    """Negative control: with spans one column too short, the comparison of
+    the well-conditioned entries fails."""
+    s, _, good = _check_conditioned(a, b, w)
+    assert _engaged(lambda: _wcorr(a, b, w))[0] is not None
+    with monkeypatch.context() as m:
+        _shortened_slices(m)
+        short = _run(lambda: _wcorr(a, b, w), True)[0]
+    assert not _well_conditioned_close(short, s, good)
+
+
+def test_nan_data(x, y, monkeypatch):
     a = x.copy()
     b = y.copy()
     rng = np.random.RandomState(2)
     a[rng.rand(*a.shape) < 0.1] = np.nan
     b[rng.rand(*b.shape) < 0.1] = np.nan
-    a[450:750, 1] = np.nan  # some pairs with fewer than 3 observed samples
+    # some pairs with fewer than 3 observed samples; tens of samples inside
+    # the stretch, the observed samples carry only tail weights (about 1e-196
+    # of the peak), so the variances nearly cancel
+    a[450:750, 1] = np.nan
     w = tc.gaussian_weights(len(x), {"var": 4})
-    _, msgs = _check(lambda: _wcorr(a, a, w))
+    _, msgs, _ = _check_conditioned(a, a, w)
     assert any("observed (non-NaN)" in m for m in msgs)
-    _check(lambda: _wcorr(a, b, w))
+    _check_conditioned(a, b, w)
     assert _engaged(lambda: _wcorr(a, b, w))[0] is not None
+    # a Gaussian's last column of support has negligible weight, so the
+    # negative control uses a boxcar, where every supported column counts
+    box = tc.boxcar_weights(len(x), {"width": 30})
+    _assert_dropped_column_detected(a, a, box, monkeypatch)
+    _assert_dropped_column_detected(a, b, box, monkeypatch)
 
 
-def test_cancelled_and_low_ess_warnings(x):
+def test_cancelled_and_low_ess_warnings(x, monkeypatch):
     a = x.copy()
     a[300:700] = 1.0  # constant: zero kernel-weighted variance there
     w = tc.gaussian_weights(len(x), {"var": 25})
-    _, msgs = _check(lambda: _wcorr(a, a, w))
+    _, msgs, _ = _check_conditioned(a, a, w)
     assert msgs and "zero kernel-weighted variance" in msgs[0]
+    _assert_dropped_column_detected(
+        a, a, tc.boxcar_weights(len(x), {"width": 30}), monkeypatch
+    )
     narrow = tc.gaussian_weights(len(x), {"var": 0.1})
     _, msgs = _check(lambda: _wcorr(x, x, narrow))
     assert msgs and "effective sample size" in msgs[0]

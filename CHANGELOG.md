@@ -35,7 +35,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   center=False)` of the same correlations instead (one column per input
   feature, from the same pair weights, used uncentered: no median
   clipping), so the feeding width never drops below 4 and, for example, 4 to 7
-  input features complete at `order=3`. A `UserWarning` (one per order) is
+  input features complete at `order=3`. This also changes calls that
+  completed before the fallback was added (earlier in the development of
+  this release), not only calls that failed: on 4 independent noise
+  features (T 100), `features(x, order=1, return_delta=True)` returned 1
+  community column in `D[1]` and now returns 4 weighted-strength columns,
+  and `features(x, order=2)` returns 8 columns in `X[2]` instead of 2.
+  Summary output columns whose range over time is nonzero but at most
+  `1e-9 * max(1, max|column|)` (round-off, for example when nearly
+  identical input features give identical summaries) are set to their
+  means exactly and counted in the constant-output `UserWarning`, so the
+  next order meets exact zero variance (correlations set to 0) instead of
+  amplified round-off. A `UserWarning` (one per order) is
   issued only when no eigenvalue exceeds the shift null; `features(...,
   return_info=True)` returns `(result, info)` with one dict per computed
   step and path (reducer requested and used, input and output widths, and

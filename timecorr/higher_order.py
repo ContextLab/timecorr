@@ -1599,7 +1599,12 @@ def features(
     original pipeline.  At a default feeding step whose communities would
     emit fewer than 4 columns, the step emits weighted strength of the same
     correlations instead (one column per input feature; see
-    ``delta_rfun``), so the feeding width never drops below 4.
+    ``delta_rfun``), so the feeding width never drops below 4.  This also
+    changes calls that completed before the fallback was added: on 4
+    independent noise features (T 100), ``features(x, order=1,
+    return_delta=True)`` returned 1 community column in ``D[1]`` and now
+    returns 4 weighted-strength columns, and ``features(x, order=2)``
+    returns 8 columns in ``X[2]`` instead of 2.
 
     The original two-path pipeline (Owen, Chang & Manning, 2021, Fig. 10) is
     ``rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights``:

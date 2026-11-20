@@ -106,7 +106,14 @@ emits ``WeightedStrength(split=False, signed=False, center=False)`` of the same
 correlations instead (one column per input feature; uncentered pair weights,
 without median clipping), so the feeding width never
 drops below 4; a ``UserWarning`` is issued only when the shift null found no
-structure, and ``return_info=True`` records every fallback. An explicit ``Communities()`` keeps its
+structure, and ``return_info=True`` records every fallback. The fallback also
+changes calls that completed without it: on 4 independent noise features
+(T 100), ``D[1]`` from ``features(x, order=1, return_delta=True)`` had 1
+community column and now has 4 weighted-strength columns, and ``X[2]`` of
+``features(x, order=2)`` has 8 columns instead of 2. Summary columns whose
+range over time is nonzero but at most ``1e-9 * max(1, max|column|)`` are
+round-off; they are set to their means exactly and reported by the
+constant-output warning. An explicit ``Communities()`` keeps its
 communities; ``delta_rfun="weighted_strength"`` takes any number of features. Steps reduced by a summary (with
 ``null_combine`` and ``cfun`` ``autofc``, ``isfc`` or ``wisfc``) are computed
 in blocks of rows of the ``(K, K, T)`` correlation array, so the whole array is

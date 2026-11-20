@@ -168,8 +168,40 @@ on 30000-30003 for both (measured ``X[2]`` .559 +- .026, control .069 +-
 shared across subjects): development ``X[2]`` .638 +- .028, control .074
 +- .009; ``D[2]`` .293 +- .027, control .012 +- .014; asserted on
 30000-30003 for both (measured ``X[2]`` .659 +- .029, control .067 +-
-.030; ``D[2]`` .250 +- .044, control .007 +- .022).  Recovery of
-structure above order 2 was not measured with the default reducers.
+.030; ``D[2]`` .250 +- .044, control .007 +- .022).  Also asserted on
+30000-30003: the literal defaults on ``shared="order2"`` data keep the
+``X[2]`` score below 0.15 (``isfc`` correlates subjects with one another,
+and the order-1 couplings are private).  Recovery of structure above
+order 2 was not measured with the default reducers.
+
+Development grid of the default call (protocol of
+``literal_default_scores(seed, shared=..., **kwargs)``: 108 nodes, T 1000,
+A, B and 4 control subjects in one call; seeds 20000-20011; mean +-
+standard error over seeds; "sd 33" is ``weights_params={"var": 33 ** 2}``,
+otherwise every argument other than ``cfun`` is default).  ``D[2]`` does
+not depend on ``cfun`` or the analysis kernel: .199 +- .021 (control .013
++- .015) on ``"order2"`` data, .293 +- .027 (control .012 +- .014) on
+``"order1"`` data.
+
+============  ========  ========  ==================  ==================
+``shared``    ``cfun``  kernel    ``X[2]`` score      ``X[2]`` control
+============  ========  ========  ==================  ==================
+order2        isfc      default   -.035 +- .029       .055 +- .019
+order2        isfc      sd 33     -.016 +- .065       .032 +- .042
+order2        autofc    default   .559 +- .022        -.008 +- .025
+order2        autofc    sd 33     .733 +- .031        -.051 +- .032
+order1        isfc      default   .638 +- .028        .074 +- .009
+order1        isfc      sd 33     .876 +- .017        .072 +- .028
+order1        autofc    default   .702 +- .012        -.008 +- .025
+order1        autofc    sd 33     .902 +- .006        -.051 +- .032
+============  ========  ========  ==================  ==================
+
+The ``autofc`` controls are the same under both settings because the
+generator draws subject A and each single-subject control identically
+under ``"order2"`` and ``"order1"`` (only subject B differs), and with
+``autofc`` their ``X[2]`` did not change with B: the per-seed controls are
+equal on all 12 seeds, and the ``X[2]`` arrays of A and of the controls
+were identical on seed 20000.
 
 Separate validation of the per-target magnitude bound (slow,
 ``test_order1_per_target_magnitude_advantage_validation``; criterion fixed
@@ -722,6 +754,17 @@ def literal_default_scores(seed, T=1000, shared="order2", **kwargs):
     return res
 
 
+_LITERAL_ROWS = []
+
+
+def _literal_default_rows():
+    """``literal_default_scores`` on TEST_SEEDS (literal defaults,
+    shared="order2"), computed once per session for the two tests below."""
+    if not _LITERAL_ROWS:
+        _LITERAL_ROWS.extend(literal_default_scores(s) for s in TEST_SEEDS)
+    return _LITERAL_ROWS
+
+
 @pytest.mark.slow
 def test_literal_defaults_recover_h_in_the_order2_feeding_features():
     # Literal defaults (literal_default_scores), development seeds
@@ -733,11 +776,25 @@ def test_literal_defaults_recover_h_in_the_order2_feeding_features():
     # .199 +- .021, control .013 +- .015 (measured with the uncentered
     # feeding fallback; .201 +- .020, control .006 +- .017 before it).
     # Asserted for D[2] with the file's rule.
-    rows = [literal_default_scores(s) for s in TEST_SEEDS]
+    rows = _literal_default_rows()
     score = np.mean([r["D2_score"] for r in rows])
     control = np.mean([r["D2_control"] for r in rows])
     assert score > 0.199 / 2, (score, control, rows)
     assert abs(control) < 0.15, (score, control, rows)
+
+
+@pytest.mark.slow
+def test_literal_defaults_do_not_recover_h_in_x2_on_private_couplings():
+    # The default cfun=isfc correlates each subject's features with the
+    # other subjects', and under shared="order2" the order-1 couplings are
+    # private to each subject, so h is not recovered from X[2]: development
+    # seeds 20000-20011 -.035 +- .029 (control .055 +- .019), seeds
+    # 30000-30003 -.038 +- .038.  cfun=tc.autofc on the same data gives
+    # .559 +- .022, so this protects the isfc/autofc distinction of the
+    # default.  Same computation as the D[2] test above.
+    rows = _literal_default_rows()
+    score = np.mean([r["X2_score"] for r in rows])
+    assert score < 0.15, (score, rows)
 
 
 def _assert_recovered(rows, name, dev_mean):

@@ -336,10 +336,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `MemoryError` of an analysis step that holds its correlations although
   a summary would stream it names `rfun=tc.WeightedStrength(signed=True)`
   and `rfun={k: tc.WeightedStrength(signed=True)}` for the failing order
-  `k`, only when that change would let the order run: the feeding step is
-  absent, streamed, or materialized but fitting the budget alone, and its
-  reducer is not inherited from `rfun` (`delta_rfun=None`). The original
-  pipeline's `MemoryError` text is unchanged.
+  `k`, only when that order's analysis reducer comes from `rfun="auto"`
+  (the caller did not choose it) and the change would let the order run:
+  the feeding step is absent, streamed, or materialized but fitting the
+  budget alone, and its reducer is not inherited from `rfun`
+  (`delta_rfun=None`). With an explicitly given `rfun` (including the
+  original pipeline's `"PCA"`) the `MemoryError` has no hint, and its text
+  is unchanged.
   These are the defaults (see "Changed defaults of the higher-order
   pipeline" above).
 - `tc.simulate_nested`: nodes in modules in supergroups, with an order-2

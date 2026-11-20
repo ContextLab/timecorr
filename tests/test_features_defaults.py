@@ -683,21 +683,42 @@ def test_default_call_memory_error_hint_names_order_one_and_works():
     assert X[1][0].shape == (600, 240)
 
 
-def test_memory_error_hint_names_the_failing_order():
-    # order 1 streamed (weighted strength), the feeding path keeps the width
-    # (weighted strength), and the order-2 PCA step does not fit
-    subjects = _hint_subjects()
-    kw = dict(delta_rfun="weighted_strength", max_memory_gb=0.3)
+AD50637_SINGLE = (
+    "The correlation step at order 1 needs about 0.515 GB (120 input "
+    "features, T=600, 1 subject), more than max_memory_gb=0.3. The largest "
+    "number of input features that fits one step is K=89. Reduce to fewer "
+    "features (ndims, rfun, delta_rfun) or raise max_memory_gb."
+)
+
+
+@pytest.mark.parametrize("order, return_delta", [(1, False), (1, True), (2, False), (2, True)])
+def test_original_pipeline_single_subject_memory_error_is_unchanged(order, return_delta):
+    # one (600, 120) subject, max_memory_gb=0.3: the text that commit ad50637
+    # (before wave 4) raised for each of these calls, verbatim; at order=1
+    # without return_delta the step runs without the feeding path
+    x = np.random.default_rng(0).standard_normal((600, 120))
+    with pytest.raises(MemoryError) as err:
+        tc.features(x, order=order, return_delta=return_delta, rfun="PCA",
+                    delta_rfun=None, delta_weights_function=tc.eye_weights,
+                    max_memory_gb=0.3)
+    assert str(err.value) == AD50637_SINGLE
+
+
+@pytest.mark.parametrize("rfun", ["PCA", {1: "PCA"}])
+def test_no_hint_with_an_explicit_rfun(rfun):
+    # the hint is given only for a reducer the caller did not choose
+    with pytest.raises(MemoryError) as err:
+        tc.features(_hint_subjects(), order=1, max_memory_gb=0.3, rfun=rfun)
+    assert HINT not in str(err.value)
+
+
+def test_hint_with_an_order_map_that_leaves_order_one_automatic():
+    # rfun={2: ...} leaves order 1 at "auto" (PCA): the hint names order 1
     with pytest.raises(MemoryError, match=HINT) as err:
-        tc.features(subjects, order=2,
-                    rfun={1: tc.WeightedStrength(signed=True), 2: "PCA"}, **kw)
-    msg = str(err.value)
-    assert "at order 2" in msg
-    assert "rfun={2: tc.WeightedStrength(signed=True)} for order 2 only" in msg
-    X = quiet(tc.features, subjects, order=2,
-              rfun={1: tc.WeightedStrength(signed=True),
-                    2: tc.WeightedStrength(signed=True)}, **kw)
-    assert X[2][0].shape == (600, 240)
+        tc.features(_hint_subjects(), order=2, max_memory_gb=0.3,
+                    rfun={2: tc.WeightedStrength(signed=True)})
+    assert "at order 1" in str(err.value)
+    assert "rfun={1: tc.WeightedStrength(signed=True)} for order 1 only" in str(err.value)
 
 
 def test_no_hint_when_the_feeding_reducer_inherits_a_non_summary():

@@ -850,6 +850,16 @@ def _is_auto(value):
     return isinstance(value, str) and value == "auto"
 
 
+def _auto_at(rfun, k):
+    """Whether order ``k``'s analysis reducer comes from ``"auto"`` (the
+    caller did not choose it): ``rfun`` is ``"auto"``, or an order map that
+    leaves order ``k`` out or maps it to ``"auto"``.  Called after
+    ``_resolve_reducers`` has checked ``rfun``."""
+    if isinstance(rfun, dict) and "model" not in rfun:
+        return _is_auto(rfun.get(k, "auto"))
+    return _is_auto(rfun)
+
+
 def _check_reducer(value, name):
     """Raise for a value that is not "auto" or a reducer ``reduce`` accepts."""
     if _is_auto(value):
@@ -1334,6 +1344,7 @@ def two_path_step(
         cfun=cfun,
         rfun=analysis[order],
         delta_rfun=feeding[order],
+        auto_analysis=_auto_at(rfun, order),
         feeding_function=feeding_function,
         feeding_params=feeding_params,
         order=order,
@@ -1365,6 +1376,7 @@ def _two_path_step(
     reducers=(),
     previous_communities=None,
     input_elements=0,
+    auto_analysis=False,
     **analysis
 ):
     """
@@ -1383,6 +1395,9 @@ def _two_path_step(
     step's input (the previous order's feeding features); a materialized
     check leaves it out, as its estimate (``_step_gb``) counts the input,
     while a streamed check, whose estimate excludes the inputs, keeps it.
+    ``auto_analysis``: the analysis reducer comes from ``rfun="auto"``; only
+    then may a MemoryError of the analysis step carry the streamed-reducer
+    hint.
     """
     if delta_rfun is None:
         delta_rfun = analysis.get("rfun", "PCA")
@@ -1426,12 +1441,14 @@ def _two_path_step(
                 order, "analysis",
             )
         else:
-            # the hint is given only when following it (a summary as this
-            # order's analysis reducer) would stream this step and leave the
-            # feeding step able to run: absent, streamed, or materialized
-            # but fitting alone; not when the feeding reducer is inherited
-            # from rfun (the hint would change it too)
-            streamable = _streams(
+            # the hint is given only for an analysis reducer from "auto" (an
+            # explicitly given rfun, the original pipeline's included, keeps
+            # the message without it) and only when following it (a summary
+            # as this order's analysis reducer) would stream this step and
+            # leave the feeding step able to run: absent, streamed, or
+            # materialized but fitting alone; not when the feeding reducer
+            # is inherited from rfun (the hint would change it too)
+            streamable = auto_analysis and _streams(
                 "weighted_strength", analysis.get("cfun", isfc),
                 analysis.get("combine", null_combine),
             )
@@ -2077,6 +2094,7 @@ def features(
         x, delta = _two_path_step(
             fed_by,
             delta_rfun=feeding_rfun[k],
+            auto_analysis=_auto_at(rfun, k),
             max_memory_gb=max_memory_gb,
             order=k,
             nan_warned=nan_warned,

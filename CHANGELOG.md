@@ -249,8 +249,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   defaults), for example `{1: {"var": 100}, 2: {"var": 400}}`; orders
   missing from it use the default parameters. A dict without integer keys is
   the parameters of every order, as before; a dict mixing integer and other
-  keys, boolean keys or keys outside `1..order` raise `ValueError`.
-  `two_path_step` takes the parameters of one order and raises `ValueError`
+  keys, boolean keys or keys outside `1..order` raise `ValueError`. A dict
+  whose keys are all integers is read as an order map, so a custom kernel
+  whose own parameters are keyed by integers (previously passed through
+  unchanged) must be wrapped in an order map, for example
+  `{1: params, 2: params}`. `two_path_step` takes the parameters of one order and raises `ValueError`
   for an order map.
 - `tc.two_path_step` (also `timecorr.higher_order.two_path_step`; one order
   of the pipeline) and

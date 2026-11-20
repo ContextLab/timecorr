@@ -1770,7 +1770,10 @@ def features(
         integer keys (or an empty dict) is the parameters of every order; a
         dict that mixes integer and other keys, has boolean keys or keys
         outside ``1..order``, or maps an order to a value that is neither a
-        dict nor None, raises ``ValueError``.  Default:
+        dict nor None, raises ``ValueError``.  A dict whose keys are all
+        integers is always read as an order map, so the parameters of a
+        custom kernel that are keyed by integers must be wrapped in one
+        (for example ``{1: params, 2: params}``).  Default:
         ``gaussian_weights`` with ``weights_params=None`` (its defaults,
         ``gaussian_params``).
     cfun : function

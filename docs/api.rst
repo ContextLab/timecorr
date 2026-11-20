@@ -102,7 +102,11 @@ with the number of communities set by a shift null) and dicts keyed by order.
 In ``features``, ``weights_params`` and ``delta_weights_params`` also accept
 dicts keyed by order (for example ``{1: {"var": 100}, 2: {"var": 400}}``), which
 set each order's analysis or feeding kernel; orders missing from such a dict use
-the default parameters. ``two_path_step`` takes the parameters of one order.
+the default parameters. A dict whose keys are all integers is read as such
+an order map, so the parameters of a custom kernel that are keyed by integers
+must be wrapped in one (for example ``{1: params, 2: params}``); a dict mixing
+integer and other keys, or with boolean keys, raises ``ValueError``.
+``two_path_step`` takes the parameters of one order.
 The default feeding reducer needs at least 4 features, 40 timepoints and as
 many distinct shift-null lags in ``[L, T - L]`` as features. When the
 communities found at a feeding step would emit fewer than 4 columns (at most

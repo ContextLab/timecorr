@@ -46,6 +46,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is a summary) and at `order=1` with `return_delta=True` (the order-1
   feeding reducer is `Communities()`), and in `two_path_step` at every
   order.
+  The `features` docs state that the default `cfun=isfc` correlates each
+  subject's features with the other subjects' (structure shared across
+  subjects) and `cfun=autofc` computes within-subject correlations, with
+  measured recovery of `h` on `simulate_nested` data (12 seeds, 108 nodes,
+  T 1000): from `X[2]`, -.035 +- .029 with `isfc` and .559 +- .022 with
+  `autofc` when the order-1 couplings are drawn per subject
+  (`shared="order2"`), .638 +- .028 and .702 +- .012 when they are shared
+  (`shared="order1"`); from `D[2]`, .199 +- .021 and .293 +- .027.
   `delta_weights_params` without `delta_weights_function` sets the
   parameters of the Gaussian feeding kernel. The decoders are unchanged
   (co-fluctuations on the path that feeds the next level).

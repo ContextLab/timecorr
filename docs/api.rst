@@ -112,6 +112,25 @@ communities; ``delta_rfun="weighted_strength"`` takes any number of features. St
 in blocks of rows of the ``(K, K, T)`` correlation array, so the whole array is
 held only when one block covers all K rows.
 
+The default ``cfun=isfc`` correlates each subject's features with the other
+subjects' and so reflects structure shared across subjects; ``cfun=autofc``
+computes within-subject correlations. On ``simulate_nested`` data (108 nodes,
+T 1000, 6 subjects per call, 12 seeds, other arguments default; mean +-
+standard error, control in parentheses):
+
+========================  ==========  ==============================  ==============================
+data (``shared=``)        ``cfun``    ``X[2]`` score                  ``D[2]`` score
+========================  ==========  ==============================  ==============================
+``"order2"`` (default)    ``isfc``    -.035 +- .029 (.055 +- .019)    .199 +- .021 (.013 +- .015)
+``"order2"``              ``autofc``  .559 +- .022 (-.008 +- .025)    .199 +- .021 (.013 +- .015)
+``"order1"``              ``isfc``    .638 +- .028 (.074 +- .009)     .293 +- .027 (.012 +- .014)
+``"order1"``              ``autofc``  .702 +- .012 (-.008 +- .025)    .293 +- .027 (.012 +- .014)
+========================  ==========  ==============================  ==============================
+
+Under ``shared="order2"`` the order-1 couplings are drawn per subject, and
+``h`` was not recovered from ``X[2]`` with ``isfc``; the feeding features ``D[k]``
+do not depend on ``cfun``.
+
 .. currentmodule:: timecorr
 
 Events

@@ -34,6 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Graph measure `rfun="pagerank_centrality_abs"` (in `reduce`, `timecorr`
+  and as `rfun` or `delta_rfun` in `features`): PageRank (damping 0.85,
+  uniform prior) on the absolute correlations `|r|`. It is defined for
+  every finite matrix, so it never falls back and never warns, unlike
+  `"pagerank_centrality"` on signed correlations. It equals
+  `"pagerank_centrality"` when no weight is negative. Timepoints with a
+  non-finite entry give NaNs. `"pagerank_centrality"` is unchanged.
+
 - Tutorial `docs/tutorial/htfa_network_animations.ipynb`: features of
   orders 1 to 4 (defaults of `features`, with `return_info=True`) of the
   HTFA node weights of the story-listening fMRI data analyzed by Owen,

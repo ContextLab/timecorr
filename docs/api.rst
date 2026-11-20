@@ -326,13 +326,18 @@ Dimensionality reduction and smoothing
 ``reduce`` accepts a hypertools / scikit-learn model name (for example
 ``"PCA"``, ``"FastICA"``, ``"FactorAnalysis"``, ``"IncrementalPCA"``), a dict
 such as ``{"model": "PCA", "params": {"whiten": True}}``, a graph measure
-(``"eigenvector_centrality"``, ``"pagerank_centrality"``, ``"strength"``), a
+(``"eigenvector_centrality"``, ``"pagerank_centrality"``,
+``"pagerank_centrality_abs"``, ``"strength"``), a
 squared-correlation summary (below), or a callable that maps a list of arrays
-to a list of arrays.  PageRank on signed correlations is not always defined:
+to a list of arrays.  PageRank on signed correlations
+(``"pagerank_centrality"``) is not always defined:
 for some valid correlation matrices its linear system is singular.  Those
 timepoints get the minimum-norm least-squares solution when it solves the
 system, and otherwise the uniform vector 1/K, with one ``UserWarning`` per
 ``reduce`` call giving the counts (see ``reduce``).
+``"pagerank_centrality_abs"`` is PageRank on the absolute values ``|r|``: it
+is defined for every finite matrix, never falls back and never warns, and it
+equals ``"pagerank_centrality"`` when no weight is negative.
 
 Squared-correlation summaries
 -----------------------------

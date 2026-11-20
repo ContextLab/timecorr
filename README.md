@@ -166,6 +166,7 @@ pca = tc.timecorr(data, rfun="PCA")                         # 15 correlations ->
 ica = tc.timecorr(data, rfun={"model": "FastICA", "params": {"max_iter": 1000}})
 fa = tc.timecorr(data, rfun="FactorAnalysis")
 pagerank = tc.timecorr(data, rfun="pagerank_centrality")    # one value per feature (node)
+pagerank_abs = tc.timecorr(data, rfun="pagerank_centrality_abs")  # PageRank on |r|
 eigenvector = tc.timecorr(data, rfun="eigenvector_centrality")
 ```
 

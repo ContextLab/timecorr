@@ -252,11 +252,14 @@ def _largest_k(order, T, max_memory_gb, n_subjects=1, return_delta=False,
 
 # named in the MemoryError of a features step that holds its correlations
 # although a summary reducer would stream it
-_STREAM_HINT = (
-    " A summary reducer streams the analysis step in blocks of rows: "
-    "rfun=tc.WeightedStrength(signed=True), or a dict by order such as "
-    "rfun={1: tc.WeightedStrength(signed=True)} for order 1 only."
-)
+def _stream_hint(order):
+    """The MemoryError hint for a materialized analysis step at ``order``."""
+    k = 1 if order is None else int(order)
+    return (
+        " A summary reducer streams the analysis step in blocks of rows: "
+        "rfun=tc.WeightedStrength(signed=True), or a dict by order such as "
+        f"rfun={{{k}: tc.WeightedStrength(signed=True)}} for order {k} only."
+    )
 
 
 def _check_step_memory(d, T, n_subjects, n_outputs, max_memory_gb, order=None,
@@ -1423,14 +1426,25 @@ def _two_path_step(
                 order, "analysis",
             )
         else:
-            # a summary would stream the step when cfun and combine allow it
+            # the hint is given only when following it (a summary as this
+            # order's analysis reducer) would stream this step and leave the
+            # feeding step able to run: absent, streamed, or materialized
+            # but fitting alone; not when the feeding reducer is inherited
+            # from rfun (the hint would change it too)
             streamable = _streams(
                 "weighted_strength", analysis.get("cfun", isfc),
                 analysis.get("combine", null_combine),
             )
+            if streamable and feed:
+                if delta_rfun is analysis_rfun:
+                    streamable = False
+                elif not feeding_streamed:
+                    alone = _step_gb(d, T, S, 1, kernel_feeding)
+                    held_gb = 8 * (retained_m + fits) / _BYTES_PER_GB
+                    streamable = alone + held_gb <= max_memory_gb
             _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
                                kernel_feeding, retained_m + fits,
-                               _STREAM_HINT if streamable else "")
+                               _stream_hint(order) if streamable else "")
         if feed and feeding_streamed:
             _streamed_block_elements(
                 d, T, S,

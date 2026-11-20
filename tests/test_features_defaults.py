@@ -631,3 +631,76 @@ def test_round_off_constant_feeding_columns_do_not_amplify_noise():
     assert np.all(np.ptp(D[2], axis=0) == 0)
     assert np.all(np.isfinite(D[3]))
     np.testing.assert_array_equal(D[3], 0)
+
+
+# the streamed-reducer hint of the MemoryError ------------------------------
+
+HINT = "A summary reducer streams the analysis step"
+
+
+def _hint_subjects(K=120, T=600, S=2, seed=0):
+    rng = np.random.default_rng(seed)
+    return [rng.standard_normal((T, K)) for _ in range(S)]
+
+
+@pytest.mark.parametrize("frac", [0.3, 0.5, 0.7])
+def test_original_pipeline_memory_error_has_no_hint(frac):
+    # K 120, T 600, 2 subjects: the order-1 step is estimated at 0.552 GB.
+    # The co-fluctuation feeding step is materialized, so a summary reducer
+    # on the analysis path would not make the call fit: no hint, and the
+    # message is the one of commit ad50637 (before wave 4), verbatim.
+    budget = 0.552 * frac
+    kw = dict(rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
+    with pytest.raises(MemoryError) as err:
+        tc.features(_hint_subjects(), order=2, max_memory_gb=budget, **kw)
+    fits = {0.3: 63, 0.5: 83, 0.7: 98}[frac]
+    assert str(err.value) == (
+        "The correlation step at order 1 needs about 0.552 GB (120 input "
+        f"features, T=600, 2 subjects), more than max_memory_gb={budget}. The "
+        f"largest number of input features that fits one step is K={fits}. "
+        "Reduce to fewer features (ndims, rfun, delta_rfun) or raise "
+        "max_memory_gb."
+    )
+    # following the hint would indeed not have helped
+    with pytest.raises(MemoryError):
+        tc.features(_hint_subjects(), order=2, max_memory_gb=budget,
+                    rfun=tc.WeightedStrength(signed=True), delta_rfun=None,
+                    delta_weights_function=tc.eye_weights)
+
+
+def test_default_call_memory_error_hint_names_order_one_and_works():
+    # default call: the order-1 PCA step does not fit, the feeding step is
+    # streamed; the hint names order 1 and following it completes
+    subjects = _hint_subjects()
+    with pytest.raises(MemoryError, match=HINT) as err:
+        tc.features(subjects, order=1, max_memory_gb=0.3)
+    assert "rfun={1: tc.WeightedStrength(signed=True)} for order 1 only" in str(err.value)
+    X = quiet(tc.features, subjects, order=1, max_memory_gb=0.3,
+              rfun={1: tc.WeightedStrength(signed=True)})
+    assert X[1][0].shape == (600, 240)
+
+
+def test_memory_error_hint_names_the_failing_order():
+    # order 1 streamed (weighted strength), the feeding path keeps the width
+    # (weighted strength), and the order-2 PCA step does not fit
+    subjects = _hint_subjects()
+    kw = dict(delta_rfun="weighted_strength", max_memory_gb=0.3)
+    with pytest.raises(MemoryError, match=HINT) as err:
+        tc.features(subjects, order=2,
+                    rfun={1: tc.WeightedStrength(signed=True), 2: "PCA"}, **kw)
+    msg = str(err.value)
+    assert "at order 2" in msg
+    assert "rfun={2: tc.WeightedStrength(signed=True)} for order 2 only" in msg
+    X = quiet(tc.features, subjects, order=2,
+              rfun={1: tc.WeightedStrength(signed=True),
+                    2: tc.WeightedStrength(signed=True)}, **kw)
+    assert X[2][0].shape == (600, 240)
+
+
+def test_no_hint_when_the_feeding_reducer_inherits_a_non_summary():
+    # delta_rfun=None takes rfun ("PCA"): the hint would change the feeding
+    # reducer too, so none is given
+    with pytest.raises(MemoryError) as err:
+        tc.features(_hint_subjects(), order=2, max_memory_gb=0.3,
+                    rfun="PCA", delta_rfun=None)
+    assert HINT not in str(err.value)

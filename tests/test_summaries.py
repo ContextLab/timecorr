@@ -1027,6 +1027,24 @@ def test_round_off_snapping_agrees_streamed_and_materialized():
     np.testing.assert_allclose(D[2], mat, rtol=1e-12)
 
 
+@pytest.mark.parametrize("scale", [1e-6, 1.0, 1e6])
+def test_constant_column_rule_does_not_depend_on_the_scale(scale):
+    # a column is constant when its range is at most 1e-9 of its largest
+    # absolute value, whatever its scale: round-off (1e-13 of the values) is
+    # set to the mean and reported, a variation of 1e-6 of the values is kept
+    T = 200
+    rng = np.random.default_rng(0)
+    round_off = scale * 3 * (1 + 1e-13 * rng.standard_normal(T))
+    real = scale * 3 * (1 + 1e-6 * np.sin(2 * np.pi * np.arange(T) / 50))
+    out = np.column_stack([round_off, real, np.zeros(T), np.full(T, scale)])
+    kept = out.copy()
+    with pytest.warns(UserWarning, match="3 output columns are constant"):
+        tc.WeightedStrength()._warn_constant([out])
+    assert np.ptp(out[:, 0]) == 0
+    assert out[0, 0] == pytest.approx(3 * scale, rel=1e-12)
+    np.testing.assert_array_equal(out[:, 1:], kept[:, 1:])
+
+
 # two planted communities of unequal size: centering on the median ---------
 
 

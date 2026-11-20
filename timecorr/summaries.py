@@ -513,7 +513,7 @@ class _Summary:
         UserWarning
             Once per call when some output column is constant over time (for
             example when all weights are 0).  A column whose range over time
-            is nonzero but at most ``1e-9 * max(1, max|column|)`` is
+            is nonzero but at most ``1e-9 * max|column|`` is
             round-off: it is set to its mean exactly and counted in the same
             warning.
         """
@@ -607,8 +607,9 @@ class _Summary:
         outputs is constant over time.
 
         A column of one unit's output counts as constant when its range over
-        time is at most ``_CONSTANT_RTOL * max(1, max|column|)`` with
-        ``_CONSTANT_RTOL = 1e-9``.  A nonzero range within that tolerance is
+        time is at most ``_CONSTANT_RTOL * max|column|`` with
+        ``_CONSTANT_RTOL = 1e-9`` (relative to the column, so the decision
+        does not depend on its scale).  A nonzero range within that tolerance is
         round-off (for example 1e-13 on values of 3 when nearly identical
         input features give identical summaries), and the column is set to
         its mean exactly, so a later order meets exact zero variance rather
@@ -619,7 +620,7 @@ class _Summary:
             if o.shape[0] == 0:
                 continue
             rng = np.ptp(o, axis=0)
-            tol = _CONSTANT_RTOL * np.maximum(1.0, np.max(np.abs(o), axis=0))
+            tol = _CONSTANT_RTOL * np.max(np.abs(o), axis=0)
             snap = (rng > 0) & (rng <= tol)
             if snap.any():
                 o[:, snap] = np.mean(o[:, snap], axis=0)

@@ -155,7 +155,7 @@ changes calls that completed without it: on 4 independent noise features
 (T 100), ``D[1]`` from ``features(x, order=1, return_delta=True)`` had 1
 community column and now has 4 weighted-strength columns, and ``X[2]`` of
 ``features(x, order=2)`` has 8 columns instead of 2. Summary columns whose
-range over time is nonzero but at most ``1e-9 * max(1, max|column|)`` are
+range over time is nonzero but at most ``1e-9 * max|column|`` are
 round-off; they are set to their means exactly and reported by the
 constant-output warning. An explicit ``Communities()`` keeps its
 communities; ``delta_rfun="weighted_strength"`` takes any number of features. Steps reduced by a summary (with

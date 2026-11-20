@@ -104,8 +104,10 @@ dicts keyed by order (for example ``{1: {"var": 100}, 2: {"var": 400}}``), which
 set each order's analysis or feeding kernel; orders missing from such a dict use
 the default parameters. A dict whose keys are all integers is read as such
 an order map, so the parameters of a custom kernel that are keyed by integers
-must be wrapped in one (for example ``{1: params, 2: params}``); a dict mixing
-integer and other keys, or with boolean keys, raises ``ValueError``.
+must be wrapped in one (for example ``{1: params, 2: params}``); only the outer
+dict is examined, and each value is passed to the kernel unchanged. A dict
+mixing integer and other keys, or with boolean keys (Python or NumPy), raises
+``ValueError``.
 ``two_path_step`` takes the parameters of one order.
 The default feeding reducer needs at least 4 features and 40 timepoints. Its
 shift null circularly shifts each column by a lag from the n integers in

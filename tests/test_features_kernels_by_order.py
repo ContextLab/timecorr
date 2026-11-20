@@ -163,10 +163,9 @@ def test_eye_weights_feeding_with_a_map_of_none():
         ({True: {"var": 9}}, "order map"),
         ({1: {"var": 9}, "var": 9}, "order map"),
         ({1: {"var": 9}, False: None}, "order map"),
-        ({1: {2: {"var": 9}}}, "cannot be nested"),
         ({1: 9}, r"must be a dict of kernel parameters or None"),
     ],
-    ids=["zero", "above", "negative", "bool", "mixed", "mixed-bool", "nested", "value"],
+    ids=["zero", "above", "negative", "bool", "mixed", "mixed-bool", "value"],
 )
 def test_order_map_validation(name, value, match):
     x = nested(T=100)
@@ -174,7 +173,16 @@ def test_order_map_validation(name, value, match):
         tc.features(x, order=2, **{name: value})
 
 
-@pytest.mark.parametrize("value", [{True: {"var": 9}}, {1: {"var": 9}, False: None}])
+@pytest.mark.parametrize(
+    "value",
+    [
+        {True: {"var": 9}},
+        {1: {"var": 9}, False: None},
+        {np.bool_(True): {"var": 9}},
+        {1: {"var": 9}, np.bool_(False): None},
+    ],
+    ids=["bool", "mixed-bool", "numpy-bool", "mixed-numpy-bool"],
+)
 def test_boolean_keys_are_refused_as_orders(value):
     x = nested(T=100)
     with pytest.raises(ValueError, match="booleans are not accepted as orders"):
@@ -200,6 +208,61 @@ def test_two_path_step_refuses_an_order_map(name):
     assert "order map" in str(info.value)
     # plain parameters are still accepted
     quiet(two_path_step, x, cfun=tc.autofc, **{name: {"var": 9}})
+
+
+@pytest.mark.parametrize("name", ["weights_params", "delta_weights_params"])
+@pytest.mark.parametrize(
+    "value, match, absent",
+    [
+        ({1: {"var": 9}, "var": 9}, "mixes integer and other keys", "got an order map"),
+        ({True: {"var": 9}}, "boolean keys", "got an order map"),
+        ({np.bool_(True): {"var": 9}}, "boolean keys", "got an order map"),
+        ({1: {"var": 9}, 2: None}, "got an order map", "boolean"),
+    ],
+    ids=["mixed", "bool", "numpy-bool", "order-map"],
+)
+def test_two_path_step_messages_name_the_actual_problem(name, value, match, absent):
+    x = nested(T=100)
+    with pytest.raises(ValueError, match=match) as info:
+        two_path_step(x, **{name: value})
+    assert absent not in str(info.value)
+
+
+def _width_kernel(key):
+    """A boxcar-like kernel whose half-width is ``params[key]``, recording the
+    parameters it is called with."""
+    calls = []
+
+    def kernel(T, params):
+        calls.append(dict(params))
+        h = params[key]
+        t = np.arange(T)
+        return (np.abs(t[:, None] - t[None, :]) <= h).astype(float)
+
+    return kernel, calls
+
+
+def test_custom_kernel_with_integer_keyed_parameters_wrapped_per_order():
+    # only the outer dict is read as an order map: each value is passed to
+    # the kernel unchanged, integer keys included
+    x = nested(T=120)
+    kernel, calls = _width_kernel(0)
+    X = quiet(tc.features, x, order=2, cfun=tc.autofc, weights_function=kernel,
+              weights_params={1: {0: 6}, 2: {0: 10}}, max_memory_gb=None)
+    assert {0: 6} in calls and {0: 10} in calls
+    assert all(c in ({0: 6}, {0: 10}) for c in calls)
+    # the same kernels with string-keyed parameters give the same features
+    named, _ = _width_kernel("h")
+    Xn = quiet(tc.features, x, order=2, cfun=tc.autofc, weights_function=named,
+               weights_params={1: {"h": 6}, 2: {"h": 10}}, max_memory_gb=None)
+    assert len(X) == len(Xn) == 3
+    for k in range(3):
+        assert_identical(X[k], Xn[k])
+    # a value that itself looks like an order map is passed through too
+    kernel2, calls2 = _width_kernel(1)
+    quiet(tc.features, x, order=1, cfun=tc.autofc, weights_function=kernel2,
+          weights_params={1: {1: 6}}, max_memory_gb=None)
+    assert calls2 and all(c == {1: 6} for c in calls2)
 
 
 def test_events_with_kernels_by_order():

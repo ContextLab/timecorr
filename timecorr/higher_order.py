@@ -1059,10 +1059,16 @@ def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfu
 _PARAMS_MAP_EXAMPLE = "{1: {'var': 100}, 2: {'var': 400}}"
 
 
+def _is_bool(key):
+    """True for a Python or NumPy boolean."""
+    return isinstance(key, (bool, np.bool_))
+
+
 def _has_integer_keys(value):
-    """True for a dict with at least one integer key (booleans included)."""
+    """True for a dict with at least one integer key (Python and NumPy
+    booleans included)."""
     return isinstance(value, dict) and any(
-        isinstance(k, numbers.Integral) for k in value
+        isinstance(k, numbers.Integral) or _is_bool(k) for k in value
     )
 
 
@@ -1073,19 +1079,21 @@ def _params_by_order(value, name, max_order):
     orders), after checking its values (a dict of kernel parameters or
     None); None for any other value (kernel parameters for every order: a
     dict without integer keys, an empty dict, None).  A dict that mixes
-    integer and other keys, or has boolean keys, raises ``ValueError``.
+    integer and other keys, or has boolean keys (Python or NumPy), raises
+    ``ValueError``.  Only the outer dict is examined: each value is passed
+    to the kernel unchanged, so a custom kernel's parameters may themselves
+    have integer keys.
     """
     if not _has_integer_keys(value):
         return None
     keys = list(value)
-    if any(isinstance(k, bool) for k in keys):
+    if any(_is_bool(k) for k in keys):
         raise ValueError(
             f"The keys of an order map {name} are integer orders in "
             f"1..{max_order}; booleans are not accepted as orders; got keys "
             f"{sorted(map(repr, keys))}."
         )
-    if not all(isinstance(k, numbers.Integral) and not isinstance(k, bool)
-               for k in keys):
+    if not all(isinstance(k, numbers.Integral) for k in keys):
         raise ValueError(
             f"A dict {name} is either kernel parameters (keys that are not "
             "integers, for example {'var': 100}, used at every order) or an "
@@ -1101,12 +1109,6 @@ def _params_by_order(value, name, max_order):
             f"1..{max_order}; got {sorted(int(k) for k in bad)}."
         )
     for k, v in value.items():
-        if _has_integer_keys(v):
-            raise ValueError(
-                f"{name}[{int(k)}] must be the kernel parameters of order "
-                f"{int(k)}; order maps cannot be nested; got keys "
-                f"{sorted(map(repr, v))}."
-            )
         if v is not None and not isinstance(v, dict):
             raise ValueError(
                 f"{name}[{int(k)}] must be a dict of kernel parameters or None "
@@ -1116,16 +1118,35 @@ def _params_by_order(value, name, max_order):
 
 
 def _refuse_params_map(value, name):
-    """Raise ``ValueError`` for an order map (any dict with integer keys)
-    given to ``two_path_step``, which computes one order."""
-    if _has_integer_keys(value):
+    """Raise ``ValueError`` for a dict with integer keys (Python or NumPy
+    booleans included) given to ``two_path_step``, which computes one order;
+    the message names the dict's actual problem (an order map, boolean keys,
+    or integer keys mixed with other keys)."""
+    if not _has_integer_keys(value):
+        return
+    keys = sorted(map(repr, value))
+    start = (
+        f"two_path_step computes one order, so {name} holds the kernel "
+        "parameters of that order"
+    )
+    if any(_is_bool(k) for k in value):
         raise ValueError(
-            f"two_path_step computes one order, so {name} holds the kernel "
-            "parameters of that order; got an order map (a dict keyed by "
-            f"integer orders, keys {sorted(map(repr, value))}).  Order maps of "
-            f"kernel parameters are accepted by features, which computes every "
-            f"order: tc.features(..., {name}={_PARAMS_MAP_EXAMPLE})."
+            f"{start}; got a dict with boolean keys ({keys}), which is "
+            "neither kernel parameters nor an order map (booleans are not "
+            "accepted as integer keys or orders)."
         )
+    if not all(isinstance(k, numbers.Integral) for k in value):
+        raise ValueError(
+            f"{start}; got a dict that mixes integer and other keys ({keys}), "
+            "which is neither kernel parameters nor an order map (a dict "
+            "whose keys are all integer orders)."
+        )
+    raise ValueError(
+        f"{start}; got an order map (a dict keyed by integer orders, keys "
+        f"{keys}).  Order maps of kernel parameters are accepted by features, "
+        f"which computes every order: tc.features(..., "
+        f"{name}={_PARAMS_MAP_EXAMPLE})."
+    )
 
 
 def _feeding_kernel(weights_function, weights_params, default=None):
@@ -1201,9 +1222,11 @@ def two_path_step(
         ``t`` of the kernel (``weights[t, :]``) is the kernel used at timepoint
         ``t``.  Default: ``gaussian_weights``.
     weights_params : dict or None
-        Parameters of the analysis kernel.  An order map (a dict with
-        integer keys) raises ``ValueError``: order maps of kernel parameters
-        are accepted by ``features``.  Default: None (the kernel's
+        Parameters of the analysis kernel.  A dict with integer keys
+        raises ``ValueError`` (an order map, a dict mixing integer and
+        other keys, or a dict with Python or NumPy boolean keys; the message
+        says which): order maps of kernel parameters are accepted by
+        ``features``.  Default: None (the kernel's
         defaults, for example ``gaussian_params``).
     cfun : function
         Analysis-path correlation function (``isfc``, ``wisfc``, ``autofc``).
@@ -1270,8 +1293,8 @@ def two_path_step(
         ``"var"`` raises ``ValueError``); with a given function,
         None means that function's own defaults; with ``eye_weights``, which
         takes no parameters, they must be None (``ValueError`` otherwise).
-        An order map (a dict with integer keys) raises ``ValueError``, as
-        for ``weights_params``.  Default: None.
+        A dict with integer keys raises ``ValueError``, as for
+        ``weights_params``.  Default: None.
     order : int
         The order this step computes (keyword-only), used to resolve
         ``"auto"`` and order maps (whose keys may be any positive integers
@@ -1322,8 +1345,8 @@ def two_path_step(
         exceeds ``max_memory_gb``.
     ValueError
         If ``order`` is not a positive integer; if ``weights_params`` or
-        ``delta_weights_params`` is a dict with integer keys (an order map;
-        see ``features``); if ``rfun`` or ``delta_rfun``
+        ``delta_weights_params`` is a dict with integer keys (an order map,
+        mixed keys or boolean keys; see ``features``); if ``rfun`` or ``delta_rfun``
         is an unknown model, graph measure or summary name, a dict that is
         neither a model configuration (with a ``'model'`` key) nor an order
         map, or an order map with a key that is not a positive integer or a
@@ -1752,12 +1775,14 @@ def features(
         defaults), for example ``{1: {"var": 100}, 2: {"var": 400}}``;
         orders missing from it use the kernel's defaults.  A dict without
         integer keys (or an empty dict) is the parameters of every order; a
-        dict that mixes integer and other keys, has boolean keys or keys
-        outside ``1..order``, or maps an order to a value that is neither a
-        dict nor None, raises ``ValueError``.  A dict whose keys are all
-        integers is always read as an order map, so the parameters of a
-        custom kernel that are keyed by integers must be wrapped in one
-        (for example ``{1: params, 2: params}``).  Default:
+        dict that mixes integer and other keys, has boolean keys (Python or
+        NumPy) or keys outside ``1..order``, or maps an order to a value that
+        is neither a dict nor None, raises ``ValueError``.  A dict whose keys
+        are all integers is always read as an order map, so the parameters
+        of a custom kernel that are keyed by integers must be wrapped in one
+        (for example ``{1: params, 2: params}``).  Only the outer dict is
+        examined: each value is passed to the kernel unchanged, whatever its
+        keys.  Default:
         ``gaussian_weights`` with ``weights_params=None`` (its defaults,
         ``gaussian_params``).
     cfun : function

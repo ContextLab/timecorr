@@ -426,7 +426,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   level, the signals (separate arrays per subject, also when shared) and
   the node signs (`truth["signs"]`, one row per subject). Node signs are
   drawn per subject (`signs="private"`, the default) or once for every
-  subject (`signs="shared"`). `taus` and `branching` are lists, tuples or
+  subject (`signs="shared"`; the shared signs come from the same random
+  generator, so at the same seed every later private draw differs from the
+  `signs="private"` output). `taus` and `branching` are lists, tuples or
   1-D numpy arrays of positive integers; other types (0-d arrays, sets,
   strings, ranges) raise `ValueError`.
 - `tests/test_nested_recovery.py`: decoding of `h` from order-2 features

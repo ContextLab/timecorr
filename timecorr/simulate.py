@@ -1308,8 +1308,12 @@ def simulate_hierarchy(
         ``"private"``: each subject draws its own node signs ``e`` (the
         output is the same as without this option).  ``"shared"``: one set
         of node signs, drawn after the shared signals and before the
-        subjects' series, is used by every subject.  Default:
-        ``"private"``.
+        subjects' series, is used by every subject.  The shared signs are
+        drawn from the same generator, so at the same seed every draw after
+        them (each subject's private ``u``, ``v``, ``f`` and ``z``) differs
+        from the ``"private"`` output: only the shared signals are the
+        same, and the two settings are not paired draws of the subjects'
+        series.  Default: ``"private"``.
 
     Returns
     -------

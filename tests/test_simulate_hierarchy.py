@@ -307,7 +307,9 @@ def _sibling_statistics(truth, windows):
 #   level 2 siblings .617 +- .033 (min .566), non-siblings -.044 +- .075
 #     (max |.167|)
 #   node variance (windows of 100) vs the top signal, mean over the 4 top
-#     groups: .009 +- .072 (max |.126|)
+#     groups: .009 +- .072 (max |.126|); per group (32 values) mean .009,
+#     sd .123 (60 windows: about 1 / sqrt(60) = .13 for independent
+#     series), max |r| .306; mean |r| over the 4 groups at most .126
 # The assertions below use other seeds (100, 101).
 @pytest.mark.parametrize("seed", [100, 101])
 def test_siblings_are_coupled_by_their_parents_signal(seed):
@@ -330,6 +332,20 @@ def test_node_variance_does_not_follow_the_top_signal(seed):
     group = truth["groups"][-1]
     r = [np.corrcoef(variance[:, group == t].mean(1), top[:, t])[0, 1]
          for t in range(top.shape[1])]
-    assert abs(np.mean(r)) < 0.25, r
+    # each group, not only their mean (opposite dependencies would cancel)
+    assert np.max(np.abs(r)) < 0.4, r
+    assert np.mean(np.abs(r)) < 0.2, r
     # variance 1 by construction
     assert abs(x.var() - 1) < 0.02
+
+
+@pytest.mark.parametrize("shared", ["top", "none"])
+def test_shared_signs_change_the_private_draws_at_the_same_seed(shared):
+    # documented: the shared signs are drawn from the same generator before
+    # the subjects' series, so the private draws differ from signs="private"
+    data_p, truth_p = small(shared=shared, signs="private")
+    data_s, truth_s = small(shared=shared, signs="shared")
+    if shared == "top":
+        np.testing.assert_array_equal(truth_p["top"], truth_s["top"])
+    assert not np.array_equal(truth_p["signals"][0][0], truth_s["signals"][0][0])
+    assert not np.array_equal(data_p[0], data_s[0])

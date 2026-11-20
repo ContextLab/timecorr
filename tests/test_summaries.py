@@ -892,7 +892,7 @@ def _within(labels, g):
     return (labels[iu[0]] == g) & (labels[iu[1]] == g), iu
 
 
-@pytest.mark.parametrize("seed", [0, 1])
+@pytest.mark.parametrize("seed", [10, 11])
 def test_centering_with_a_large_community(seed):
     # 18 + 6 columns: 153 of the 276 pairs are within the large community,
     # so the median pair weight m is a within-community weight of the large
@@ -901,7 +901,10 @@ def test_centering_with_a_large_community(seed):
     # 10-12% of its mean pair weight; when the small community is weaker
     # (loadings 0.4 and 0.2) every clipped weight of the small community is
     # 0 and the automatic Communities count splits the large community
-    # (6 to 8 communities); with 12 + 12 columns no within weight is 0
+    # (6 to 8 communities); with 12 + 12 columns no within weight is 0.
+    # The assertions use seeds 10 and 11, not used for those measurements
+    # (there: 16% of the clipped weights 0, means 12-13%; 6 and 7
+    # communities)
     for rhos in ((0.3, 0.3), (0.4, 0.2)):
         data, labels = _unequal_communities(rhos, seed)
         ws, comm = tc.WeightedStrength(), tc.Communities()

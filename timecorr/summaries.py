@@ -50,7 +50,7 @@ __all__ = ["WeightedStrength", "Communities"]
 
 # relative tolerance below which an output column's range over time is
 # round-off (see ``_Summary._warn_constant``)
-CONSTANT_RTOL = 1e-9
+_CONSTANT_RTOL = 1e-9
 
 def _new_state(K, T, signed):
     """
@@ -476,8 +476,8 @@ class _Summary:
         outputs is constant over time.
 
         A column of one unit's output counts as constant when its range over
-        time is at most ``CONSTANT_RTOL * max(1, max|column|)`` with
-        ``CONSTANT_RTOL = 1e-9``.  A nonzero range within that tolerance is
+        time is at most ``_CONSTANT_RTOL * max(1, max|column|)`` with
+        ``_CONSTANT_RTOL = 1e-9``.  A nonzero range within that tolerance is
         round-off (for example 1e-13 on values of 3 when nearly identical
         input features give identical summaries), and the column is set to
         its mean exactly, so a later order meets exact zero variance rather
@@ -488,7 +488,7 @@ class _Summary:
             if o.shape[0] == 0:
                 continue
             rng = np.ptp(o, axis=0)
-            tol = CONSTANT_RTOL * np.maximum(1.0, np.max(np.abs(o), axis=0))
+            tol = _CONSTANT_RTOL * np.maximum(1.0, np.max(np.abs(o), axis=0))
             snap = (rng > 0) & (rng <= tol)
             if snap.any():
                 o[:, snap] = np.mean(o[:, snap], axis=0)

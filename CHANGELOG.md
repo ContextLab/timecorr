@@ -33,9 +33,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   most half the step's input features; one when no eigenvalue exceeds the
   shift null), the step emits `WeightedStrength(split=False, signed=False,
   center=True)` of the same correlations instead (one column per input
-  feature, from the same pair weights), with one `UserWarning` per such
-  order, so the feeding width never drops below 4 and, for example, 4 to 7
-  input features complete at `order=3`. An explicit `Communities()` keeps
+  feature, from the same pair weights), so the feeding width never drops below 4 and, for example, 4 to 7
+  input features complete at `order=3`. A `UserWarning` (one per order) is
+  issued only when no eigenvalue exceeds the shift null; `features(...,
+  return_info=True)` returns `(result, info)` with one dict per computed
+  step and path (reducer requested and used, input and output widths, and
+  for default feeding steps the community columns, exceedances, threshold
+  and fallback reason). An explicit `Communities()` keeps
   its communities (and its "no community structure" warning). `ndims` with the defaults raises
   `ValueError` in `features` at `order >= 2` (the order-2 analysis reducer
   is a summary) and at `order=1` with `return_delta=True` (the order-1

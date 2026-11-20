@@ -195,6 +195,12 @@ def test_memory_estimate_counts_the_kernel_feeding_path(cfun):
 # second review, F2: the default pipeline after community compression ---------
 
 
+def _feeding(info, k):
+    """The feeding entry of order k in features' return_info."""
+    (entry,) = [e for e in info if e["order"] == k and e["path"] == "feeding"]
+    return entry
+
+
 def _auto_warning(message, k):
     return message.startswith(f"Automatic feeding reducer at order {k}")
 
@@ -210,14 +216,19 @@ def _alternatives_named(message):
 def test_default_feeding_after_community_compression_keeps_the_width(kw):
     # 4 features: communities would keep at most 4 // 2 = 2 columns, so every
     # automatic feeding step emits weighted strength of its 4 input features
-    # instead, with a warning naming the order, and the run completes
+    # instead (recorded in info; a warning only where the shift null found
+    # no structure), and the run completes
     x = np.random.default_rng(0).normal(size=(100, 4))
     with warnings.catch_warnings(record=True) as rec:
         warnings.simplefilter("always")
-        out = tc.features(x, **kw)
+        out, info = tc.features(x, return_info=True, **kw)
     fed = range(1, kw["order"] + (1 if kw.get("return_delta") else 0))
     for k in fed:
-        assert sum(_auto_warning(str(r.message), k) for r in rec) == 1, k
+        entry = _feeding(info, k)
+        assert entry["fallback"] in ("too_few_community_columns", "no_null_exceedance")
+        assert entry["output_width"] == 4
+        warned = sum(_auto_warning(str(r.message), k) for r in rec)
+        assert warned == (entry["fallback"] == "no_null_exceedance"), k
     if kw.get("return_delta"):
         X, D = out
         assert [d.shape for d in D] == [(100, 4)] * 3
@@ -296,16 +307,20 @@ def test_four_to_seven_features_complete_with_the_width_kept(K):
     # communities can emit at most K // 2 <= 3 columns, so every automatic
     # feeding step falls back to weighted strength of its K inputs
     x = noise(2, (100, K), K)
-    X, messages = recorded(tc.features, x, order=3)
+    (X, info), messages = recorded(tc.features, x, order=3, return_info=True)
     assert X[3][0].shape == (100, 2 * K)
     for k in (1, 2):
+        entry = _feeding(info, k)
+        assert entry["fallback"] is not None and entry["n_communities"] < 4
+        assert (entry["input_width"], entry["output_width"]) == (K, K)
         found = auto_messages(messages, k)
-        assert len(found) == 1, (k, messages)
-        assert found[0].endswith(f"uses WeightedStrength on its {K} input features.")
+        assert len(found) == (entry["fallback"] == "no_null_exceedance"), (k, messages)
+        for m in found:
+            assert m.endswith(f"uses WeightedStrength on its {K} input features.")
     assert not auto_messages(messages, 3)  # the order-3 feeding step is not computed
+    assert not [e for e in info if e["order"] == 3 and e["path"] == "feeding"]
     (X, D), messages = recorded(tc.features, x, order=2, return_delta=True)
     assert [d[0].shape for d in D] == [(100, K)] * 3
-    assert [len(auto_messages(messages, k)) for k in (1, 2)] == [1, 1]
 
 
 @pytest.mark.parametrize("modules, columns", [((1, 2, 6), 2), ((1, 3, 6), 3)],
@@ -319,13 +334,13 @@ def test_two_or_three_community_columns_fall_back(modules, columns, feeding):
     data = nested_modules(*modules)
     K = data[0].shape[1]
     kw = {} if feeding == "gaussian" else dict(delta_weights_function=tc.eye_weights)
-    (X, D), messages = recorded(tc.features, data, order=1, return_delta=True,
-                                **SETTINGS, **kw)
-    found = auto_messages(messages, 1)
-    assert found == [
-        f"Automatic feeding reducer at order 1 found {columns} community columns; "
-        f"fewer than 4, so this order uses WeightedStrength on its {K} input features."
-    ]
+    ((X, D), info), messages = recorded(tc.features, data, order=1, return_delta=True,
+                                        return_info=True, **SETTINGS, **kw)
+    # communities were found: the fallback is silent and recorded in info
+    assert auto_messages(messages, 1) == []
+    entry = _feeding(info, 1)
+    assert entry["fallback"] == "too_few_community_columns"
+    assert entry["n_communities"] == columns and entry["n_exceed"] >= 1
     if feeding == "gaussian":
         corrs = tc.timecorr(data, cfun=tc.autofc, rfun=None, **GAUSS25)
     else:
@@ -345,11 +360,12 @@ def test_one_community_column_after_an_exceedance_falls_back():
     # order 2 of 4 noise features: one eigenvalue above the null gives two
     # clusters, one of them a single node, so the communities emit 1 column
     x = np.random.default_rng(0).normal(size=(100, 4))
-    (X, D), messages = recorded(tc.features, x, order=2, return_delta=True)
-    assert auto_messages(messages, 2) == [
-        "Automatic feeding reducer at order 2 found 1 community column; fewer than "
-        "4, so this order uses WeightedStrength on its 4 input features."
-    ]
+    ((X, D), info), messages = recorded(tc.features, x, order=2, return_delta=True,
+                                        return_info=True)
+    entry = _feeding(info, 2)
+    assert entry["fallback"] == "too_few_community_columns"
+    assert entry["n_communities"] == 1 and entry["n_exceed"] >= 1
+    assert auto_messages(messages, 2) == []
     corrs = tc.timecorr(D[1], cfun=tc.autofc, rfun=None, **GAUSS25)
     assert_close(D[2], quiet(tc.WeightedStrength(**FALLBACK), corrs))
 
@@ -359,13 +375,17 @@ def test_no_exceedance_on_noise_falls_back():
     # reducer says so and keeps the width, without the explicit reducer's
     # "one community" warning
     x = noise(2, (200, 10), 7)  # no exceedance with this seed (5 of seeds 0-7)
-    (X, D), messages = recorded(tc.features, x, order=1, return_delta=True)
+    ((X, D), info), messages = recorded(tc.features, x, order=1, return_delta=True,
+                                        return_info=True)
     found = auto_messages(messages, 1)
     assert len(found) == 1
     assert found[0].startswith("Automatic feeding reducer at order 1: the shift null "
                                "found no structure (no eigenvalue above null_threshold=")
-    assert found[0].endswith("so communities would give 1 column; fewer than 4, so "
-                             "this order uses WeightedStrength on its 10 input features.")
+    assert found[0].endswith("); this order uses WeightedStrength on its 10 input "
+                             "features.")
+    entry = _feeding(info, 1)
+    assert entry["fallback"] == "no_null_exceedance"
+    assert entry["n_exceed"] == 0 and entry["n_communities"] == 1
     assert not any("no community structure" in m for m in messages)
     assert D[1][0].shape == (200, 10)
     corrs = tc.timecorr(x, cfun=tc.autofc, rfun=None, **GAUSS25)
@@ -385,13 +405,16 @@ def test_four_or_more_community_columns_are_unchanged(modules):
     # at least 4 columns: the automatic reducer emits the communities,
     # identical to an explicit Communities(), without the fallback warning
     data = nested_modules(*modules)
-    (X, D), messages = recorded(tc.features, data, order=1, return_delta=True,
-                                **SETTINGS)
+    ((X, D), info), messages = recorded(tc.features, data, order=1, return_delta=True,
+                                        return_info=True, **SETTINGS)
     assert not auto_messages(messages, 1)
     comm = tc.Communities()
     _, D_explicit = quiet(tc.features, data, order=1, return_delta=True,
                           delta_rfun=comm, **SETTINGS)
     assert comm.fits_[0]["n"] >= 4
+    entry = _feeding(info, 1)
+    assert entry["fallback"] is None and entry["n_communities"] == comm.fits_[0]["n"]
+    assert entry["effective"] == repr(tc.Communities())
     assert_identical(D[1], D_explicit[1])
 
 
@@ -428,12 +451,18 @@ def test_original_input_errors_stay(shape, match):
     assert tc.features(x, order=1, weights_params={"var": 10})[1][0].shape[0] == shape[0]
 
 
-def test_one_fallback_warning_per_order_not_per_subject():
-    x = [np.random.default_rng(s).normal(size=(100, 5)) for s in range(4)]
-    _, messages = recorded(tc.features, x, order=3, return_delta=True)
-    assert [len(auto_messages(messages, k)) for k in (1, 2, 3)] == [1, 1, 1]
-    _, messages = recorded(two_path_step, x, order=2)
-    assert len(auto_messages(messages, 2)) == 1
+def test_one_no_exceedance_warning_per_order_not_per_subject():
+    # 4 subjects; the warning is issued once per order whose shift null
+    # found no structure, and never otherwise
+    x = noise(4, (200, 10), 7)
+    (_, info), messages = recorded(tc.features, x, order=3, return_delta=True,
+                                   return_info=True)
+    reasons = [_feeding(info, k)["fallback"] for k in (1, 2, 3)]
+    assert "no_null_exceedance" in reasons
+    assert [len(auto_messages(messages, k)) for k in (1, 2, 3)] == [
+        int(r == "no_null_exceedance") for r in reasons]
+    _, messages = recorded(two_path_step, x)
+    assert len(auto_messages(messages, 1)) == int(reasons[0] == "no_null_exceedance")
 
 
 def test_prefix_consistency_across_requested_orders():
@@ -474,6 +503,83 @@ def test_two_nodes_give_identical_weighted_strength_columns():
         assert d.shape == (100, 2)
         np.testing.assert_allclose(d[:, 0], d[:, 1], rtol=1e-12, atol=0)
         assert np.ptp(d[:, 0]) > 0
+
+
+# return_info ------------------------------------------------------------------
+
+ANALYSIS_KEYS = {"order", "path", "requested", "effective", "input_width", "output_width"}
+AUTO_KEYS = ANALYSIS_KEYS | {"n_communities", "n_exceed", "null_threshold", "n_null",
+                             "fallback"}
+
+
+def _no_arrays(info):
+    for entry in info:
+        for key, value in entry.items():
+            assert isinstance(key, str)
+            assert value is None or type(value) in (int, float, str), (key, value)
+
+
+def test_return_info_shapes_of_the_return():
+    x = noise(2, (100, 6), 3)
+    X = quiet(tc.features, x, order=2)
+    X_i, info = quiet(tc.features, x, order=2, return_info=True)
+    for a, b in zip(X, X_i):
+        assert_identical(a, b)
+    (X_d, D), info_d = quiet(tc.features, x, order=2, return_delta=True,
+                             return_info=True)
+    assert len(X_d) == 3 and len(D) == 3
+    # return_delta adds the feeding entry of the last order
+    assert [(e["order"], e["path"]) for e in info] == [
+        (1, "analysis"), (1, "feeding"), (2, "analysis")]
+    assert [(e["order"], e["path"]) for e in info_d] == [
+        (1, "analysis"), (1, "feeding"), (2, "analysis"), (2, "feeding")]
+    X0, info0 = tc.features(x, order=0, return_info=True)
+    assert info0 == [] and len(X0) == 1
+    _no_arrays(info_d)
+
+
+def test_return_info_content():
+    data = nested_modules(2, 2, 6)  # 24 nodes in 4 modules
+    ws = tc.WeightedStrength(signed=True)
+    (X, D), info = quiet(tc.features, data, order=2, return_delta=True,
+                         return_info=True, rfun={2: ws}, **SETTINGS)
+    _no_arrays(info)
+    a1, f1, a2, f2 = info
+    assert set(a1) == ANALYSIS_KEYS and set(a2) == ANALYSIS_KEYS
+    assert set(f1) == AUTO_KEYS and set(f2) == AUTO_KEYS
+    assert a1 == {"order": 1, "path": "analysis", "requested": "auto",
+                  "effective": "PCA", "input_width": 24, "output_width": 24}
+    assert a2["requested"] == repr(ws) and a2["effective"] == repr(ws)
+    assert (a2["input_width"], a2["output_width"]) == (D[1][0].shape[1], X[2][0].shape[1])
+    assert f1["requested"] == "auto" and f1["input_width"] == 24
+    assert f1["output_width"] == D[1][0].shape[1]
+    assert f1["n_null"] == 5 and f1["null_threshold"] > 0
+    assert f2["input_width"] == D[1][0].shape[1] and f2["output_width"] == D[2][0].shape[1]
+    # explicit reducers: no automatic-reducer keys
+    (_, D), info = quiet(tc.features, data, order=1, return_delta=True, return_info=True,
+                         rfun=None, delta_rfun="weighted_strength", **SETTINGS)
+    assert info[0]["requested"] is None and info[0]["effective"] is None
+    assert info[0]["output_width"] == 24 * 25 // 2
+    assert set(info[1]) == ANALYSIS_KEYS
+    assert info[1]["requested"] == "weighted_strength"
+
+
+def test_return_info_records_the_three_fallback_values():
+    found = {}
+    for data in (nested_modules(2, 2, 6), nested_modules(1, 2, 6), noise(2, (200, 10), 7)):
+        (_, D), info = quiet(tc.features, data, order=1, return_delta=True,
+                             return_info=True, **SETTINGS)
+        entry = _feeding(info, 1)
+        found[entry["fallback"]] = entry
+        if entry["fallback"] is None:
+            assert entry["output_width"] == entry["n_communities"] >= 4
+        else:
+            assert entry["output_width"] == entry["input_width"]
+            assert entry["effective"] == repr(tc.WeightedStrength(**FALLBACK))
+    assert set(found) == {None, "too_few_community_columns", "no_null_exceedance"}
+    assert found["no_null_exceedance"]["n_exceed"] == 0
+    assert found["too_few_community_columns"]["n_exceed"] >= 1
+    assert found["too_few_community_columns"]["n_communities"] == 2
 
 
 # wave 4, D6: the MemoryError of a default order-1 step names streaming --------

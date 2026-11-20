@@ -103,8 +103,9 @@ many distinct shift-null lags in ``[L, T - L]`` as features. When the
 communities found at a feeding step would emit fewer than 4 columns (at most
 half its input features; one when the shift null finds no structure), that step
 emits ``WeightedStrength(split=False, signed=False, center=True)`` of the same
-correlations instead (one column per input feature), with a ``UserWarning``, so
-the feeding width never drops below 4. An explicit ``Communities()`` keeps its
+correlations instead (one column per input feature), so the feeding width never
+drops below 4; a ``UserWarning`` is issued only when the shift null found no
+structure, and ``return_info=True`` records every fallback. An explicit ``Communities()`` keeps its
 communities; ``delta_rfun="weighted_strength"`` takes any number of features. Steps reduced by a summary (with
 ``null_combine`` and ``cfun`` ``autofc``, ``isfc`` or ``wisfc``) are computed
 in blocks of rows of the ``(K, K, T)`` correlation array, so the whole array is

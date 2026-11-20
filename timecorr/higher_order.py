@@ -29,7 +29,8 @@ features and 40 timepoints (``ValueError`` otherwise);
 timepoints.  When the communities of a default feeding step would emit
 fewer than 4 columns, that step emits ``WeightedStrength(split=False,
 signed=False, center=True)`` of the same correlations instead (one column
-per input feature), with a ``UserWarning``.  The original two-path pipeline (Owen, Chang & Manning, 2021,
+per input feature); a ``UserWarning`` is issued only when the shift null
+found no structure.  The original two-path pipeline (Owen, Chang & Manning, 2021,
 Fig. 10) is ``rfun="PCA", delta_rfun=None, delta_weights_function=eye_weights``.
 
 A step whose reducer is a squared-correlation summary (``WeightedStrength``
@@ -80,6 +81,7 @@ from .summaries import (
     _streamed_summary,
     _Summary,
     _auto_emitter,
+    _auto_fallback,
 )
 from .timecorr import _event_kernels, _restricted, _shaped_kernel, timecorr
 
@@ -1140,7 +1142,8 @@ def two_path_step(
         ``Communities()`` (at least 4 features and 40 timepoints; when its
         communities would emit fewer than 4 columns, the step emits
         unsigned weighted strength of the same correlations instead, with a
-        ``UserWarning``; see ``features``), None is the same as ``rfun`` at
+        ``UserWarning`` only when the shift null found no structure; see
+        ``features``), None is the same as ``rfun`` at
         this order.  Default: "auto".
     ndims : int, optional
         Output width of model-based reduction (a model name or dict) on
@@ -1229,8 +1232,8 @@ def two_path_step(
     UserWarning
         From the summaries (see ``WeightedStrength`` and ``Communities``).
     UserWarning
-        When the default feeding reducer's communities would emit fewer than
-        4 columns and the step emits weighted strength instead (see
+        When the default feeding reducer found no eigenvalue above the shift
+        null and the step emits weighted strength instead (see
         ``features``).
 
     Raises
@@ -1471,6 +1474,63 @@ def _two_path_step(
     return X_next, D_next
 
 
+def _requested(value, k):
+    """The reducer given for order ``k`` (an order map's value, or ``"auto"``)."""
+    if isinstance(value, dict) and "model" not in value:
+        return value.get(k, "auto")
+    return value
+
+
+def _describe(reducer):
+    """A reducer as a string (None stays None), without arrays."""
+    if reducer is None or isinstance(reducer, str):
+        return reducer
+    if isinstance(reducer, _Summary):
+        return repr(reducer)
+    if isinstance(reducer, dict):
+        return repr({key: reducer[key] for key in sorted(reducer, key=str)})
+    return getattr(reducer, "__name__", None) or repr(reducer)
+
+
+def _width(out):
+    """Number of columns of an output (an array or a list of arrays)."""
+    return int(np.asarray(_as_list(out)[0]).shape[1])
+
+
+def _step_info(k, inputs, x, delta, analysis_rfun, feeding_rfun, requested,
+               requested_delta):
+    """
+    The ``return_info`` entries of order ``k`` of ``features``: one dict for
+    the analysis path and, when it was computed, one for the feeding path.
+    """
+    d = _width(inputs)
+    entries = [{
+        "order": k, "path": "analysis", "requested": _describe(requested),
+        "effective": _describe(analysis_rfun), "input_width": d,
+        "output_width": _width(x),
+    }]
+    if delta is None:
+        return entries
+    entry = {
+        "order": k, "path": "feeding", "requested": _describe(requested_delta),
+        "effective": _describe(feeding_rfun), "input_width": d,
+        "output_width": _width(delta),
+    }
+    if getattr(feeding_rfun, "_from_auto", False):
+        fit = feeding_rfun.fits_[-1]
+        if fit["fallback"] is not None:
+            entry["effective"] = _describe(_auto_fallback())
+        entry.update(
+            n_communities=int(fit["n_columns"]),
+            n_exceed=int(fit["n_exceed"]),
+            null_threshold=float(fit["null_threshold"]),
+            n_null=int(fit["n_null"]),
+            fallback=fit["fallback"],
+        )
+    entries.append(entry)
+    return entries
+
+
 def _check_events_order_zero(events, T, n_subjects, events_params):
     """
     Check ``events`` / ``events_params`` for ``features(order=0)``, which has no
@@ -1509,6 +1569,7 @@ def features(
     events_params=None,
     delta_weights_function=None,
     delta_weights_params=None,
+    return_info=False,
 ):
     """
     Compute features of every order from 0 to ``order`` with the two-path pipeline.
@@ -1619,8 +1680,9 @@ def features(
         eigenvalue exceeds the shift null, which gives one community), it
         emits ``WeightedStrength(split=False, signed=False, center=True)``
         of the same correlations (from the same pair weights; no second
-        null), one column per input feature, with one ``UserWarning`` per
-        such order; the feeding width then stays at least 4 (for example
+        null), one column per input feature (recorded in ``return_info``;
+        one ``UserWarning`` per order only when no eigenvalue exceeds the
+        shift null); the feeding width then stays at least 4 (for example
         with 4 to 7 input features, every default feeding step emits
         weighted strength).  An explicit ``Communities()`` or
         ``"communities"`` keeps its communities whatever their number.
@@ -1720,6 +1782,22 @@ def features(
         given function, None means that function's own
         defaults; with ``eye_weights``, which takes no parameters, they must
         be None (``ValueError`` otherwise).  Default: None.
+    return_info : bool
+        If True (keyword-only), return ``(result, info)``, where ``result``
+        is what the call returns otherwise (``X``, or ``(X, D)`` with
+        ``return_delta=True``) and ``info`` is a list with one dict per
+        computed step and path, in the order computed: ``"order"``,
+        ``"path"`` (``"analysis"`` or ``"feeding"``), ``"requested"`` (the
+        reducer given for that order and path, for example ``"auto"``;
+        objects as their ``repr``, functions by name), ``"effective"`` (the
+        reducer that produced the output, as a string; None when
+        unreduced), ``"input_width"`` and ``"output_width"`` (numbers of
+        columns).  Default feeding steps (``delta_rfun="auto"``) also have
+        ``"n_communities"`` (the columns the candidate communities emit),
+        ``"n_exceed"`` (eigenvalues above the shift-null threshold),
+        ``"null_threshold"``, ``"n_null"`` and ``"fallback"`` (None,
+        ``"too_few_community_columns"`` or ``"no_null_exceedance"``).  No
+        arrays.  Default: False.
 
     Returns
     -------
@@ -1730,6 +1808,9 @@ def features(
     D : list
         Only with ``return_delta=True``: ``[D_0, ..., D_order]``, with the same
         container types (never combined across subjects).
+    info : list of dict
+        Only with ``return_info=True`` (see ``return_info``); the call then
+        returns ``(X, info)`` or ``((X, D), info)``.
 
     Warns
     -----
@@ -1754,10 +1835,10 @@ def features(
         ``WeightedStrength``), or output columns constant over time.
     UserWarning
         Once per order whose default feeding step (``delta_rfun="auto"``)
-        emits weighted strength because its communities would emit fewer
-        than 4 columns; the message gives the number of community columns
-        (or says that the shift null found no structure) and the number of
-        input features.
+        found no eigenvalue above the shift null and so emits weighted
+        strength; the message gives the threshold and the number of input
+        features.  Communities that were found but emit fewer than 4 columns
+        fall back without a warning (see ``return_info``).
 
     Raises
     ------
@@ -1953,6 +2034,7 @@ def features(
         if isinstance(r, _Summary)
     )
     nan_warned = [False]  # one NaN-filling warning per call
+    info = []  # with return_info: one dict per computed step and path
     previous_communities = None  # communities found by the previous feeding step
     for k in orders:
         # the outputs kept so far (each array once; the input data are the
@@ -1993,6 +2075,11 @@ def features(
             if isinstance(previous, Communities) and previous.fits_
             and not getattr(previous, "_from_auto", False) else None
         )
+        if return_info:
+            info.extend(_step_info(
+                k, fed_by, x, delta, analysis_rfun[k], feeding_rfun[k],
+                _requested(rfun, k), _requested(delta_rfun, k),
+            ))
         if delta is not None:
             fed_by = delta
             if return_delta:
@@ -2001,6 +2088,7 @@ def features(
     if single:
         X = [x[0] if isinstance(x, list) else x for x in X]
         D = [d[0] for d in D]
-    if return_delta:
-        return X, D
-    return X
+    result = (X, D) if return_delta else X
+    if return_info:
+        return result, info
+    return result

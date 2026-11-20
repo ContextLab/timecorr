@@ -28,8 +28,9 @@ features and 40 timepoints (``ValueError`` otherwise);
 ``delta_rfun="weighted_strength"`` takes any number of features and
 timepoints.  When the communities of a default feeding step would emit
 fewer than 4 columns, that step emits ``WeightedStrength(split=False,
-signed=False, center=True)`` of the same correlations instead (one column
-per input feature); a ``UserWarning`` is issued only when the shift null
+signed=False, center=False)`` of the same correlations instead (one column
+per input feature; the pair weights are used as they are, without median
+clipping); a ``UserWarning`` is issued only when the shift null
 found no structure.  The original two-path pipeline (Owen, Chang & Manning, 2021,
 Fig. 10) is ``rfun="PCA", delta_rfun=None, delta_weights_function=eye_weights``.
 
@@ -1678,9 +1679,9 @@ def features(
         columns, the step emits the communities, as an explicit
         ``Communities()`` does.  With fewer (including the case where no
         eigenvalue exceeds the shift null, which gives one community), it
-        emits ``WeightedStrength(split=False, signed=False, center=True)``
-        of the same correlations (from the same pair weights; no second
-        null), one column per input feature (recorded in ``return_info``;
+        emits ``WeightedStrength(split=False, signed=False, center=False)``
+        of the same correlations (from the same pair weights, used as
+        they are, without median clipping; no second null), one column per input feature (recorded in ``return_info``;
         one ``UserWarning`` per order only when no eigenvalue exceeds the
         shift null); the feeding width then stays at least 4 (for example
         with 4 to 7 input features, every default feeding step emits

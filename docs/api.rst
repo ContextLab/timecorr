@@ -102,8 +102,9 @@ The default feeding reducer needs at least 4 features, 40 timepoints and as
 many distinct shift-null lags in ``[L, T - L]`` as features. When the
 communities found at a feeding step would emit fewer than 4 columns (at most
 half its input features; one when the shift null finds no structure), that step
-emits ``WeightedStrength(split=False, signed=False, center=True)`` of the same
-correlations instead (one column per input feature), so the feeding width never
+emits ``WeightedStrength(split=False, signed=False, center=False)`` of the same
+correlations instead (one column per input feature; uncentered pair weights,
+without median clipping), so the feeding width never
 drops below 4; a ``UserWarning`` is issued only when the shift null found no
 structure, and ``return_info=True`` records every fallback. An explicit ``Communities()`` keeps its
 communities; ``delta_rfun="weighted_strength"`` takes any number of features. Steps reduced by a summary (with

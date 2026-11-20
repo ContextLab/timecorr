@@ -800,7 +800,7 @@ _AUTO_MIN_COLUMNS = 4
 
 def _auto_fallback():
     """The summary an automatic feeding step emits when communities are too few."""
-    return WeightedStrength(split=False, signed=False, center=True)
+    return WeightedStrength(split=False, signed=False, center=False)
 
 
 def _auto_emitter(summary, fit, K, order=None):
@@ -812,7 +812,7 @@ def _auto_emitter(summary, fit, K, order=None):
     marked ``_from_auto``), ``summary`` itself.  For the automatic feeding
     reducer: ``summary`` when its communities emit at least
     ``_AUTO_MIN_COLUMNS`` columns; otherwise ``_auto_fallback()``, which
-    emits from the same fit (its pair weights; no second null).  A
+    emits from the same fit (its pair weights, uncentered; no second null).  A
     ``UserWarning`` is issued only when no eigenvalue exceeded the shift
     null (one community); communities that emit fewer than 4 columns fall
     back without a warning.  The record gains ``"n_columns"`` (the columns the

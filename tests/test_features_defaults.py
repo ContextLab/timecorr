@@ -265,7 +265,7 @@ def test_default_feeding_needs_k_distinct_shift_lags():
 
 # wave 4, D1: the automatic feeding reducer keeps the width -------------------
 
-FALLBACK = dict(split=False, signed=False, center=True)
+FALLBACK = dict(split=False, signed=False, center=False)
 GAUSS25 = dict(weights_function=tc.gaussian_weights, weights_params={"var": 25})
 
 
@@ -357,17 +357,17 @@ def test_two_or_three_community_columns_fall_back(modules, columns, feeding):
 
 
 def test_one_community_column_after_an_exceedance_falls_back():
-    # order 2 of 4 noise features: one eigenvalue above the null gives two
+    # 4 noise features (seed 6): one eigenvalue above the null gives two
     # clusters, one of them a single node, so the communities emit 1 column
-    x = np.random.default_rng(0).normal(size=(100, 4))
-    ((X, D), info), messages = recorded(tc.features, x, order=2, return_delta=True,
+    x = np.random.default_rng(6).normal(size=(100, 4))
+    ((X, D), info), messages = recorded(tc.features, x, order=1, return_delta=True,
                                         return_info=True)
-    entry = _feeding(info, 2)
+    entry = _feeding(info, 1)
     assert entry["fallback"] == "too_few_community_columns"
     assert entry["n_communities"] == 1 and entry["n_exceed"] >= 1
-    assert auto_messages(messages, 2) == []
-    corrs = tc.timecorr(D[1], cfun=tc.autofc, rfun=None, **GAUSS25)
-    assert_close(D[2], quiet(tc.WeightedStrength(**FALLBACK), corrs))
+    assert auto_messages(messages, 1) == []
+    corrs = tc.timecorr(x, cfun=tc.autofc, rfun=None, **GAUSS25)
+    assert_close(D[1], quiet(tc.WeightedStrength(**FALLBACK), corrs))
 
 
 def test_no_exceedance_on_noise_falls_back():

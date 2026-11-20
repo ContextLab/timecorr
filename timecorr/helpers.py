@@ -796,8 +796,47 @@ _VARIANCE_PRODUCT_MIN = 1e-290
 _KERNEL_ROW_MIN = 1e-100
 _KERNEL_ROW_MAX = 1e100
 
-# Relative round-off of removing a column's mean (a few float64 spacings).
+# Relative round-off of a column's samples (a few float64 spacings): a column
+# whose samples agree to within this fraction of their magnitude is constant
+# (see _round_off_variance).
 _ROUND_OFF = 64 * np.finfo(np.float64).eps
+
+
+def _round_off_variance(var, s, mean):
+    """
+    True where a (kernel-)weighted variance is at the round-off level of its
+    column: ``var <= _ROUND_OFF**2 * (var + s * mean**2)``.
+
+    ``var`` is ``sum |w| (x - mean)**2``, ``s`` is ``sum |w|`` and ``mean``
+    the weighted mean of the raw samples (overall mean included), so
+    ``var + s * mean**2`` is the column's weighted mean square
+    ``sum |w| x**2``.  Bound: samples ``x = c (1 + d)`` that equal ``c`` up
+    to round-off, ``|d| <= k * eps`` (one rounding gives ``k = 1/2``; a
+    computation that sums n terms gives up to about ``k = n``), have
+    ``var <= sum |w| (c d)**2 <= (k eps)**2 * s c**2``, which is at most
+    ``(k eps)**2 / (1 - k eps)**2`` times the mean square: below the bound
+    for ``k`` below 64 (``_ROUND_OFF / eps``).  The variance is compared as
+    a standard deviation with ``hypot``, so neither side overflows or
+    underflows before the comparison; the rule does not depend on the units
+    of the column.  A genuine spread is above it unless it is within
+    ``_ROUND_OFF`` (1.4e-14) of the column's magnitude: an offset of 1e11
+    standard deviations is a relative spread of 1e-11.
+    """
+    sd = np.sqrt(np.maximum(var, 0.0))
+    return sd <= _ROUND_OFF * np.hypot(sd, np.sqrt(s) * np.abs(mean))
+
+
+def _zero_variance(var, msq, s, mean):
+    """
+    The estimator's zero-variance rule: True where a kernel-weighted variance
+    ``var`` counts as zero.  ``msq`` is the kernel-weighted mean square of the
+    globally centered column, ``s`` the kernel's ``sum |w|`` and ``mean``
+    the kernel-weighted mean of the raw column.  The variance is zero when it
+    is at most ``_ZERO_VARIANCE_TOL`` times ``msq`` (the numerical limit of
+    computing it from centered sums) or at the round-off level of the raw
+    column (``_round_off_variance``).
+    """
+    return (var <= _ZERO_VARIANCE_TOL * msq) | _round_off_variance(var, s, mean)
 
 # Values at most this far outside [-1, 1] are correlations with round-off error
 # (clipped to +-1), not co-fluctuations.
@@ -811,11 +850,16 @@ def _safe_divide(num, den):
     return out
 
 
-def _nan_center(x):
-    """Subtract each column's mean over its non-NaN samples (0 for all-NaN columns)."""
+def _nan_mean(x):
+    """Each column's mean over its non-NaN samples (0 for all-NaN columns)."""
     valid = ~np.isnan(x)
     total = np.where(valid, x, 0.0).sum(axis=0)
-    return x - _safe_divide(total, valid.sum(axis=0))
+    return _safe_divide(total, valid.sum(axis=0))
+
+
+def _nan_center(x):
+    """Subtract each column's mean over its non-NaN samples (0 for all-NaN columns)."""
+    return x - _nan_mean(x)
 
 
 def _zscore_columns(x):
@@ -823,16 +867,19 @@ def _zscore_columns(x):
     Population z-scores of each column; NaN samples and constant columns give 0.
 
     A column is constant when its standard deviation is at most 1e-10 of its
-    largest centered value, or within the round-off of removing its mean (a
-    few float spacings of its largest raw value), so a large constant offset
-    neither zeroes a varying column nor turns a constant one into signal.
+    largest centered value, or at the round-off level of its root mean
+    square (``_round_off_variance``, the estimator's rule with equal
+    weights), so a large constant offset neither zeroes a varying column nor
+    turns a constant one into signal.
     """
     valid = ~np.isnan(x)
-    magnitude = np.where(valid, np.abs(x), 0.0).max(axis=0)
-    x0 = np.where(valid, _nan_center(x), 0.0)
-    sd = np.sqrt(_safe_divide((x0**2).sum(axis=0), valid.sum(axis=0)))
+    n = valid.sum(axis=0)
+    mean = _nan_mean(x)
+    x0 = np.where(valid, x - mean, 0.0)
+    ss = (x0**2).sum(axis=0)
+    sd = np.sqrt(_safe_divide(ss, n))
     constant = (sd <= _ZERO_VARIANCE_TOL * np.abs(x0).max(axis=0)) | (
-        sd <= _ROUND_OFF * magnitude
+        _round_off_variance(ss, n, mean + _safe_divide(x0.sum(axis=0), n))
     )
     return _safe_divide(x0, np.where(constant, 0.0, sd))
 
@@ -1175,10 +1222,14 @@ def _wcorr_setup(a, b, rows, autocorrelation):
     ``b`` too).  Returns a dict.
     """
     finite = _products_finite(a, b)  # an infinite sample makes its column NaN
-    a = _nan_center(a)
-    b = _nan_center(b)
+    # the overall means are kept: with the kernel-weighted means of the
+    # centered columns they give the raw ones, which the round-off rule needs
+    ca = _nan_mean(a)
+    cb = _nan_mean(b)
+    a = a - ca
+    b = b - cb
     rows.prepare(finite and _products_finite(a, b))
-    state = {"T": a.shape[0], "rows": rows, "a": a, "b": b}
+    state = {"T": a.shape[0], "rows": rows, "a": a, "b": b, "ca": ca, "cb": cb}
     s = rows.row_sum("a")
     state["active"] = s > 0
     state["has_nan"] = bool(np.isnan(a).any() or np.isnan(b).any())
@@ -1187,14 +1238,14 @@ def _wcorr_setup(a, b, rows, autocorrelation):
         s = s[:, np.newaxis]
         state["sw"] = rows.row_sum("w")[:, np.newaxis]
 
-        def moments(x):
+        def moments(x, center):
             mean = _safe_divide(rows.product(x, "a"), s)
             msq = rows.product(x**2, "a")
             var = msq - s * mean**2
-            zero = var <= _ZERO_VARIANCE_TOL * msq
+            zero = _zero_variance(var, msq, s, mean + center)
             return mean, rows.product(x, "w"), np.where(zero, 0.0, var), zero
 
-        state["ma"], state["wa"], state["va"], state["za"] = moments(a)
+        state["ma"], state["wa"], state["va"], state["za"] = moments(a, ca)
         if autocorrelation:
             state["mb"], state["wb"], state["vb"], state["zb"] = (
                 state["ma"],
@@ -1203,7 +1254,7 @@ def _wcorr_setup(a, b, rows, autocorrelation):
                 state["za"],
             )
         else:
-            state["mb"], state["wb"], state["vb"], state["zb"] = moments(b)
+            state["mb"], state["wb"], state["vb"], state["zb"] = moments(b, cb)
         state["n_products"] = 1
     else:
         state["ok_a"] = ~np.isnan(a)
@@ -1267,7 +1318,12 @@ def _wcorr_block(state, i0, i1, j0):
         num = (wxy - mx * wy - my * wx + mx * my * w0).reshape(shape)
         var_a = sxx - s0 * mx**2
         var_b = syy - s0 * my**2
-        zero = (var_a <= _ZERO_VARIANCE_TOL * sxx) | (var_b <= _ZERO_VARIANCE_TOL * syy)
+        pairs = (i1 - i0, Kb - j0)
+        ca = np.broadcast_to(state["ca"][i0:i1, np.newaxis], pairs).reshape(-1)
+        cb = np.broadcast_to(state["cb"][np.newaxis, j0:], pairs).reshape(-1)
+        zero = _zero_variance(var_a, sxx, s0, mx + ca) | _zero_variance(
+            var_b, syy, s0, my + cb
+        )
         var_a, var_b, zero = (v.reshape(shape) for v in (var_a, var_b, zero))
         # two samples always give r = +-1: fewer than 3 is undefined
         few = rows.product(terms[:, :n], "s").reshape(shape) < 3
@@ -1455,15 +1511,28 @@ def wcorr(a, b, weights):
     - A feature is treated as constant at timepoint ``t`` when its
       kernel-weighted variance there is at most 1e-10 times its
       kernel-weighted mean square (after the feature's overall mean is
-      removed).  A constant feature has correlation 0 with every feature,
-      itself included, at that timepoint.  This is a numerical limit:
+      removed), or at most ``(64 eps)**2`` (about 2e-28; ``eps`` is the
+      float64 machine epsilon) times the kernel-weighted mean square of its
+      raw samples: samples ``c (1 + d)`` with ``|d|`` below ``64 eps``
+      (about 1.4e-14; for example values equal to 1 up to round-off, at any
+      scale ``c``) are constant.  A constant feature has correlation 0 with every
+      feature, itself included, at that timepoint, and counts in the
+      zero-variance warning as an exactly constant one does.  Both rules
+      are relative, so multiplying a feature by a constant does not change
+      which entries are set to 0.  This is a numerical limit:
       features whose local variance is below about 1e-10 of their mean square
       are treated as constant.  A constant offset of the whole series does
       not matter (the overall mean is removed first; an offset of 1e9
       standard deviations is tested), but a step much larger than the local
       fluctuations within a kernel window does: a unit-variance series that
       jumps by 1e6 or more halfway through is treated as constant on both
-      sides of the jump.
+      sides of the jump.  Since the 1e-10 rule's mean square is about the
+      overall mean, its decision at ``t`` depends on samples that row ``t``
+      of the kernel does not weight: with a one-sided kernel, an entry near
+      the threshold can differ between a series and a prefix of it (0 in
+      one, up to +-1 in the other).  Entries whose variance is at least
+      1e-3 of that mean square do not depend on those samples (tested to
+      1e-9).
 
     One ``UserWarning`` per call reports, when they occur, how many
     timepoints have fewer than 3 non-zero kernel weights; how many other
@@ -1604,8 +1673,9 @@ def _fisher_symmetrize(c):
     Symmetrize a (K, K, T) cross-correlation array as in Eq. 5 of the timecorr
     paper: ``z2r((r2z(C) + r2z(C.T)) / 2)``.
 
-    Where one of ``C[i, j]`` and ``C[j, i]`` is exactly +-1 (infinite z), the
-    result is that sign; where they are +1 and -1, it is 0.  Entries outside
+    Where one of ``C[i, j]`` and ``C[j, i]`` is +-1 (infinite z; values
+    within 1e-12 of +-1 count as +-1), the result is that sign; where they
+    are +1 and -1, it is 0.  Entries outside
     [-1, 1] (co-fluctuations from a delta kernel, which are not correlations)
     are averaged without the transform (see ``_fisher_mean``).
 
@@ -1622,6 +1692,32 @@ def _fisher_symmetrize(c):
     return c
 
 
+def _correlation_z(r):
+    """
+    ``(z, outside)``: the Fisher z of correlations ``r`` for averaging, and
+    the mask of values that are not correlations.
+
+    Values more than ``_R_TOLERANCE`` (1e-12) outside [-1, 1] are not
+    correlations (for example co-fluctuations from a delta kernel): they are
+    marked in ``outside`` and their z is 0.  Values within ``_R_TOLERANCE``
+    of +-1, on either side, are +-1 up to round-off and have infinite z, as
+    exact +-1 does; so one ulp below 1 does not turn an infinite z into a
+    finite one (which, averaged with -inf, gives 1 instead of 0).  NaN stays
+    NaN.
+    """
+    r = np.asarray(r, dtype=np.float64)
+    # no more temporaries of r's size than the previous clip-and-where (the
+    # memory estimates of corrmean_combine and tstat_combine count them)
+    a = np.abs(r)
+    outside = a > 1 + _R_TOLERANCE
+    unit = a >= 1 - _R_TOLERANCE
+    del a
+    unit &= ~outside
+    c = np.where(outside, 0.0, r)
+    np.copysign(1.0, c, out=c, where=unit)
+    return r2z(c), outside
+
+
 def _fisher_mean(r, axis):
     """
     Average correlations along ``axis`` in Fisher z space: ``z2r(mean(r2z(r)))``.
@@ -1629,18 +1725,17 @@ def _fisher_mean(r, axis):
     Fisher z averaging applies to correlations only.  Where any value along
     ``axis`` lies outside [-1, 1] by more than 1e-12 (for example a
     co-fluctuation from a delta kernel), the values are averaged on the raw
-    scale (plain mean) instead; values within 1e-12 of [-1, 1] are
-    correlations with round-off and are clipped to +-1.
-    Values of exactly +-1 have infinite z.  Where only one sign of infinity
+    scale (plain mean) instead.  Values within 1e-12 of +-1 (above or below)
+    are correlations of +-1 with round-off and have infinite z, as exact
+    +-1 does (``_correlation_z``).  Where only one sign of infinity
     occurs along ``axis`` the result is that sign (+-1).  Where both +inf and
     -inf occur they are excluded and the finite z values are averaged (0 if
     none remain).  NaN anywhere along ``axis`` gives NaN.  No numpy warnings
     are raised.
     """
     r = np.asarray(r, dtype=np.float64)
-    outside = np.abs(r) > 1 + _R_TOLERANCE
+    z, outside = _correlation_z(r)
     raw = np.any(outside, axis=axis)
-    z = r2z(np.where(outside, 0.0, np.clip(r, -1.0, 1.0)))
     pos = np.any(np.isposinf(z), axis=axis)
     neg = np.any(np.isneginf(z), axis=axis)
     nan = np.any(np.isnan(z), axis=axis)
@@ -1661,7 +1756,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     subjects' data.  When the average is not the subject's own data, the
     cross-correlation matrix ``C`` is symmetrized by averaging the Fisher
     z-transforms of ``C`` and ``C.T`` and inverting (``z2r``) before it is
-    vectorized; an entry of exactly +-1 dominates its pair.  NaN samples carry no weight.
+    vectorized; an entry of +-1 (within 1e-12) dominates its pair.  NaN samples carry no weight.
 
     Parameters
     ----------
@@ -2094,7 +2189,8 @@ def corrmean_combine(corrs):
     Compute the mean element-wise correlation across each matrix in a list.
 
     Correlations are averaged in Fisher z space (``z2r(mean(r2z(r)))``).  An
-    entry of exactly +-1 has infinite z: where only one sign occurs across
+    entry of +-1 has infinite z (values within 1e-12 of +-1 count as +-1, so
+    round-off does not make the z finite): where only one sign occurs across
     matrices the mean is that sign; where both +1 and -1 occur they are
     excluded and the remaining values are averaged (0 if none remain).
     Fisher z applies to correlations only: an entry where any matrix has a
@@ -2171,8 +2267,8 @@ def tstat_combine(corrs, return_pvals=False):
     with ``scipy.stats.ttest_1samp``.  Fisher z applies to correlations only:
     an entry where any matrix has a value outside [-1, 1] (for example the
     co-fluctuations of a delta kernel, ``eye_weights``) is tested on the raw
-    values, with no NaN and no warning; values within 1e-12 of [-1, 1] are
-    correlations with round-off (clipped to +-1).  An entry with the same
+    values, with no NaN and no warning; values within 1e-12 of +-1 (above or
+    below) are correlations of +-1 with round-off (infinite z).  An entry with the same
     value in every matrix (zero variance across subjects, for example the
     diagonal of ``autofc`` results, where every value is 1) has t = +inf or
     -inf with the sign of that value (p = 0), or t = 0 (p = 1) when the value
@@ -2222,9 +2318,8 @@ def tstat_combine(corrs, return_pvals=False):
         )
     else:
         stacked = np.asarray(np.stack(corrs, axis=2), dtype=np.float64)
-        outside = np.abs(stacked) > 1 + _R_TOLERANCE
+        z, outside = _correlation_z(stacked)
         raw = np.any(outside, axis=2, keepdims=True)
-        z = r2z(np.where(outside, 0.0, np.clip(stacked, -1.0, 1.0)))
         vals = np.where(raw, stacked, z)
         # zero variance across subjects (every value equal, infinities
         # included): t is +-inf with the sign of the mean, 0 for a mean of 0

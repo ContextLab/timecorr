@@ -2139,7 +2139,9 @@ def features(
     include_timepoints : str
         "all", "backward"/"pre", or "forward"/"post".  Shapes the analysis
         kernel and, unless it is ``eye_weights``, the feeding kernel.
-        Default: "all".
+        Default: "all".  A one-sided kernel's well-conditioned estimates do
+        not depend on the timepoints it excludes; estimates near the
+        estimator's zero-variance threshold can (see ``timecorr``).
     include_zero : bool
         Whether the estimated timepoint contributes to its own estimate.
         Shapes the analysis kernel and, unless it is ``eye_weights``, the

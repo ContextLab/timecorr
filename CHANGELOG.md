@@ -669,6 +669,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standard deviations or more was treated as constant (all zeros); the
   zero-variance test now uses the centered data, with a round-off allowance
   so that a constant feature stays constant.
+- A feature equal to a constant up to round-off (samples `c (1 + d)` with
+  `|d|` of a few float64 spacings, for example 1 times `1 + 1e-16` noise)
+  had a kernel-weighted variance of round-off size rather than exactly 0,
+  so the estimator returned ratios of round-off as its correlations (up to
+  0.77 in magnitude with a Gaussian kernel of variance 10 on 80
+  timepoints, where an exactly constant feature gives 0). A kernel-weighted variance at most `(64 eps)**2` times the
+  kernel-weighted mean square of the raw samples (`eps` is the float64
+  machine epsilon) now counts as zero, as an exact zero does: correlation 0
+  and the same count in the zero-variance warning, for array and built-in
+  kernels, with or without NaN samples, and in the streamed summaries. The
+  rule is relative, so it does not depend on the scale of the feature
+  (tested at 1e150 and 1e-150). The z-scores of the delta kernel and of
+  `segment` use the same rule; `segment` previously turned such a feature
+  into unit-variance round-off noise. On 4,566 outputs of random data
+  without such features (12 seeds; 8 kernel functions; `wcorr`, `timecorr`
+  with `isfc`, `wisfc` and `autofc`, and `features`), every value and
+  warning is identical to the previous code, and the 22 cases of
+  `tests/test_kernels_reference.py` are unchanged (maximum absolute and
+  relative difference 0).
+- Fisher z averaging (the symmetrization of `isfc` and `wisfc`,
+  `corrmean_combine`, the streamed summaries) and `tstat_combine` gave an
+  infinite z to a correlation of exactly +-1 but a finite one to a value
+  one float spacing away: averaging +1 with -1 gave 0, but +1 with
+  -0.9999999999999998 gave 1. Values within 1e-12 of +-1 now count as +-1
+  (one helper, `helpers._correlation_z`); `tstat_combine` likewise gives
+  +inf for 1, 1 - 1.1e-16 and 1. `r2z` itself is unchanged.
 - `vec2mat` failed on a 1 x V input; `z2r(inf)` returned 0 (now 1).
 - `mat2vec` and `vec2mat` are vectorized; `mat2vec` copies row by row, which
   lowers its peak memory from about 3.1 to about 1.1 times the output size.
@@ -759,6 +785,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   user-facing function has Parameters, Returns and Examples sections, that
   every user-facing name is listed on the API page, and that the parameter
   table matches the code.
+- One-sided kernels (`include_timepoints="backward"` or `"forward"`): the
+  `timecorr`, `features` and `wcorr` docstrings state what is guaranteed.
+  The estimator centers each feature on its mean over all timepoints, so an
+  estimate near the zero-variance threshold (variance about 1e-10 of the
+  mean square of the centered feature) can depend on timepoints outside its
+  kernel row: in `features(x, order=2, cfun=tc.autofc, rfun=None,
+  delta_rfun=None, include_timepoints="backward")` on 300 x 5 noise, rows 69,
+  72, 78 and 79 of `X[2]` differ between `x` and `x[:200]` by more than
+  1e-9 (by 1 at row 79).
+  Estimates whose variance is at least 1e-3 of that mean square do not
+  depend on the excluded timepoints (to 1e-9, for `autofc`, `isfc` and
+  `wisfc` with fixed subject weights, at orders 1 and 2;
+  `tests/test_estimator_causality.py`). `wisfc`'s default subject weights
+  use the static correlations over all timepoints.
 
 ### Dependencies and packaging
 

@@ -206,8 +206,12 @@ def timecorr(
     estimator weights the covariance and variance sums as well as the means;
     it differs from Eq. 4 of Owen, Chang & Manning (2021) and from timecorr
     0.2.0, where the kernel set only the means, so numerical results differ
-    from 0.2.0.  For higher-order correlations computed as in the paper
-    (Fig. 10), see ``timecorr.features``.
+    from 0.2.0.  A feature whose kernel-weighted variance at a timepoint is
+    zero, or zero up to round-off relative to its kernel-weighted mean
+    square (``wcorr`` gives the rule; it does not depend on the units of the
+    data), has correlation 0 with every feature there.  For higher-order
+    correlations computed as in the paper (Fig. 10), see
+    ``timecorr.features``.
 
     Parameters
     ----------
@@ -238,7 +242,12 @@ def timecorr(
         Which timepoints may contribute to the estimate at each timepoint:
         "all" (default), "backward" (alias "pre": only timepoints at or before
         ``t``), or "forward" (alias "post": only timepoints at or after ``t``).
-        Applied to the kernel after it is built (see ``one_sided``).
+        Applied to the kernel after it is built (see ``one_sided``).  The
+        estimator centers each feature on its mean over all timepoints, so
+        an estimate whose kernel-weighted variance is a small fraction (near
+        1e-10, see ``wcorr``) of the mean square of the centered feature can
+        change, by round-off or between 0 and a non-zero value, when
+        timepoints outside its kernel row change; other estimates do not.
     exclude_timepoints : int or None
         Further restricts the kernel by distance from ``t``.  A positive value
         ``x`` keeps only the timepoints at most ``x`` samples from ``t``; a

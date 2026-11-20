@@ -1706,12 +1706,16 @@ def _correlation_z(r):
     NaN.
     """
     r = np.asarray(r, dtype=np.float64)
+    # no more temporaries of r's size than the previous clip-and-where (the
+    # memory estimates of corrmean_combine and tstat_combine count them)
     a = np.abs(r)
     outside = a > 1 + _R_TOLERANCE
-    unit = (a >= 1 - _R_TOLERANCE) & ~outside
-    with np.errstate(divide="ignore", invalid="ignore"):
-        z = r2z(np.where(outside, 0.0, np.where(unit, np.sign(r), r)))
-    return z, outside
+    unit = a >= 1 - _R_TOLERANCE
+    del a
+    unit &= ~outside
+    c = np.where(outside, 0.0, r)
+    np.copysign(1.0, c, out=c, where=unit)
+    return r2z(c), outside
 
 
 def _fisher_mean(r, axis):

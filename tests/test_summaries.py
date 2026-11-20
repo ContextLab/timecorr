@@ -362,6 +362,38 @@ def test_fit_on_one_list_transform_another(nested, nested_other):
     assert not all(np.allclose(o, p) for o, p in zip(outc, own_c))
 
 
+def test_transform_matches_units_by_position(nested):
+    # Present behavior (pinned, not endorsed): with as many units as the fit,
+    # unit i of the new batch gets the fitted weights of unit i, whatever its
+    # identity.  Swapping the two subjects swaps the weights they receive.
+    _, _, A = nested
+    swapped = [A[1], A[0]]
+    ws = tc.WeightedStrength(signed=True).fit(A)
+    fit = ws.fits_[0]
+    out = ws.transform(swapped)
+    for i, v in enumerate(swapped):
+        expected = ref_weighted_strength(
+            v, True, w=fit["weights"][i], mean_r=fit["mean_r"][i].copy()
+        )
+        np.testing.assert_allclose(out[i], expected, atol=1e-10, rtol=0)
+    # subject A[1] at position 0 is not summarized with its own weights
+    own = ref_weighted_strength(
+        A[1], True, w=fit["weights"][1], mean_r=fit["mean_r"][1].copy()
+    )
+    assert not np.allclose(out[0], own)
+
+    comm = tc.Communities(n=6, signed=True).fit(A)
+    cfit = comm.fits_[0]
+    outc = comm.transform(swapped)
+    for i, v in enumerate(swapped):
+        np.testing.assert_allclose(
+            outc[i],
+            ref_communities(v, cfit["labels"], True, mean_r=cfit["mean_r"][i]),
+            atol=1e-10,
+            rtol=0,
+        )
+
+
 # ----------------------------------------------------------------------------
 # null_threshold (the data-driven count)
 # ----------------------------------------------------------------------------

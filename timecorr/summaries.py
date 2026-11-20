@@ -428,6 +428,16 @@ class _Summary:
             With as many units as the fit, unit u uses the fit's weights of
             unit u; otherwise every unit uses the fit's mean weights.
 
+        Notes
+        -----
+        Units are matched to the fitted units by position only: when the new
+        batch has as many units as the fit, the unit at position u receives
+        the pair weights (and, when signed, the mean correlations) fitted to
+        the unit at position u, whether or not it is the same subject, and no
+        warning is given.  Pass the units in the order of the fit, or a
+        different number of units to use the mean over the fitted units.
+        The communities (``labels``) are shared by all units either way.
+
         Raises
         ------
         ValueError
@@ -591,7 +601,9 @@ class WeightedStrength(_Summary):
     one series; with K = 1 there are no pairs and the column is 0.
     Calling the instance fits to the given units and transforms the same
     units: the weights (and communities) come from the data being summarized.
-    ``fit`` and ``transform`` separate the two.  The summary of a unit
+    ``fit`` and ``transform`` separate the two; ``transform`` matches units
+    to the fitted units by position when their numbers are equal (unit u
+    gets the weights fitted to unit u; see ``transform``).  The summary of a unit
     returned by a combine function other than ``null_combine`` describes the
     combined correlations.  The correlations must be finite (NaN or infinite
     values, on the diagonal too, raise ``ValueError``).
@@ -743,7 +755,10 @@ class Communities(_Summary):
     fixed.  ``fits_[-1]["n"]`` is the number of communities the
     clustering found.  Calling the instance fits to the given units and
     transforms the same units; the communities come from the data being
-    summarized.  ``fit`` and ``transform`` separate the two.  The
+    summarized.  ``fit`` and ``transform`` separate the two; with
+    ``signed=True``, ``transform`` matches units to the fitted units by
+    position when their numbers are equal (unit u gets the signs of the
+    mean correlations fitted to unit u; see ``transform``).  The
     correlations must be finite (NaN or infinite values, on the diagonal
     too, raise ``ValueError``).
 

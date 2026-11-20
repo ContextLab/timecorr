@@ -485,6 +485,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Documentation
 
+- `WeightedStrength.transform` and `Communities.transform`: the docstrings
+  and the API overview state that, when the new list has as many units as
+  the fit, units are matched to the fitted units by position (unit u gets
+  the weights fitted to unit u, whether or not it is the same subject).
 - Every user-facing name now has an API page, including the default kernel
   parameter dictionaries (`gaussian_params`, `laplace_params`, `eye_params`,
   `t_params`, `mexican_hat_params`, `uniform_params`, `boxcar_params`), which

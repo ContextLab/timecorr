@@ -116,9 +116,13 @@ def _center_level(w, rule):
     the lower group of the exact two-group split of their sorted values that
     minimizes the total within-group sum of squares (one-dimensional
     two-means; splits fall between distinct values).  When all values are
-    equal, that value.
+    equal, that value.  The mean is kept within the lower group's range, so
+    a group of equal values gives exactly that value despite round-off.
+    Raises ``ValueError`` for non-finite weights.
     """
     x = np.sort(w[np.triu_indices(w.shape[0], 1)].astype(float))
+    if not np.all(np.isfinite(x)):
+        raise ValueError("The pair weights must be finite to be centered.")
     if rule == "median":
         return float(np.median(x))
     if x[-1] == x[0]:
@@ -132,7 +136,7 @@ def _center_level(w, rule):
     between = k * (n - k) / n * (high - low) ** 2
     between[x[1:] == x[:-1]] = -np.inf
     cut = int(np.argmax(between)) + 1
-    return float(np.mean(x[:cut]))
+    return float(np.clip(np.mean(x[:cut]), x[0], x[cut - 1]))
 
 
 def _clip_weights(w, center=True):
@@ -643,13 +647,18 @@ class WeightedStrength(_Summary):
     Weighted strength of each node in squared correlations.
 
     For a unit with off-diagonal correlations ``r_ij(t)``: pair weights
-    ``w_ij = mean_t r_ij(t)**2``; ``m`` = the mean of the lower cluster of
-    the ``w_ij`` over i < j (split the sorted weights into a lower and an
-    upper group with the least total within-group sum of squares, and take
-    the lower group's mean; with ``center="median"``, their median);
-    clipped weights ``a_ij = max(w_ij - m, 0)`` (for K = 2 or 3, or with
-    ``center=False``, ``a_ij = w_ij``).  Column i is ``c_i(t) = sum_{j != i}
-    a_ij r_ij(t)**2``.
+    ``w_ij = mean_t r_ij(t)**2``; clipped weights ``a_ij = max(w_ij - m,
+    0)``; column i is ``c_i(t) = sum_{j != i} a_ij r_ij(t)**2``.
+
+    Centering (``center=True``, the default) subtracts the typical weight of
+    the weakly coupled pairs, so that only pairs coupled more strongly than
+    that background count, however many pairs any one community holds: the
+    pair weights (i < j) are sorted and divided at the point that best
+    separates a low group from a high group (the division with the smallest
+    total squared distance of the weights from their group's mean), and
+    ``m`` is the mean of the low group.  With ``center="median"``, ``m`` is
+    the median of the pair weights; with ``center=False``, or for K = 2 or 3,
+    ``a_ij = w_ij``.
 
     Parameters
     ----------
@@ -672,7 +681,9 @@ class WeightedStrength(_Summary):
         ``n=None`` (see ``Communities``); a positive integer.  Default: 5.
     center : True, "median" or False
         True: for K >= 4 the pair weights are centered on the mean ``m`` of
-        their lower cluster and clipped at 0 (``a_ij = max(w_ij - m, 0)``).
+        their low group (the "lower cluster", described above) and clipped
+        at 0 (``a_ij = max(w_ij - m, 0)``).  Any other value raises
+        ``ValueError``.
         ``"median"``: the same with ``m`` the median of the pair weights
         (the default of timecorr 0.3.0).  False: the weights are used as
         they are (``a_ij = w_ij``) for any K.  Default: True.

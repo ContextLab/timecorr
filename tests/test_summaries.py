@@ -74,6 +74,8 @@ def _pair_weights(M):
 
 
 def _clipped(w):
+    """Clipped weights of ``WeightedStrength(center="median")`` (the median
+    rule; the tests that use this reference pass ``center="median"``)."""
     K = w.shape[0]
     if K < 4:
         a = w.copy()
@@ -143,7 +145,7 @@ def _renumbered(labels):
 @pytest.mark.parametrize("signed", [False, True])
 def test_weighted_strength_formula(nested, signed):
     _, _, corrs = nested
-    out = tc.WeightedStrength(signed=signed)(corrs)
+    out = tc.WeightedStrength(signed=signed, center="median")(corrs)
     assert isinstance(out, list) and len(out) == len(corrs)
     for o, v in zip(out, corrs):
         assert o.shape == (v.shape[0], (2 if signed else 1) * K_NESTED)
@@ -174,9 +176,9 @@ def test_weighted_strength_small_K_unclipped(K):
 @pytest.mark.parametrize("signed", [False, True])
 def test_weighted_strength_split(nested, signed):
     _, _, corrs = nested
-    split = tc.WeightedStrength(split=True, signed=signed, n=6)
+    split = tc.WeightedStrength(split=True, signed=signed, n=6, center="median")
     out = split(corrs)
-    whole = tc.WeightedStrength(signed=signed)(corrs)
+    whole = tc.WeightedStrength(signed=signed, center="median")(corrs)
     K = K_NESTED
     labels = split.fits_[-1]["labels"]
     assert labels.shape == (K,)
@@ -330,7 +332,7 @@ def test_fit_on_one_list_transform_another(nested, nested_other):
     _, _, A = nested
     B = nested_other
     # same number of units: unit-specific weights of the fit
-    ws = tc.WeightedStrength(signed=True).fit(A)
+    ws = tc.WeightedStrength(signed=True, center="median").fit(A)
     B2 = B[:2]
     out = ws.transform(B2)
     for i, (o, v) in enumerate(zip(out, B2)):
@@ -338,7 +340,7 @@ def test_fit_on_one_list_transform_another(nested, nested_other):
             v, True, w=ws.fits_[0]["weights"][i], mean_r=ws.fits_[0]["mean_r"][i].copy()
         )
         np.testing.assert_allclose(o, expected, atol=1e-10, rtol=0)
-    own = tc.WeightedStrength(signed=True)(B2)
+    own = tc.WeightedStrength(signed=True, center="median")(B2)
     assert not all(np.allclose(o, p) for o, p in zip(out, own))
 
     # different number of units: the mean weights
@@ -368,7 +370,7 @@ def test_transform_matches_units_by_position(nested):
     # identity.  Swapping the two subjects swaps the weights they receive.
     _, _, A = nested
     swapped = [A[1], A[0]]
-    ws = tc.WeightedStrength(signed=True).fit(A)
+    ws = tc.WeightedStrength(signed=True, center="median").fit(A)
     fit = ws.fits_[0]
     out = ws.transform(swapped)
     for i, v in enumerate(swapped):
@@ -659,7 +661,7 @@ def test_private_helpers():
     sum_r2 = w * 10
     np.fill_diagonal(sum_r2, 10.0)
     np.testing.assert_allclose(sm._pair_weights(sum_r2, 10), w)
-    a = sm._clip_weights(w)
+    a = sm._clip_weights(w, "median")
     # median of (0.5, 0.1, 0.2, 0.3, 0.05, 0.4) is 0.25
     np.testing.assert_allclose(a[0, 1], 0.25)
     assert a[0, 2] == 0 and np.all(np.diag(a) == 0)
@@ -1009,14 +1011,14 @@ def test_centering_with_a_large_community(seed):
     # communities)
     for rhos in ((0.3, 0.3), (0.4, 0.2)):
         data, labels = _unequal_communities(rhos, seed)
-        ws, comm = tc.WeightedStrength(), tc.Communities()
+        ws, comm = tc.WeightedStrength(center="median"), tc.Communities()
         quiet_features = dict(order=1, cfun=tc.autofc, rfun=ws, delta_rfun=comm,
                               return_delta=True)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", UserWarning)
             tc.features(data, **quiet_features)
         wbar = np.mean(ws.fits_[-1]["weights"], axis=0)
-        a = sm._clip_weights(wbar)
+        a = sm._clip_weights(wbar, "median")
         big, iu = _within(labels, 0)
         small, _ = _within(labels, 1)
         w, a = wbar[iu], a[iu]
@@ -1031,13 +1033,13 @@ def test_centering_with_a_large_community(seed):
             assert a[big].mean() < 0.25 * w[big].mean()
             assert comm.fits_[-1]["n"] > 2
     data, labels = _unequal_communities((0.3, 0.3), seed, sizes=(12, 12))
-    ws = tc.WeightedStrength()
+    ws = tc.WeightedStrength(center="median")
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", UserWarning)
         tc.features(data, order=1, cfun=tc.autofc, rfun=ws,
                     delta_rfun="weighted_strength")
     wbar = np.mean(ws.fits_[-1]["weights"], axis=0)
-    a = sm._clip_weights(wbar)
+    a = sm._clip_weights(wbar, "median")
     for g in (0, 1):
         sel, iu = _within(labels, g)
         assert np.all(a[iu][sel] > 0)
@@ -1125,7 +1127,137 @@ def test_default_centering_columns_of_the_small_community_vary():
         assert np.all(np.ptp(d[:, labels == 1], axis=0) > 0)
 
 
-@pytest.mark.parametrize("center", ["mean", "lower", 0.5, None, 1])
+def _clipped_lower_cluster(w):
+    """Reference for ``center=True``, written without the package: subtract
+    the mean of the lower group of the best split of the sorted pair weights
+    into two groups (brute force over the split points), clip at 0."""
+    K = w.shape[0]
+    a = w.copy() if K < 4 else np.maximum(
+        w - _two_means_low_reference(w[np.triu_indices(K, 1)]), 0)
+    np.fill_diagonal(a, 0)
+    return a
+
+
+@pytest.mark.parametrize("signed", [False, True])
+def test_weighted_strength_formula_default_centering(nested, signed):
+    _, _, corrs = nested
+    out = tc.WeightedStrength(signed=signed)(corrs)
+    for o, v in zip(out, corrs):
+        M = _offdiag(v)
+        a = _clipped_lower_cluster(_pair_weights(M))
+        cols = [np.einsum("ij,ijt->ti", a, M**2)]
+        if signed:
+            mean_r = M.mean(axis=2)
+            np.fill_diagonal(mean_r, 0)
+            cols.append(np.einsum("ij,ijt->ti", mean_r, M))
+        np.testing.assert_allclose(o, np.hstack(cols), atol=1e-10, rtol=0)
+
+
+def _sym(values, K):
+    """K x K symmetric matrix with ``values`` on the pairs i < j, zero diagonal."""
+    w = np.zeros((K, K))
+    w[np.triu_indices(K, 1)] = values
+    return w + w.T
+
+
+def test_lower_cluster_degenerate_cases():
+    # all weights equal: the level is that value and every clipped weight is 0
+    w = _sym(np.full(6, 0.3), 4)
+    assert sm._center_level(w, "lower_cluster") == 0.3
+    np.testing.assert_array_equal(sm._clip_weights(w), 0)
+    # two distinct values: the lower one is the level; the higher pairs keep
+    # the difference
+    vals = np.array([0.1, 0.1, 0.5, 0.1, 0.5, 0.1])
+    w = _sym(vals, 4)
+    assert sm._center_level(w, "lower_cluster") == pytest.approx(0.1, abs=1e-15)
+    np.testing.assert_allclose(sm._clip_weights(w)[np.triu_indices(4, 1)],
+                               np.where(vals == 0.5, 0.4, 0.0), atol=1e-15)
+    # one pair above many equal ones: the upper group holds that pair only
+    vals = np.r_[np.full(14, 0.02), 0.9]
+    w = _sym(vals, 6)
+    assert sm._center_level(w, "lower_cluster") == pytest.approx(0.02, abs=1e-15)
+    a = sm._clip_weights(w)[np.triu_indices(6, 1)]
+    assert np.count_nonzero(a) == 1 and a[-1] == pytest.approx(0.88)
+    # ties at the split point stay together in one group
+    vals = np.array([0.1, 0.1, 0.1, 0.4, 0.4, 0.4])
+    assert sm._center_level(_sym(vals, 4), "lower_cluster") == pytest.approx(0.1)
+    # zero weights: no structure at all
+    np.testing.assert_array_equal(sm._clip_weights(np.zeros((5, 5))), 0)
+    # K < 4 is never centered
+    w3 = _sym([0.1, 0.2, 0.3], 3)
+    np.testing.assert_array_equal(sm._clip_weights(w3), w3)
+
+
+@pytest.mark.parametrize("rule", ["lower_cluster", "median"])
+def test_center_level_needs_finite_weights(rule):
+    w = _sym(np.array([0.1, 0.2, np.nan, 0.3, 0.1, 0.2]), 4)
+    with pytest.raises(ValueError, match="finite"):
+        sm._center_level(w, rule)
+    w[0, 1] = w[1, 0] = np.inf
+    w[0, 3] = w[3, 0] = 0.3
+    with pytest.raises(ValueError, match="finite"):
+        sm._clip_weights(w)
+
+
+def _time_varying_communities(sizes, scale, gamma, seed, T=1000):
+    """Two subjects; community g's columns share a factor whose squared
+    loading rho_g(t) = scale[g] * s_g(t) varies slowly (s_g in (0.1, 1));
+    ``gamma``: squared loading of a factor shared by every column.  Returns
+    the data, the labels and rho (T, G).  The generator of the benchmark in
+    the ``WeightedStrength`` Notes."""
+    from scipy.ndimage import gaussian_filter1d
+
+    rng = np.random.default_rng(seed)
+    labels = np.repeat(np.arange(len(sizes)), sizes)
+    rho = []
+    for c in scale:
+        z = gaussian_filter1d(rng.standard_normal(T + 240), 40)[120:-120]
+        z = (z - z.mean()) / z.std()
+        rho.append(c * (0.1 + 0.9 / (1 + np.exp(-2 * z))))
+    rho = np.stack(rho, axis=1)
+    data = []
+    for _ in range(2):
+        f = rng.standard_normal((T, len(sizes)))
+        g = rng.standard_normal((T, 1))
+        e = rng.standard_normal((T, len(labels)))
+        r = rho[:, labels]
+        data.append(np.sqrt(gamma) * g + np.sqrt(r) * f[:, labels]
+                    + np.sqrt(1 - gamma - r) * e)
+    return data, labels, rho
+
+
+@pytest.mark.parametrize("gamma, scale", [(0.0, (0.5, 0.25)), (0.2, (0.45, 0.25))])
+def test_default_centering_keeps_the_small_community_on_held_out_seeds(gamma, scale):
+    # Benchmark of the WeightedStrength Notes on its held-out seeds 1000-1003
+    # (measured there, per seed: small-community score .29 to .54, kept
+    # fraction .93 to 1; median centering: score 0, kept 0)
+    scores, kept, scores_median = [], [], []
+    for seed in range(1000, 1004):
+        data, labels, rho = _time_varying_communities((18, 6), scale, gamma, seed)
+        corrs = tc.timecorr(data, cfun=tc.autofc, rfun=None,
+                            weights_params={"var": 25})
+        for center, store in ((True, scores), ("median", scores_median)):
+            ws = tc.WeightedStrength(center=center)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", UserWarning)
+                out = ws(corrs)
+            col = [o[:, labels == 1].mean(axis=1) for o in out]
+            store.append(np.mean([
+                0.0 if np.ptp(c) == 0 else np.corrcoef(c, rho[:, 1] ** 2)[0, 1]
+                for c in col
+            ]))
+            if center is True:
+                a = sm._clip_weights(np.mean(ws.fits_[-1]["weights"], axis=0))
+                small, iu = _within(labels, 1)
+                kept.append(np.mean(a[iu][small] > 0))
+    assert np.mean(scores) > 0.2, scores
+    assert min(kept) >= 0.9, kept
+    assert np.all(np.array(scores_median) == 0), scores_median
+
+
+@pytest.mark.parametrize(
+    "center", ["mean", "lower", "Median", "lower_cluster", "true", 0.5, None, 1, 0, [True]]
+)
 def test_bad_center_raises(center):
     with pytest.raises(ValueError, match="center must be"):
         tc.WeightedStrength(center=center)
@@ -1136,3 +1268,4 @@ def test_center_values_are_kept_and_shown():
     assert tc.WeightedStrength(center="median").center == "median"
     assert tc.WeightedStrength(center=False).center is False
     assert "center='median'" in repr(tc.WeightedStrength(center="median"))
+    assert tc.WeightedStrength(center=np.True_).center is True

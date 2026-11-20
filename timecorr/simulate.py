@@ -1195,10 +1195,21 @@ def simulate_nested(
     return data, {"module": module, "supergroup": supergroup, "h": h, "g": gs}
 
 
+def _is_int_sequence(value):
+    """True for a list, a tuple or a 1-D numpy array (the accepted sequences)."""
+    if isinstance(value, np.ndarray):
+        return value.ndim == 1
+    return isinstance(value, (list, tuple))
+
+
 def _check_int_sequence(name, value):
-    """A tuple of positive integers from a sequence (ValueError otherwise)."""
-    if isinstance(value, (str, bytes, dict)) or not hasattr(value, "__len__"):
-        raise ValueError(f"{name} must be a sequence of positive integers; got {value!r}.")
+    """A tuple of positive integers from a list, tuple or 1-D numpy array
+    (ValueError otherwise)."""
+    if not _is_int_sequence(value):
+        raise ValueError(
+            f"{name} must be a sequence of positive integers (a list, tuple or "
+            f"1-D numpy array); got {value!r}."
+        )
     return tuple(_check_positive_int(f"{name}[{i}]", v) for i, v in enumerate(value))
 
 
@@ -1275,14 +1286,15 @@ def simulate_hierarchy(
     branching : sequence of int
         ``branching[l-1]`` is the number of level-``l`` groups in each
         level-``(l+1)`` group; ``len(branching) == len(taus) - 1`` (empty for
-        one level).  Default: (4, 4).
+        one level).  A list, tuple or 1-D numpy array (other types, sets and
+        strings included, raise ``ValueError``).  Default: (4, 4).
     n_top : int
         Number of level-``n`` groups.  Default: 4.
     taus : sequence of int
         ``taus[l-1]`` is the standard deviation, in samples, of the smoothing
         of the level-``l`` series (``u`` and ``v`` for ``l < n``, ``s_n`` for
-        ``l = n``); its length is the depth ``n >= 1``.  Default:
-        (5, 50, 500).
+        ``l = n``); its length is the depth ``n >= 1``.  A list, tuple or
+        1-D numpy array, as for ``branching``.  Default: (5, 50, 500).
     shared : {"top", "all", "none"}
         ``"top"``: subjects share ``s_n`` only (every ``u`` and ``v`` is
         drawn per subject).  ``"all"``: subjects share every ``s_l`` (all
@@ -1340,8 +1352,11 @@ def simulate_hierarchy(
     T = _check_positive_int("T", T)
     per_mod = _check_positive_int("nodes_per_module", nodes_per_module)
     n_top = _check_positive_int("n_top", n_top)
-    if isinstance(taus, (str, bytes, dict)) or not hasattr(taus, "__len__") or not len(taus):
-        raise ValueError(f"taus must be a non-empty sequence of positive integers; got {taus!r}.")
+    if not _is_int_sequence(taus) or not len(taus):
+        raise ValueError(
+            "taus must be a non-empty sequence of positive integers (a list, "
+            f"tuple or 1-D numpy array); got {taus!r}."
+        )
     taus = _check_int_sequence("taus", taus)
     branching = _check_int_sequence("branching", branching)
     n = len(taus)

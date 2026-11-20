@@ -218,6 +218,16 @@ def test_shared_signs(shared):
         (dict(branching=(2, 1.5)), r"branching\[1\] must be a positive integer"),
         (dict(branching=(2,)), "len\\(branching\\) must be len\\(taus\\) - 1 = 2"),
         (dict(branching=3), "branching must be a sequence"),
+        # a list, tuple or 1-D numpy array only
+        (dict(taus=np.array(5), branching=()), "taus must be a non-empty sequence"),
+        (dict(taus=(5,), branching=np.array(2)), "branching must be a sequence"),
+        (dict(taus={5, 50, 500}), "taus must be a non-empty sequence"),
+        (dict(taus=frozenset({5, 50, 500})), "taus must be a non-empty sequence"),
+        (dict(branching={2, 3}), "branching must be a sequence"),
+        (dict(taus="5"), "taus must be a non-empty sequence"),
+        (dict(branching="23"), "branching must be a sequence"),
+        (dict(taus=np.array([[2, 6, 20]])), "taus must be a non-empty sequence"),
+        (dict(taus=range(2, 5)), "taus must be a non-empty sequence"),
         (dict(T=100), "T must be at least 8 \\* max\\(taus\\) = 160"),
         (dict(shared="order1"), "shared must be 'top', 'all' or 'none'"),
         (dict(signs="all"), "signs must be 'private' or 'shared'"),
@@ -226,6 +236,17 @@ def test_shared_signs(shared):
 def test_validation(kwargs, match):
     with pytest.raises(ValueError, match=match):
         small(**kwargs)
+
+
+def test_taus_and_branching_accept_lists_tuples_and_1d_arrays():
+    base_data, base_truth = small()
+    for convert in (list, tuple, np.array):
+        data, truth = small(taus=convert(base_truth["taus"]),
+                            branching=convert(base_truth["branching"]))
+        assert truth["taus"] == base_truth["taus"]
+        assert truth["branching"] == base_truth["branching"]
+        for x, y in zip(data, base_data):
+            np.testing.assert_array_equal(x, y)
 
 
 def test_bad_seed():

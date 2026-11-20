@@ -472,6 +472,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entries unchanged). The effective-sample-size check is computed on each
   kernel row scaled by its largest weight, so such rows are no longer
   reported as having an effective sample size below 2.
+- `reduce(..., rfun='pagerank_centrality')`: for some valid signed
+  correlation matrices (for example 2 x 2 with off-diagonal -3/37) the
+  PageRank system `(I - 0.85 W diag(1 / column sums)) r = b` is singular
+  (negative weights can cancel the column sums); the solve returned
+  meaningless values without a warning (0.474 and 0.526 for that symmetric
+  matrix). It now raises `ValueError` naming the measure and suggesting
+  `'strength'` or `'eigenvector_centrality'` when the smallest singular
+  value of the system is at most 1e-10 of the largest (or the solve fails).
+  Outputs for other matrices are unchanged bit for bit. The `reduce`
+  docstring states how each graph measure treats signed weights.
 
 ### Documentation
 

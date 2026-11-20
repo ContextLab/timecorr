@@ -731,6 +731,11 @@ _TIME_SLICING = True
 # Private hook for tests: when a list, ``_time_slices`` appends its result.
 _time_slice_log = None
 
+# The PageRank system of ``reduce(..., rfun='pagerank_centrality')`` counts as
+# singular when its smallest singular value is at most this fraction of its
+# largest.
+_PAGERANK_SINGULAR_TOL = 1e-10
+
 # Relative round-off of removing a column's mean (a few float64 spacings).
 _ROUND_OFF = 64 * np.finfo(np.float64).eps
 
@@ -2087,7 +2092,18 @@ def reduce(corrs, rfun=None, ndims=None):
           current layout pipeline), unless the dict's ``'kwargs'`` give them.
         - One of the graph measures ``'eigenvector_centrality'``,
           ``'pagerank_centrality'``, or ``'strength'`` (strings only), computed
-          per node for each timepoint.  A delta-kernel co-fluctuation matrix
+          per node for each timepoint from the K x K matrix (diagonal
+          included), with signed weights used as they are, without taking
+          absolute values: ``'strength'`` is the row sum, so negative
+          correlations subtract; ``'eigenvector_centrality'`` is the absolute
+          value of the unit eigenvector of the largest (most positive)
+          eigenvalue of the symmetrized matrix; ``'pagerank_centrality'``
+          (damping 0.85, uniform prior) divides each column by its column
+          sum (a zero sum is replaced by 1; negative weights can make a
+          column sum small or zero) and normalizes the result to sum to 1,
+          and raises ``ValueError`` when its linear system is singular (the
+          smallest singular value of ``I - 0.85 W diag(1 / column sums)`` at
+          most 1e-10 of the largest).  A delta-kernel co-fluctuation matrix
           ``z z^T`` has rank one, so on the delta path of ``features`` with
           ``delta_weights_function=eye_weights`` eigenvector centrality equals ``|z| / ||z||`` and the graph measures
           carry no network structure.
@@ -2129,8 +2145,10 @@ def reduce(corrs, rfun=None, ndims=None):
     ValueError
         If a dict ``rfun`` gives a key in both ``'params'`` and ``'kwargs'`` with
         different values, if ``ndims`` is not a positive integer, if
-        ``ndims`` is given with a graph measure, a summary or a callable, or
-        from a summary (see ``WeightedStrength`` and ``Communities``).
+        ``ndims`` is given with a graph measure, a summary or a callable, if
+        the PageRank system of ``'pagerank_centrality'`` is singular for a
+        timepoint's matrix, or from a summary (see ``WeightedStrength`` and
+        ``Communities``).
 
     Warns
     -----
@@ -2210,7 +2228,19 @@ def reduce(corrs, rfun=None, ndims=None):
         D1 = np.diag(1 / deg)
         B = np.eye(N) - d * np.dot(W, D1)
         b = (1 - d) * norm_falff
-        r = linalg.solve(B, b)
+        singular_values = np.linalg.svd(B, compute_uv=False)
+        try:
+            if singular_values.min() <= _PAGERANK_SINGULAR_TOL * singular_values.max():
+                raise np.linalg.LinAlgError("singular matrix")
+            r = linalg.solve(B, b)
+        except np.linalg.LinAlgError:
+            raise ValueError(
+                "rfun='pagerank_centrality': the PageRank system "
+                "(I - 0.85 W diag(1 / column sums)) r = b is singular for this "
+                "correlation matrix (negative weights can cancel the column "
+                "sums), so PageRank is not defined for it.  Use "
+                "rfun='strength' or rfun='eigenvector_centrality' instead."
+            ) from None
         r /= np.sum(r)
         return r
 

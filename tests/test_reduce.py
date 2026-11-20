@@ -338,3 +338,45 @@ def test_reduce_is_deterministic_for_each_model(rfun):
     first = reduce(a, rfun=rfun, ndims=3)
     second = reduce(a, rfun=rfun, ndims=3)
     np.testing.assert_array_equal(first, second)
+
+
+# --- PageRank on signed correlations: singular systems raise ValueError
+
+
+def _previous_pagerank(W, d=0.85):
+    # the package's algorithm before the singular-system check (scipy LU solve)
+    from scipy import linalg
+
+    N = len(W)
+    deg = np.sum(W, axis=0)
+    deg[deg == 0] = 1
+    B = np.eye(N) - d * np.dot(W, np.diag(1 / deg))
+    r = linalg.solve(B, (1 - d) * (np.ones((N,)) / N))
+    return r / np.sum(r)
+
+
+@pytest.mark.parametrize("K, c", [(2, -3 / 37), (3, -1 / 19)])
+def test_pagerank_singular_system_raises(K, c):
+    # a valid correlation matrix (diagonal 1, off-diagonal c, positive definite)
+    # for which I - 0.85 W diag(1 / column sums) is singular
+    M = (1 - c) * np.eye(K) + c
+    assert np.linalg.eigvalsh(M).min() > 0
+    V = np.stack([mat2vec(np.eye(K)), mat2vec(M)])
+    with pytest.raises(ValueError) as info:
+        reduce(V, rfun="pagerank_centrality")
+    message = str(info.value)
+    assert "pagerank_centrality" in message
+    assert "singular" in message
+    assert "column sums" in message
+    assert "'strength'" in message and "'eigenvector_centrality'" in message
+
+
+def test_pagerank_well_posed_outputs_unchanged_bit_for_bit():
+    rng = np.random.RandomState(7)
+    mats = [np.corrcoef(rng.randn(6, 10)) for _ in range(25)]
+    mats.append((1 - (-3 / 37)) * np.eye(4)[:4, :4] + (-3 / 37))  # K 4: well posed
+    for M in mats:
+        V = mat2vec(M)[None]
+        got = reduce(V, rfun="pagerank_centrality")[0]
+        # the matrix as reduce sees it (after vec2mat)
+        assert np.array_equal(got, _previous_pagerank(vec2mat(V)[:, :, 0]))

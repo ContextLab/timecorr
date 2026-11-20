@@ -197,7 +197,15 @@ def test_smoothing_with_a_non_finite_sample(value, row):
         lazy = tc.timecorr(x, weights_function=tc.boxcar_weights, **kw)
         dense = tc.timecorr(x, weights_function=as_array_function(tc.boxcar_weights),
                             **kw)
-    np.testing.assert_array_equal(lazy, dense)
+    if np.isnan(value):
+        # a NaN sample gets no weight, so both forms sum finite terms over
+        # each chunk's span: equal up to the order of summation (differences
+        # of 6e-17 were seen with NumPy 2.5 on Linux), as in
+        # test_smoothing_equals_the_array_kernel
+        np.testing.assert_array_equal(np.isfinite(lazy), np.isfinite(dense))
+        np.testing.assert_allclose(lazy, dense, rtol=1e-12, atol=1e-14)
+    else:
+        np.testing.assert_array_equal(lazy, dense)
     assert np.all(np.isfinite(lazy[:, 0]))
     weighted = np.abs(np.arange(300) - row) < 5  # boxcar of width 10
     if np.isnan(value):

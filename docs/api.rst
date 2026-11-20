@@ -184,7 +184,7 @@ the decoders the events are resolved once, on the full subject list, before the
 folds are formed; a per-subject entry stays with its subject in every fold; the
 boundaries are external information supplied by the caller, used as given in
 every fold and not estimated from held-out data; and segmentation does not
-advance NumPy's global random state. The :doc:`tutorial <tutorial/event_kernels_tutorial>`
+advance NumPy's global random state. The :doc:`tutorial <tutorial/events>`
 shows each form.
 
 .. code-block:: python
@@ -368,8 +368,8 @@ unit, or ``"mean"``), and ``fits_`` records the fits
 uses the pair weights without centering. With ``center=True``, the default,
 the pair weights are centered on the mean of their lower cluster (the lower
 group of the split of the sorted weights into two groups with the least
-within-group sum of squares) and clipped at 0; with ``center="median"`` (the
-default of timecorr 0.3.0) they are centered on their median. Both give zero
+within-group sum of squares) and clipped at 0; with ``center="median"`` they
+are centered on their median. Both give zero
 magnitude columns for K >= 4 nodes when the coupling is equal for every pair.
 When more than half the pairs lie within one community, the median is a
 weight of that community, so median centering removes most of its weights
@@ -469,7 +469,6 @@ Utilities
 See Also
 --------
 
-* :doc:`tutorials`: tutorials
-* :doc:`auto_examples/index`: example gallery
+* :doc:`tutorials`: the tutorial gallery
 * `GitHub repository <https://github.com/ContextLab/timecorr>`_: source code and issues
 * `Owen, Chang & Manning (2021) <https://doi.org/10.1038/s41467-021-25876-x>`_: the paper describing the method

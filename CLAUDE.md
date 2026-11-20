@@ -30,7 +30,7 @@ pytest --doctest-modules timecorr/
 
 ### Documentation
 ```bash
-# Build the HTML documentation (runs the plot_* gallery examples)
+# Build the HTML documentation (notebooks are rendered from their saved outputs)
 cd docs
 make html
 
@@ -93,10 +93,10 @@ The estimator (`wcorr`) is a kernel-weighted Pearson correlation; a true delta k
 
 ## Documentation
 
-- Sphinx with numpydoc, autosummary, sphinx-gallery and nbsphinx; source in `docs/`; theme: Furo with the Contextual Dynamics Lab look shared with the htfa and hypertools documentation (Nunito Sans, lowercase light headings, green brand colors set in `html_theme_options` in `docs/conf.py`, rules in `docs/_static/custom.css`)
+- Sphinx with numpydoc, autosummary and nbsphinx; source in `docs/`; theme: Furo with the Contextual Dynamics Lab look shared with the htfa and hypertools documentation (Nunito Sans, lowercase light headings, green brand colors set in `html_theme_options` in `docs/conf.py`, rules in `docs/_static/custom.css`)
 - API pages: `docs/api.rst` (autosummary stubs in `docs/generated/`)
-- Gallery examples: `examples/` (rendered into `docs/auto_examples/`; only `plot_*` scripts are executed)
-- Tutorial notebooks: `docs/tutorial/` (rendered without execution; execute them with nbconvert before committing). `htfa_network_animations.ipynb` downloads the HTFA fit of the story-listening data of Owen, Chang & Manning (2021) (460 MB archive, cached under `$TIMECORR_DATA`, default `~/timecorr_data`) and draws the features of orders 1 to 4 on the brain with the htfa toolbox; it writes its four 1920 x 1080, 30 fps H.264 movies (frames rendered in parallel with joblib, encoded with imageio-ffmpeg's ffmpeg at CRF 23 with `+faststart`) to `docs/_static/tutorial_media/htfa_order{1..4}.mp4` (committed; at most about 8 MB each) and links them with `<video>` tags (relative path `../_static/tutorial_media/...`) instead of embedding them
+- Gallery: the tutorials are the gallery. `docs/tutorials.rst` holds an nbsphinx `nbgallery` of the notebooks in `docs/tutorial/` (quickstart first); each card shows the image output of the notebook's one code cell tagged `nbsphinx-thumbnail` and opens the notebook (card styles in `docs/_static/custom.css`, light and dark). `tests/test_docs_tutorials.py` checks that the gallery and the notebooks match, the thumbnail cell, the Colab badge, no error outputs, and that every public name is used (as `tc.<name>`, imported or called; comments and strings do not count) in a tutorial's code cell
+- Tutorial notebooks: `docs/tutorial/` (`quickstart`, `kernels`, `subjects`, `reduce`, `simulate`, `higher_order`, `events`, `decoding`, `htfa_network_animations`, `stocks`, `trajectories`; rendered without execution; execute them with nbconvert (needs jupyter) before committing, except the three real-data notebooks, which take minutes to tens of minutes and download data). Each starts with a Colab badge and a title cell; its first code cell installs, on Google Colab only, what the notebook imports: `timecorr` (`timecorr[segment]` for `events`, plus named packages such as polars where imported; the real-data notebooks install `timecorr[tutorials]`), from PyPI, falling back to git master, and every notebook must run top to bottom in a fresh Colab runtime from that cell alone (the Colab badge is the way to run a tutorial; the docs give no other run instructions); text before a code cell is at most 3 short sentences, and numbers computed by the code are printed, not typed in the text. `higher_order.ipynb` holds the PCA event-contrast measurement that `simulate_data`'s order >= 3 warning cites. `htfa_network_animations.ipynb` downloads the HTFA fit of the story-listening data of Owen, Chang & Manning (2021) (460 MB archive, cached under `$TIMECORR_DATA`, default `~/timecorr_data`) and draws the features of orders 1 to 4 on the brain with the htfa toolbox; it writes its four 1920 x 1080, 30 fps H.264 movies (frames rendered in parallel with joblib, encoded with imageio-ffmpeg's ffmpeg at CRF 23 with `+faststart`; one frame per timepoint, 300 frames, 10 s) to `docs/_static/tutorial_media/htfa_order{1..4}.mp4` (committed; at most about 8 MB each) and links them with `<video>` tags (relative path `../_static/tutorial_media/...`) instead of embedding them; outside `docs/tutorial` it writes them to `./htfa_videos` and embeds them. `stocks.ipynb` downloads the daily returns of the 49 Industry Portfolios of the Kenneth R. French Data Library (cached under `$TIMECORR_DATA/french`; never committed) and writes `docs/_static/tutorial_media/stocks_network.mp4` (the market as a network, 42 s). `trajectories.ipynb` uses the HTFA archive of the HTFA tutorial, the French library returns and trial 86_02 of the CMU Motion Capture Database (fetched over http, checked by SHA-256, cached under `$TIMECORR_DATA/cmu_mocap`), and writes `docs/_static/tutorial_media/trajectories_{story_listening,stock_market,human_movement}.mp4` (hypertools animations). Both link their videos in the docs tree and embed them elsewhere (written to `./tutorial_media`)
 
 ## Dependencies
 
@@ -108,4 +108,5 @@ Runtime (`setup.py` `install_requires`, Python >= 3.10):
 Extras:
 - `segment`: hmmlearn (used only by `segment`, and installed on demand if missing)
 - `test`: pytest, polars, hmmlearn
-- `docs`: sphinx, furo, sphinx-gallery, numpydoc, nbsphinx, seaborn, ipykernel, nbconvert, hmmlearn, htfa[plot,brain3d] (for running `htfa_network_animations.ipynb`)
+- `docs`: what the Sphinx build needs: sphinx, furo, numpydoc, nbsphinx, ipython (`.readthedocs.yaml` installs the package with this extra, plus pandoc, and fails on warnings)
+- `tutorials`: what the real-data notebooks (htfa_network_animations, stocks, trajectories) import beyond the runtime dependencies; their Colab install cell installs `timecorr[tutorials]`: htfa[plot,brain3d]>=0.1.0, hypertools>=1.1, pyvista>=0.43, imageio-ffmpeg, pillow, joblib, ipython

@@ -684,8 +684,8 @@ class WeightedStrength(_Summary):
         their low group (the "lower cluster", described above) and clipped
         at 0 (``a_ij = max(w_ij - m, 0)``).  Any other value raises
         ``ValueError``.
-        ``"median"``: the same with ``m`` the median of the pair weights
-        (the default of timecorr 0.3.0).  False: the weights are used as
+        ``"median"``: the same with ``m`` the median of the pair weights.
+        False: the weights are used as
         they are (``a_ij = w_ij``) for any K.  Default: True.
 
     Attributes

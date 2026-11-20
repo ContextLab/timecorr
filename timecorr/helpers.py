@@ -743,6 +743,17 @@ _PAGERANK_SUM_TOL = 1e-12
 _PAGERANK_RESIDUAL_TOL = 1e-8
 _PAGERANK_RCOND = 1e-14
 
+# The estimator's denominator is sqrt(var_a * var_b) where that product is
+# finite and at least _VARIANCE_PRODUCT_MIN, and sqrt(var_a) * sqrt(var_b)
+# elsewhere (products that overflow, or are subnormal or nearly so and have
+# lost precision).
+_VARIANCE_PRODUCT_MIN = 1e-290
+# Kernel rows whose largest absolute weight lies outside
+# [_KERNEL_ROW_MIN, _KERNEL_ROW_MAX] are divided by that weight before the
+# moment sums; other rows are used as given.
+_KERNEL_ROW_MIN = 1e-100
+_KERNEL_ROW_MAX = 1e100
+
 # Relative round-off of removing a column's mean (a few float64 spacings).
 _ROUND_OFF = 64 * np.finfo(np.float64).eps
 
@@ -888,6 +899,23 @@ def _kernel_product(W, x, slices):
     return out
 
 
+def _rescale_extreme_rows(weights):
+    """
+    ``weights`` with each row whose largest absolute weight is below
+    ``_KERNEL_ROW_MIN`` or above ``_KERNEL_ROW_MAX`` divided by that largest
+    weight (a copy when any row is rescaled; ``weights`` itself otherwise).
+    A correlation does not depend on the scale of its kernel row, and the
+    moment sums of such rows would underflow or overflow.
+    """
+    peak = np.abs(weights).max(axis=1) if weights.size else np.zeros(len(weights))
+    extreme = (peak > 0) & ((peak < _KERNEL_ROW_MIN) | (peak > _KERNEL_ROW_MAX))
+    if not extreme.any():
+        return weights
+    weights = weights.copy()
+    weights[extreme] /= peak[extreme, np.newaxis]
+    return weights
+
+
 def _wcorr_setup(a, b, weights, autocorrelation):
     """
     The terms shared by every block of ``_wcorr_block``: the kernel, its time
@@ -895,7 +923,7 @@ def _wcorr_setup(a, b, weights, autocorrelation):
     each feature's kernel-weighted moments (computed once; with
     ``autocorrelation`` those of ``a`` serve for ``b`` too).  Returns a dict.
     """
-    W = weights
+    W = _rescale_extreme_rows(weights)
     A = np.abs(W)
     a = _nan_center(a)
     b = _nan_center(b)
@@ -1001,14 +1029,16 @@ def _wcorr_block(state, i0, i1, j0):
         undefined = zero | few
 
     zero_all = zero.reshape(shape[0], -1).all(axis=1)
-    den = np.sqrt(np.where(undefined, 1.0, var_a * var_b))
-    tiny = (den == 0) & ~undefined
-    if tiny.any():
-        # the product of two tiny variances underflowed: take the square
-        # roots first
-        den[tiny] = (
-            np.sqrt(np.broadcast_to(var_a, shape)[tiny])
-            * np.sqrt(np.broadcast_to(var_b, shape)[tiny])
+    with np.errstate(over="ignore", under="ignore"):
+        product = np.where(undefined, 1.0, var_a * var_b)
+    den = np.sqrt(product)
+    extreme = ~(np.isfinite(product) & (product >= _VARIANCE_PRODUCT_MIN)) & ~undefined
+    if extreme.any():
+        # the product of the variances overflowed or is subnormal (or
+        # nearly so): take the square roots first
+        den[extreme] = (
+            np.sqrt(np.broadcast_to(var_a, shape)[extreme])
+            * np.sqrt(np.broadcast_to(var_b, shape)[extreme])
         )
     r = np.where(undefined, 0.0, np.clip(num / den, -1.0, 1.0))
     return r, undefined, zero_all, few_any

@@ -485,11 +485,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `wcorr`: a kernel row whose only weights are tiny (for example the far tail
   of a narrow Gaussian next to NaN samples, weights near 1e-165) made the
   product of the two variances underflow to 0, which raised a NumPy
-  "divide by zero" `RuntimeWarning` and gave correlations of +-1 or NaN;
-  the denominator is now the product of the square roots there (all other
-  entries unchanged). The effective-sample-size check is computed on each
-  kernel row scaled by its largest weight, so such rows are no longer
-  reported as having an effective sample size below 2.
+  "divide by zero" `RuntimeWarning` and gave correlations of +-1 or NaN.
+  Products that were subnormal but non-zero (weights near 1e-162, or data
+  scaled by 2e-81) gave inaccurate correlations without a warning (0.145 in
+  place of 0.160), and products that overflowed (data scaled by 1e80, or
+  weights near 1e160) gave 0. The denominator is now `sqrt(var_a * var_b)`
+  where that product is finite and at least 1e-290 (so ordinary results are
+  unchanged bit for bit) and `sqrt(var_a) * sqrt(var_b)` elsewhere, and
+  kernel rows whose largest absolute weight is below 1e-100 or above 1e100
+  are divided by that weight before the moment sums (a correlation does not
+  depend on the scale of its kernel row; other rows are used as given). The
+  effective-sample-size check is computed on each kernel row scaled by its
+  largest weight, so such rows are no longer reported as having an
+  effective sample size below 2.
 - `reduce(..., rfun='pagerank_centrality')`: for some valid signed
   correlation matrices (for example 2 x 2 with off-diagonal -3/37) the
   PageRank system `(I - 0.85 W diag(1 / column sums)) r = b` is singular

@@ -2,8 +2,13 @@
 Defaults of the higher-order pipeline (``features`` and ``two_path_step``).
 
 The defaults are ``rfun="auto"`` (PCA at order 1, signed weighted strength at
-orders >= 2), ``delta_rfun="auto"`` (communities) and a Gaussian feeding kernel
-with variance 25 (standard deviation 5 samples).  The original pipeline is
+orders >= 2), ``delta_rfun="auto"`` (communities) and Gaussian kernels whose
+widths are set from each step's input (``weights_params="auto"``,
+``delta_weights_params="auto"``; ``tests/test_features_auto_kernels.py``).
+Most tests here give the analysis kernel (``SETTINGS``); those that compare
+with the fixed feeding kernel of variance 25, the default before ``"auto"``,
+request it with ``delta_weights_params=None`` (``OLD_FEEDING``).  The
+original pipeline is
 ``rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights``
 (pinned by ``tests/test_legacy_pipeline.py``).
 
@@ -24,6 +29,9 @@ EXPLICIT = dict(rfun="auto", delta_rfun="auto",
                 delta_weights_function=tc.gaussian_weights,
                 delta_weights_params={"var": 25})
 SETTINGS = dict(cfun=tc.autofc, weights_params={"var": 100})
+# the fixed feeding kernel (Gaussian, variance 25 at every order) that was the
+# default before delta_weights_params="auto"
+OLD_FEEDING = dict(delta_weights_params=None)
 
 
 def nested(S=2, T=300, seed=5):
@@ -60,8 +68,12 @@ def test_signature_defaults(function):
 
 
 def test_default_call_equals_the_explicit_call():
+    # delta_weights_params=None: the fixed feeding kernel (variance 25) that
+    # was the default before "auto"; the automatic default is pinned by
+    # test_default_feeding_kernel_is_automatic below and by
+    # tests/test_features_auto_kernels.py
     x = nested()
-    X, D = quiet(tc.features, x, order=2, return_delta=True, **SETTINGS)
+    X, D = quiet(tc.features, x, order=2, return_delta=True, **SETTINGS, **OLD_FEEDING)
     Xe, De = quiet(tc.features, x, order=2, return_delta=True, **SETTINGS, **EXPLICIT)
     for k in range(3):
         assert_identical(X[k], Xe[k])
@@ -71,15 +83,33 @@ def test_default_call_equals_the_explicit_call():
 
 
 def test_step_default_equals_the_explicit_step():
+    # delta_weights_params=None: see test_default_call_equals_the_explicit_call
     x = nested()
-    X1, D1 = quiet(two_path_step, x, **SETTINGS)
+    X1, D1 = quiet(two_path_step, x, **SETTINGS, **OLD_FEEDING)
     Xe, De = quiet(two_path_step, x, **SETTINGS, **EXPLICIT)
     assert_identical(X1, Xe)
     assert_identical(D1, De)
-    X2, D2 = quiet(two_path_step, D1, order=2, **SETTINGS)
+    X2, D2 = quiet(two_path_step, D1, order=2, **SETTINGS, **OLD_FEEDING)
     Xe2, De2 = quiet(two_path_step, D1, order=2, **SETTINGS, **EXPLICIT)
     assert_identical(X2, Xe2)
     assert_identical(D2, De2)
+
+
+def test_default_feeding_kernel_is_automatic():
+    # the default feeding kernel is set from each step's input: on these
+    # white data it equals the fixed kernel at order 1 (standard deviation
+    # 5) and differs from it at order 2, whose input is smooth
+    x = nested()
+    X, D = quiet(tc.features, x, order=2, return_delta=True, **SETTINGS)
+    Xa, Da = quiet(tc.features, x, order=2, return_delta=True, **SETTINGS,
+                   delta_weights_params="auto")
+    Xo, Do = quiet(tc.features, x, order=2, return_delta=True, **SETTINGS, **OLD_FEEDING)
+    for k in range(3):
+        assert_identical(X[k], Xa[k])
+        assert_identical(D[k], Da[k])
+        assert_identical(X[k], Xo[k])
+    assert_identical(D[1], Do[1])
+    assert not np.array_equal(D[2][0], Do[2][0])
 
 
 def test_order_one_output_is_unchanged():
@@ -583,10 +613,13 @@ def test_return_info_shapes_of_the_return():
 
 
 def test_return_info_content():
+    # delta_weights_params=None in both calls: with the automatic feeding
+    # kernel (the default), feeding entries also have "kernel_sd" and
+    # "sampling" (tests/test_features_auto_kernels.py)
     data = nested_modules(2, 2, 6)  # 24 nodes in 4 modules
     ws = tc.WeightedStrength(signed=True)
     (X, D), info = quiet(tc.features, data, order=2, return_delta=True,
-                         return_info=True, rfun={2: ws}, **SETTINGS)
+                         return_info=True, rfun={2: ws}, **SETTINGS, **OLD_FEEDING)
     _no_arrays(info)
     a1, f1, a2, f2 = info
     assert set(a1) == ANALYSIS_KEYS and set(a2) == ANALYSIS_KEYS
@@ -601,7 +634,8 @@ def test_return_info_content():
     assert f2["input_width"] == D[1][0].shape[1] and f2["output_width"] == D[2][0].shape[1]
     # explicit reducers: no automatic-reducer keys
     (_, D), info = quiet(tc.features, data, order=1, return_delta=True, return_info=True,
-                         rfun=None, delta_rfun="weighted_strength", **SETTINGS)
+                         rfun=None, delta_rfun="weighted_strength", **SETTINGS,
+                         **OLD_FEEDING)
     assert info[0]["requested"] is None and info[0]["effective"] is None
     assert info[0]["output_width"] == 24 * 25 // 2
     assert set(info[1]) == ANALYSIS_KEYS

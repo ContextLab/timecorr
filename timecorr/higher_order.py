@@ -2239,7 +2239,16 @@ def features(
     autocorrelation of the data is below ``exp(-1/2)`` (about 0.61), ``w``
     is 1, so the order-1 kernels have standard deviations 10 and, for
     ``T >= 40``, 5 samples: those of ``weights_params=None`` and
-    ``delta_weights_params=None``.  When both kernels are automatic and
+    ``delta_weights_params=None``.  At orders 2 and above the input was
+    itself computed with a Gaussian kernel, whose standard deviation ``sd``
+    gives it an autocorrelation width of at least about ``sqrt(2) sd``, so
+    each order's kernel is at least about 7 times as wide as the previous
+    order's (measured on simulated nested data: 5 and 47 samples at orders
+    1 and 2 in four runs of one design, and 5, 43 and 363 samples at orders
+    1 to 3 in one run of another); the widths grow by a roughly fixed
+    factor per order and do not follow slower or faster changes in the
+    data beyond that.  When both
+    kernels are automatic and
     ``events`` is None, the feeding features of each order are passed on at
     every ``s``-th row, ``s = max(1, min(floor(sd / 2), T' // 100))``, so
     later orders are computed at fewer timepoints; ``X[k]`` and ``D[k]``

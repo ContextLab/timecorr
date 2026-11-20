@@ -240,6 +240,27 @@ def test_zero_variance_window_gives_zero():
     assert np.all(np.diag(out[:, :, 50]) == 1.0)
 
 
+@pytest.mark.parametrize("nan", [False, True])
+def test_tiny_scale_features_give_scale_invariant_correlations(nan):
+    # Features scaled by 1e-130 have kernel-weighted variances near 1e-260,
+    # whose product underflows to 0 in float64; the correlations must still
+    # equal those of the unscaled features, without a RuntimeWarning.
+    rng = _rng(31)
+    T = 60
+    x = rng.randn(T, 4)
+    x[:, 1] += x[:, 0]
+    if nan:
+        x[5, 2] = np.nan
+    w = gaussian_weights(T, {"var": 30})
+    tiny = x * 1e-130
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        auto = wcorr(tiny, tiny, w)
+        cross = wcorr(tiny, tiny[:, 1:], w)
+    assert np.allclose(auto, wcorr(x, x, w), atol=1e-10, rtol=0)
+    assert np.allclose(cross, wcorr(x, x[:, 1:], w), atol=1e-10, rtol=0)
+
+
 def test_constant_feature_everywhere():
     rng = _rng(12)
     x = rng.randn(30, 3)

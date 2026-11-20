@@ -48,6 +48,7 @@ setup(
             "ipykernel",
             "nbconvert",
             "hmmlearn",
+            "htfa[plot,brain3d]>=0.1.0",
         ],
     },
     packages=find_packages(exclude=("tests", "docs")),

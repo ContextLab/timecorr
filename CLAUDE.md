@@ -96,7 +96,7 @@ The estimator (`wcorr`) is a kernel-weighted Pearson correlation; a true delta k
 - Sphinx with numpydoc, autosummary, sphinx-gallery and nbsphinx; source in `docs/`; theme: Furo with the Contextual Dynamics Lab look shared with the htfa and hypertools documentation (Nunito Sans, lowercase light headings, green brand colors set in `html_theme_options` in `docs/conf.py`, rules in `docs/_static/custom.css`)
 - API pages: `docs/api.rst` (autosummary stubs in `docs/generated/`)
 - Gallery examples: `examples/` (rendered into `docs/auto_examples/`; only `plot_*` scripts are executed)
-- Tutorial notebooks: `docs/tutorial/` (rendered without execution; execute them with nbconvert before committing)
+- Tutorial notebooks: `docs/tutorial/` (rendered without execution; execute them with nbconvert before committing). `htfa_network_animations.ipynb` downloads the HTFA fit of the story-listening data of Owen, Chang & Manning (2021) (460 MB archive, cached under `$TIMECORR_DATA`, default `~/timecorr_data`) and draws the features of orders 1 to 4 on the brain with the htfa toolbox; it writes its four 1920 x 1080, 30 fps H.264 movies (frames rendered in parallel with joblib, encoded with imageio-ffmpeg's ffmpeg at CRF 23 with `+faststart`) to `docs/_static/tutorial_media/htfa_order{1..4}.mp4` (committed; at most about 8 MB each) and links them with `<video>` tags (relative path `../_static/tutorial_media/...`) instead of embedding them
 
 ## Dependencies
 
@@ -108,4 +108,4 @@ Runtime (`setup.py` `install_requires`, Python >= 3.10):
 Extras:
 - `segment`: hmmlearn (used only by `segment`, and installed on demand if missing)
 - `test`: pytest, polars, hmmlearn
-- `docs`: sphinx, furo, sphinx-gallery, numpydoc, nbsphinx, seaborn, ipykernel, nbconvert, hmmlearn
+- `docs`: sphinx, furo, sphinx-gallery, numpydoc, nbsphinx, seaborn, ipykernel, nbconvert, hmmlearn, htfa[plot,brain3d] (for running `htfa_network_animations.ipynb`)

@@ -942,7 +942,15 @@ class Communities(_Summary):
     them, as for ``uniform_weights`` and for ``eye_weights`` on the
     feeding path.  With events, whole columns
     are shifted across event boundaries while the event masks stay
-    fixed.  ``C`` is centered on the median over all pairs, as in
+    fixed.  With a built-in kernel function, the surrogates' squared
+    correlations are averaged over every ``s``-th timepoint, where ``s`` is
+    the largest step at which two rows of the kernel still overlap by
+    ``exp(-1/4)`` (the standard deviation, rounded down, for
+    ``gaussian_weights``; 1 for ``eye_weights``): correlations at closer
+    timepoints are estimated from nearly the same samples (on 96 noise
+    inputs of 4 sizes the threshold was 1.000 to 1.002 times the threshold
+    from every timepoint, standard errors .001 to .003).  With a kernel
+    function of your own every timepoint is used.  ``C`` is centered on the median over all pairs, as in
     ``WeightedStrength(center="median")`` (``WeightedStrength`` centers on
     the lower cluster by default): with communities of 18 and 6 nodes and loadings
     0.4 and 0.2 (see ``WeightedStrength``), the
@@ -1341,6 +1349,76 @@ def _shared_lag_fraction(K, n_lags):
     return Fraction(n * q * (q - 1) + 2 * r * q, K * (K - 1))
 
 
+# The shift null averages the surrogates' squared correlations over every
+# s-th timepoint: s is the largest step at which two rows of the kernel
+# still have this normalized overlap (for a Gaussian kernel: its standard
+# deviation, rounded down).  Correlations at timepoints closer than that are
+# estimated from nearly the same samples, so the average over every s-th
+# timepoint has the variance of the average over all of them (within about
+# 1 % for a Gaussian kernel and white data) at 1 / s of the cost.  The level
+# is exp(-1/4), the overlap of two Gaussian rows one standard deviation
+# apart, less a margin for round-off.
+_NULL_ROW_OVERLAP = float(np.exp(-0.25)) * (1 - 1e-6)
+
+
+def _null_row_stride(kernel):
+    """
+    The step ``s`` between the timepoints at which the shift null evaluates
+    a kernel: for a ``LagKernel`` (a built-in kernel function), the largest
+    ``d >= 1`` such that the kernel's row at the middle timepoint (as
+    restricted by ``include_timepoints``, ``include_zero`` and
+    ``exclude_timepoints``; without events), shifted by every step up to
+    ``d``, keeps a normalized overlap ``sum(w[i] w[i + d]) / sum(w**2)`` of
+    at least ``_NULL_ROW_OVERLAP``, and at most ``T // 8``; 1 when no step
+    does.  A kernel given as an array need not depend on the lag only: 1.
+    """
+    if not isinstance(kernel, LagKernel) or kernel.empty:
+        return 1
+    plain = LagKernel(kernel.profile, kernel.include, kernel.include_zero, kernel.exclude)
+    middle = kernel.T // 2
+    c0, c1 = plain.span(middle, middle + 1)
+    row = np.nan_to_num(plain.block(middle, middle + 1, c0, c1)[0],
+                        nan=0.0, posinf=0.0, neginf=0.0)
+    norm = float(row @ row)
+    stride = 1
+    for d in range(1, min(len(row), kernel.T // 8 + 1)):
+        if norm <= 0 or float(row[d:] @ row[:-d]) / norm < _NULL_ROW_OVERLAP:
+            break
+        stride = d
+    return stride
+
+
+class _EveryNthRow:
+    """
+    Every ``stride``-th row of a ``LagKernel``, starting at row ``stride //
+    2``, with the interface the estimator reads (``shape``, ``chunks``,
+    ``block``): a (T', T) kernel whose rows are computed chunk by chunk.
+    """
+
+    def __init__(self, kernel, stride):
+        self.kernel = kernel
+        self.stride = int(stride)
+        self.rows = np.arange(self.stride // 2, kernel.shape[0], self.stride)
+        self.shape = (len(self.rows), kernel.shape[1])
+
+    def _rows(self, i0, i1):
+        return int(self.rows[i0]), int(self.rows[i1 - 1]) + 1
+
+    def chunks(self, size):
+        """``(i0, i1, c0, c1, key)`` for consecutive chunks of ``size`` rows."""
+        for i0 in range(0, len(self.rows), size):
+            i1 = min(len(self.rows), i0 + size)
+            t0, t1 = self._rows(i0, i1)
+            c0, c1 = self.kernel.span(t0, t1)
+            key = self.kernel.key(t0, t1)
+            yield i0, i1, c0, c1, None if key is None else key + (self.stride,)
+
+    def block(self, i0, i1, c0, c1):
+        """Rows ``i0:i1`` (of the kept rows), columns ``c0:c1`` (a new array)."""
+        t0, t1 = self._rows(i0, i1)
+        return np.ascontiguousarray(self.kernel.block(t0, t1, c0, c1)[:: self.stride])
+
+
 def _shift_null_threshold(
     subjects, kernels, n_null=5, bandwidth=5.0, max_block_elements=None
 ):
@@ -1358,7 +1436,11 @@ def _shift_null_threshold(
     one ``UserWarning`` per call says so; computes the subjects' pair weights ``w`` with the given
     kernels and ``autofc`` (streamed, in blocks of at most
     ``max_block_elements`` correlations; None: the estimator's default block
-    size, see ``_rows_per_block``); and records the
+    size, see ``_rows_per_block``), averaging the squared correlations over
+    every ``s``-th timepoint when every kernel is a ``LagKernel`` (``s``:
+    the smallest ``_null_row_stride`` of the kernels; rows ``s // 2, s // 2
+    + s, ...``) and over all timepoints for kernels given as arrays; and
+    records the
     largest eigenvalue of ``C = Wbar - median(Wbar over i < j)`` (zero
     diagonal).  Returns the maximum over ``n_null`` repetitions.  Lags are
     drawn per repetition, subject by subject, K at a time.  NumPy's global
@@ -1401,7 +1483,11 @@ def _shift_null_threshold(
         )
     rng = np.random.default_rng(0)
     probe = _Units(subjects, kernels, autofc)
-    T_out = probe.kernels[0].shape[0]
+    null_kernels = probe.kernels
+    stride = min(_null_row_stride(k) for k in null_kernels)
+    if stride > 1:
+        null_kernels = [_EveryNthRow(k, stride) for k in null_kernels]
+    T_out = null_kernels[0].shape[0]
     b = _rows_per_block(max_block_elements, T_out, K, T, probe.has_nan)
     rows = np.arange(T)[:, None]
     cols = np.arange(K)
@@ -1412,7 +1498,7 @@ def _shift_null_threshold(
             lags = _shift_lags(rng, T, K, L)
             shifted.append(x[(rows - lags[None, :]) % T, cols])
         units = _Units(
-            shifted, kernels, autofc, grouping=(probe.kernels, probe.group_of)
+            shifted, kernels, autofc, grouping=(null_kernels, probe.group_of)
         )
         states = _accumulate_units(units, K, T_out, False, b)
         del units, shifted

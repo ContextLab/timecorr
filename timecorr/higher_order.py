@@ -2354,7 +2354,10 @@ def features(
     ``ceil(d / n)`` times within a subject, and columns that share a lag
     (a fraction [n q (q - 1) + 2 r q] / [d (d - 1)] of the column pairs,
     d = q n + r) keep their dependence in that surrogate, with one
-    ``UserWarning`` per fit; and the summary's ``n_null`` surrogates.
+    ``UserWarning`` per fit; and the summary's ``n_null`` surrogates, whose
+    squared correlations are averaged over every ``s``-th timepoint for a
+    built-in kernel function (``s``: the kernel's standard deviation,
+    rounded down, for ``gaussian_weights``; see ``Communities``).
 
     Examples
     --------

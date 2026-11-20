@@ -9,6 +9,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Kernels without a T x T matrix.** For the built-in kernel functions
+  (`gaussian_weights`, `laplace_weights`, `t_weights`,
+  `mexican_hat_weights`, `boxcar_weights`, `uniform_weights`,
+  `eye_weights`), `timecorr`, `features`, `two_path_step`, the streamed
+  summaries and the decoders no longer build the T x T kernel. The
+  estimator computes it 128 rows at a time, over the columns where those
+  rows can have weight, with `include_timepoints`, `include_zero`,
+  `exclude_timepoints` and `events` applied, and keeps at most 32 MB of
+  such blocks, so the kernel's memory grows linearly in T. The correlations
+  equal those computed from the T x T matrix exactly (the smoothed values
+  of `cfun=None` up to the order of summation); the estimator reads T x T
+  arrays in the same chunks, so its results can differ from earlier
+  versions in the last bits. Run time grows linearly in T once T is well
+  above the largest lag with a non-zero weight in float64 (192 samples for
+  a Gaussian of variance 25, 385 at variance 100); the uniform kernel, which
+  has weight at every lag, still takes time proportional to `T**2`. A
+  kernel function of your own, and a correlation function of your own, get
+  T x T arrays as before. `estimate_memory_gb` and the `max_memory_gb`
+  checks count the new kernel memory (`3 T**2` elements up to T = 1,270,
+  then at most 32 MB plus 4 blocks of 128 x T per correlation call), and
+  `estimate_memory_gb` has a keyword `weights_function` that counts a
+  kernel function of your own as T x T arrays. Measured on one subject with
+  K = 100 features and a Gaussian of variance 100 (Apple M2 Max, 2 BLAS
+  threads, peak resident memory of the process), before and after:
+
+  | call | T | before | after |
+  |-|-|-|-|
+  | `timecorr` | 3,000 | 1.8 s, 1.71 GB | 1.8 s, 1.50 GB |
+  | `timecorr` | 20,000 | 14.0 s, 15.5 GB | 7.2 s, 3.89 GB |
+  | `timecorr` | 100,000 | not run (estimate 253 GB) | 77 s, 14.8 GB |
+  | `features`, order 2 | 3,000 | 9.6 s, 1.13 GB | 11.0 s, 0.93 GB |
+  | `features`, order 2 | 20,000 | 138 s, 12.7 GB | 40 s, 1.15 GB |
+  | `features`, order 2 | 100,000 | not run (estimate 564 GB) | 348 s, 2.14 GB |
+
+  (`features` with `cfun=tc.autofc`, `rfun=tc.WeightedStrength(signed=True)`,
+  `delta_rfun="weighted_strength"`, `max_memory_gb=None`; the estimates
+  are those of `estimate_memory_gb` before the change. Most of the
+  `timecorr` memory at T = 100,000 is the (K, K, T) correlations and their
+  vectorized copy.)
+
 - **Shift null with more columns than lags.** The shift null of the
   automatic community count (`Communities()` and split `WeightedStrength`
   without `n`, and the default feeding reducer) no longer raises

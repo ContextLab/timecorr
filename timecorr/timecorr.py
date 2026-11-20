@@ -231,7 +231,11 @@ def timecorr(
         ``t_weights``, ``mexican_hat_weights``, ``boxcar_weights``,
         ``uniform_weights``, ``eye_weights`` (a delta kernel, which gives
         co-fluctuations: products of the z-scored series), or a function of
-        your own with the same signature.
+        your own with the same signature.  The built-in kernel functions are
+        not called: the same weights are computed 128 rows at a time, over
+        the columns where those rows can have weight, so no T x T array is
+        allocated and memory grows linearly in T (see Notes).  A function of
+        your own is called, and its T x T array is used.
     weights_params : dict or None
         Parameters of the kernel, e.g. ``{"var": 100}`` for
         ``gaussian_weights``.  Default: None (the kernel's defaults:
@@ -241,7 +245,7 @@ def timecorr(
         Which timepoints may contribute to the estimate at each timepoint:
         "all" (default), "backward" (alias "pre": only timepoints at or before
         ``t``), or "forward" (alias "post": only timepoints at or after ``t``).
-        Applied to the kernel matrix after it is built (see ``one_sided``).
+        Applied to the kernel after it is built (see ``one_sided``).
     exclude_timepoints : int or None
         Further restricts the kernel by distance from ``t``.  A positive value
         ``x`` keeps only the timepoints at most ``x`` samples from ``t``; a
@@ -369,11 +373,26 @@ def timecorr(
     for ``autofc``); the reference is not restricted by the other subjects'
     events.  Subjects with identical boundaries share one kernel.  ``isfc``,
     ``wisfc`` and ``autofc`` receive the list of per-subject kernels in one
-    call, which holds one T x T kernel per distinct event set in memory.  Any
-    other ``cfun`` is called once per distinct event set with the full data
-    and one kernel (one T x T kernel at a time); it must return a list with
-    one array per subject, and subject s's output is taken from the call made
-    with subject s's kernel.
+    call (with a kernel function of your own, one T x T array per distinct
+    event set is held in memory).  Any other ``cfun`` is called once per
+    distinct event set with the full data and one T x T kernel array at a
+    time; it must return a list with one array per subject, and subject s's
+    output is taken from the call made with subject s's kernel.
+
+    Kernels and memory: with a built-in kernel function and ``cfun`` one of
+    ``isfc``, ``wisfc``, ``autofc`` or None, the kernel is never built as a
+    T x T array.  The estimator reads it 128 rows at a time, each chunk
+    over the columns where its rows have non-zero weight, and keeps at most
+    32 MB of such blocks.  The correlations equal those computed from the
+    T x T array exactly, and the smoothed values (``cfun=None``) up to the
+    order of summation.  The
+    time grows linearly in T once T is well above the kernel's span (the
+    largest lag with a non-zero weight in float64: 192 samples for a
+    Gaussian of variance 25, 385 at variance 100, 73,983 for the Laplace
+    kernel at its default scale of 100, 15,823 for the t kernel at its
+    default df of 100); the uniform kernel has weight at every lag, so its
+    time grows with ``T**2`` while its memory still grows linearly.  A
+    custom ``cfun`` receives T x T arrays.
 
     With per-subject events and a cross-subject correlation function (``isfc``,
     ``wisfc``), the timepoints that enter subject s's correlations at time t are those

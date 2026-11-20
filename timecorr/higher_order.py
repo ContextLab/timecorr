@@ -172,7 +172,7 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
     ``delta_weights_function`` and the default ``combine`` (``null_combine``)
     for data without NaNs; other ``combine`` functions and reducers allocate
     more.  The built-in kernel functions are read a chunk of rows at a time:
-    their kernel term is ``3 T**2`` elements up to about T = 1,200 and then
+    their kernel term is ``3 T**2`` elements up to T = 1,270 and then
     grows linearly in T (at most 32 MB plus 4 blocks of 128 rows by T
     columns); a kernel function of your own gives T x T arrays (``3 T**2``).
     With per-subject events, the kernels of the distinct event sets (one
@@ -540,7 +540,9 @@ def _step_kernels(T, n_subjects, weights_function, weights_params,
                   include_timepoints="all", include_zero=True, events=None):
     """
     The kernel(s) ``timecorr`` builds for these arguments and RESOLVED events:
-    one T x T kernel, or one per subject when the subjects' events differ.
+    one kernel, or one per subject when the subjects' events differ
+    (``LagKernel`` objects for a built-in kernel function, T x T arrays
+    otherwise).
     """
     weights = _shaped_kernel(
         T, weights_function, weights_params, include_timepoints, include_zero
@@ -1326,8 +1328,8 @@ def two_path_step(
         of the step for all subjects together (see ``features`` and
         ``estimate_memory_gb``); both paths are checked before either
         computes anything.  With per-subject events, the kernels of the
-        distinct event sets (one T x T array each) are not included in the
-        estimate of a materialized step; a streamed step counts them, the
+        distinct event sets (one T x T array each for a kernel function of
+        your own) are not included in the estimate of a materialized step; a streamed step counts them, the
         analysis results held while the feeding path runs, and the (K, K)
         arrays kept in summaries' ``fits_``, before its kernels are built.
         None checks nothing.  Default: 4.0.
@@ -1937,8 +1939,8 @@ def features(
         as many rows as fit; if one row per block does not fit
         (``estimate_memory_gb(..., streamed=True)``), it raises.  With
         per-subject events, the kernels of the distinct event sets (one T x
-        T array each) are not included in the estimate of a step that holds
-        its correlations; a streamed step counts them and is checked before
+        T array each for a kernel function of your own) are not included in
+        the estimate of a step that holds its correlations; a streamed step counts them and is checked before
         its kernels are built.  Every step, streamed or not, on both paths,
         also counts what the run retains: the outputs of earlier orders
         (``X_1 .. X_{k-1}``; ``D_1 .. D_{k-1}`` when ``return_delta=True``,

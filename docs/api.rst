@@ -218,6 +218,18 @@ Each kernel function returns a ``T x T`` matrix whose row ``t`` is the kernel
 used to estimate at timepoint ``t``. Every kernel function accepts
 ``direction`` (``None``, ``"backward"`` or ``"forward"``) and ``include_zero``.
 
+:func:`timecorr`, :func:`features`, :func:`two_path_step` and the decoders do
+not call the built-in kernel functions below. They compute the same weights
+128 rows at a time, over the columns where those rows can have non-zero
+weight, with ``include_timepoints``, ``include_zero``, ``exclude_timepoints``
+and ``events`` applied, so no ``T x T`` array is allocated and memory grows
+linearly in ``T``. The correlations equal those computed from the ``T x T``
+matrix. Run time grows linearly in ``T`` once ``T`` is well above the largest
+lag with a non-zero weight in float64 (192 samples for a Gaussian of variance
+25, 385 at variance 100); the uniform kernel has weight at every lag, so its
+run time grows with ``T**2``. A kernel function of your own is called, and its
+``T x T`` matrix is used.
+
 .. autosummary::
    :toctree: generated/
    :nosignatures:

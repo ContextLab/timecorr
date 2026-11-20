@@ -70,8 +70,8 @@ docstring of ``tests/test_nested_recovery.py``.
 
     communities found at order 1: 18
     order-2 features per subject: (1000, 36)
-    correlation of decoded and true h, per supergroup: [0.81 0.75 0.89 0.8  0.48 0.72]
-    mean (raw score, one seed): 0.74
+    correlation of decoded and true h, per supergroup: [0.81 0.75 0.89 0.79 0.46 0.71]
+    mean (raw score, one seed): 0.73
 
 
 
@@ -147,7 +147,7 @@ docstring of ``tests/test_nested_recovery.py``.
 
 .. rst-class:: sphx-glr-timing
 
-   **Total running time of the script:** (0 minutes 2.823 seconds)
+   **Total running time of the script:** (0 minutes 5.371 seconds)
 
 
 .. _sphx_glr_download_auto_examples_plot_nested_recovery.py:

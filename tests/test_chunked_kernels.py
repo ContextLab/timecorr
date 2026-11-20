@@ -466,6 +466,48 @@ def test_streamed_step_stays_within_the_budget_it_was_given(cfun, T, factor):
     assert peak <= budget * 1e9, (peak, budget)
 
 
+@pytest.mark.parametrize("K, T", [(150, 200), (100, 200), (100, 300)])
+def test_streamed_wisfc_stays_within_the_budget_it_was_given(K, T):
+    # wisfc's default subject weights correlate the subjects' static
+    # connectomes; those correlations must be computed within the budget too
+    # (before the fix they used the estimator's default blocks: up to 1.84
+    # times the budget at K 150, T 200, 3 subjects)
+    S = 3
+    rng = np.random.default_rng(0)
+    data = [rng.standard_normal((T, K)) for _ in range(S)]
+    budget = ho.estimate_memory_gb(K, 1, T, S, streamed=True)[1]
+    peak, out = traced_peak(lambda: run(
+        tc.features, data, order=1, cfun=tc.wisfc, rfun=tc.WeightedStrength(signed=True),
+        delta_rfun=None, max_memory_gb=budget, weights_params={"var": 100},
+    ))
+    assert not isinstance(out[0], str), out[0]
+    assert peak <= budget * 1e9, (peak, budget)
+
+
+@pytest.mark.parametrize("combine", [tc.corrmean_combine, tc.mean_combine, tc.tstat_combine],
+                         ids=["corrmean", "mean", "tstat"])
+@pytest.mark.parametrize("K, T, S", [(60, 300, 6), (100, 200, 6), (80, 400, 5)])
+def test_step_estimate_counts_the_builtin_combine_functions(combine, K, T, S):
+    # the combine function runs on every subject's vectorized correlations;
+    # its temporaries are counted in the estimate and the guard (before,
+    # corrmean_combine traced 2.0 times the estimate at K 300, T 300, 3
+    # subjects)
+    rng = np.random.default_rng(0)
+    data = [rng.standard_normal((T, K)) for _ in range(S)]
+    budget = ho.estimate_memory_gb(K, 1, T, S, combine=combine)[1]
+    peak, out = traced_peak(lambda: run(
+        tc.features, data, order=1, cfun=tc.isfc, combine=combine, rfun=None,
+        delta_rfun=None, max_memory_gb=budget, weights_params={"var": 100},
+    ))
+    assert not isinstance(out[0], str), out[0]
+    assert peak <= budget * 1e9, (peak, budget)
+    # the guard uses the same estimate
+    with pytest.raises(MemoryError, match=f"need about {budget:.3g} GB"):
+        tc.features(data, order=1, cfun=tc.isfc, combine=combine, rfun=None,
+                    delta_rfun=None, max_memory_gb=0.99 * budget,
+                    weights_params={"var": 100})
+
+
 @pytest.mark.parametrize("T", [3_000, 20_000, 50_000])
 @pytest.mark.parametrize("cfun", [tc.autofc, tc.isfc], ids=["autofc", "isfc"])
 def test_streamed_estimate_is_not_below_the_traced_peak(T, cfun):

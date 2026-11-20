@@ -1777,12 +1777,31 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     return corrs
 
 
-def _subject_weight_matrix(data, subject_weights):
+def _static_connectome(d, iu, rows_per_block):
+    """
+    The upper triangle (``iu``) of the static correlation matrix of ``d``
+    (T, K): ``wcorr`` with one uniform kernel row, or, with
+    ``rows_per_block``, computed that many rows at a time (the entries agree
+    with ``wcorr``'s to round-off; the temporaries stay at block size).
+    """
+    static = np.ones([1, d.shape[0]])
+    if rows_per_block is None:
+        return wcorr(d, d, static)[:, :, 0][iu]
+    K = d.shape[1]
+    c = np.empty((K, K))
+    for i0, i1, R, _, _ in _corr_row_blocks(d, d, static, True, rows_per_block):
+        c[i0:i1] = R[:, :, 0]
+    return c[iu]
+
+
+def _subject_weight_matrix(data, subject_weights, rows_per_block=None):
     """
     The S x S subject weights ``wisfc`` uses for a list of S subjects: the
     given matrix, a scalar for every other subject, or (None) the default
     weights from the correlations between the subjects' static correlation
-    matrices (see ``wisfc``).
+    matrices (see ``wisfc``).  ``rows_per_block``: compute the static
+    correlation matrices that many rows at a time (the streamed summaries
+    pass their block size, so the weights fit their memory budget).
     """
     S = len(data)
     if subject_weights is None:
@@ -1794,9 +1813,8 @@ def _subject_weight_matrix(data, subject_weights):
             # between connectomes is defined; weight the other subjects equally
             subject_weights = others
         else:
-            static = np.ones([1, data[0].shape[0]])
             connectomes = np.stack(
-                [wcorr(d, d, static)[:, :, 0][iu] for d in data], axis=1
+                [_static_connectome(d, iu, rows_per_block) for d in data], axis=1
             )
             subject_weights = wcorr(connectomes, connectomes, np.ones([1, len(iu[0])]))[
                 :, :, 0

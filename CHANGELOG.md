@@ -64,6 +64,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   example,
   `estimate_memory_gb(100, 2, 200, n_subjects=3)` is now
   `[0.0, 0.18, 104.372]` (it was `[0.0, 0.163, 102.484]`).
+- **Memory of the combine functions.** `estimate_memory_gb` has a keyword
+  `combine`, and the `max_memory_gb` checks of `features`, `two_path_step`
+  and the decoders count the temporaries of `corrmean_combine`,
+  `mean_combine` and `tstat_combine` (measured with `tracemalloc`: about
+  5.3, S + 1 and 7.7 to 9.8 times the S subjects' results). Before, they
+  were not counted: at K = 300, T = 300 and 3 subjects, `corrmean_combine`
+  traced 2.05 GB against an estimate of 1.02 GB (now 2.12 GB), and
+  `tstat_combine` 3.21 GB (now 3.31 GB). A `combine` function of your own
+  cannot be counted.
+- **Streamed `wisfc` within its budget.** The default subject weights of
+  `wisfc` (correlations between the subjects' static correlation matrices)
+  are computed in the streamed step's blocks of rows. Before, they used the
+  estimator's default blocks, and a streamed `wisfc` step could exceed the
+  `max_memory_gb` it was given (1.84 times at K = 150, T = 200, 3 subjects;
+  now 0.54 times).
 - **`exclude_timepoints` with a non-integer value.** It is rounded to the
   nearest integer, as documented, for a kernel function of your own too
   (it raised `TypeError` before; 2.5, for example).

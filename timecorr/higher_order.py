@@ -2040,8 +2040,11 @@ def features(
     ``cfun=autofc`` and ``combine=null_combine``; the null uses the step's
     kernel (with its events), and circular shifts of at least
     ``L = min(T // 4, max(10, 10 * sd))`` samples, where sd is the kernel's
-    standard deviation (``sqrt(var)`` for kernels with a ``"var"``
-    parameter, otherwise 5), distinct within a subject when the n integers
+    standard deviation (``sqrt(var)`` for kernels whose parameters, or
+    whose function's default parameters when they are None, have a
+    ``"var"``; otherwise 5, whatever the kernel's own width parameter, for
+    example ``scale`` of ``laplace_weights``, and 5 for ``eye_weights``),
+    distinct within a subject when the n integers
     in ``[L, T - L]`` are at least the d input features (drawn without
     replacement); with d > n, each lag is used ``d // n`` or
     ``ceil(d / n)`` times within a subject, and columns that share a lag

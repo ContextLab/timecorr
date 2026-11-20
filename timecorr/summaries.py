@@ -719,7 +719,11 @@ class Communities(_Summary):
         Default: None.
     signed : bool
         If True, as many more columns: ``mean over i != j in g of
-        sign(mean_t r_ij) r_ij(t)``.  Default: False.
+        sign(mean_t r_ij) r_ij(t)``.  Both columns of a community are
+        computed from the same correlations ``r_ij(t)`` within it; on the
+        feeding path of ``features``, the next order's correlations
+        therefore include the correlation between each community's
+        magnitude column and its own signed column.  Default: False.
     n_null : int
         Number of surrogates of the shift null that sets ``null_threshold``
         when ``features`` or ``two_path_step`` count the communities
@@ -764,7 +768,16 @@ class Communities(_Summary):
     share a lag (about a fraction ``1 / n`` of the column pairs) keep their
     dependence in that surrogate.  It assumes that dependence between
     columns does not survive a relative shift of the sizes drawn; strongly
-    autocorrelated signals can violate this.  With events, whole columns
+    autocorrelated signals can violate this.  In ``features`` and
+    ``two_path_step``, ``L = min(T // 4, max(10, 10 * sd))``, with sd =
+    ``sqrt(params["var"])`` when the step's kernel parameters (or, for
+    None, the kernel function's default parameters) have a ``"var"`` key,
+    and sd = 5 samples otherwise: the width parameters of
+    ``laplace_weights`` (``scale``), ``mexican_hat_weights`` (``sigma``),
+    ``t_weights`` (``df``), ``boxcar_weights`` (``width``) and of custom
+    kernels without ``"var"`` are not read, so ``L = min(T // 4, 50)`` for
+    them, as for ``uniform_weights`` and for ``eye_weights`` on the
+    feeding path.  With events, whole columns
     are shifted across event boundaries while the event masks stay
     fixed.  ``C`` is centered on the median over all pairs, as in
     ``WeightedStrength``: with communities of 18 and 6 nodes and loadings

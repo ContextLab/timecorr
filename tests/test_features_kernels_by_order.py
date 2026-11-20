@@ -311,3 +311,26 @@ def test_analysis_communities_use_the_kernel_of_their_order():
     )
     for a, b in zip(X[1], X_default[1]):
         assert_identical(a, b)
+
+
+@pytest.mark.parametrize("function, params", [
+    (tc.laplace_weights, {"scale": 2}),
+    (tc.laplace_weights, {"scale": 400}),
+    (tc.mexican_hat_weights, {"sigma": 30}),
+    (tc.boxcar_weights, {"width": 40}),
+])
+def test_shift_null_reads_only_a_var_parameter(function, params):
+    # the shift null's L reads sqrt(params["var"]) and otherwise takes the
+    # standard deviation as 5: for these kernels L = min(T // 4, 50)
+    from timecorr.summaries import _shift_null_threshold
+    x = nested(T=200)
+    (_, info) = quiet(tc.features, x, order=1, return_delta=True, return_info=True,
+                      cfun=tc.autofc, delta_weights_function=function,
+                      delta_weights_params=params)
+    feeding = next(d for d in info if d["path"] == "feeding")
+    kernels = ho._step_kernels(200, 2, function, params)
+    assert ho._bandwidth(function, params) == 5.0
+    expected = _shift_null_threshold(x, kernels, bandwidth=5.0)
+    assert feeding["null_threshold"] == pytest.approx(expected, rel=1e-12)
+    assert ho._bandwidth(tc.gaussian_weights, None) == 10.0
+    assert ho._bandwidth(function, {**params, "var": 4}) == 2.0

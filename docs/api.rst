@@ -110,7 +110,9 @@ integer and other keys, or with boolean keys, raises ``ValueError``.
 The default feeding reducer needs at least 4 features and 40 timepoints. Its
 shift null circularly shifts each column by a lag from the n integers in
 ``[L, T - L]`` (``L = min(T // 4, max(10, 10 * sd))``, sd the kernel's standard
-deviation): with at most n columns, the lags of a subject are distinct; with
+deviation ``sqrt(var)`` when its parameters have a ``"var"``, and 5 otherwise:
+the width parameters of other kernels, such as ``scale`` of
+``laplace_weights``, are not read): with at most n columns, the lags of a subject are distinct; with
 K > n columns, each lag is used ``K // n`` or ``ceil(K / n)`` times within a
 subject, and columns that share a lag (about a fraction ``1 / n`` of the column
 pairs) keep their dependence in that surrogate. When the
@@ -354,7 +356,11 @@ K >= 4 nodes, and when more than half the pairs lie within one community the
 median is a weight of that community, so centering removes most of its
 weights and zeroes those of a more weakly coupled smaller community; see the
 ``WeightedStrength`` Notes); ``n_null`` sets the number of shift-null surrogates of the
-automatic count of communities (default 5).
+automatic count of communities (default 5). ``Communities(signed=True)``
+emits a magnitude and a signed column per community, both computed from the
+correlations within that community; on the feeding path of ``features``, the
+next order's correlations include the correlation between each community's
+two columns.
 
 .. code-block:: python
 

@@ -1832,10 +1832,8 @@ def apply_by_row(corrs, f):
         return list(map(lambda x: apply_by_row(x, f), corrs))
 
     corrs = vec2mat(corrs)
-    return np.stack(
-        list(map(lambda x: f(np.squeeze(x)), np.split(corrs, corrs.shape[2], axis=2))),
-        axis=0,
-    )
+    # index the timepoint axis (np.squeeze would also drop K = 1 axes)
+    return np.stack([f(corrs[:, :, t]) for t in range(corrs.shape[2])], axis=0)
 
 
 def corrmean_combine(corrs):
@@ -2198,8 +2196,9 @@ def reduce(corrs, rfun=None, ndims=None):
           ``'pagerank_centrality'``, ``'pagerank_centrality_abs'``, or
           ``'strength'`` (strings only), computed
           per node for each timepoint from the K x K matrix (diagonal
-          included), with signed weights used as they are, without taking
-          absolute values: ``'strength'`` is the row sum, so negative
+          included).  All but ``'pagerank_centrality_abs'`` use signed
+          weights as they are, without taking absolute values: ``'strength'``
+          is the row sum, so negative
           correlations subtract; ``'eigenvector_centrality'`` is the absolute
           value of the unit eigenvector of the largest (most positive)
           eigenvalue of the symmetrized matrix; ``'pagerank_centrality'``
@@ -2226,11 +2225,14 @@ def reduce(corrs, rfun=None, ndims=None):
           diagonally dominant by columns, with 1-norm condition number at
           most ``(1 + 0.85) / (1 - 0.85)``, about 12.3), so it never falls back or
           warns; a timepoint with a non-finite entry gives NaNs.  It equals
-          ``'pagerank_centrality'`` when every weight is non-negative, and
+          ``'pagerank_centrality'`` up to round-off when every weight is
+          non-negative, and
           ignores the sign of the correlations otherwise.  A delta-kernel co-fluctuation matrix
           ``z z^T`` has rank one, so on the delta path of ``features`` with
           ``delta_weights_function=eye_weights`` eigenvector centrality equals ``|z| / ||z||`` and the graph measures
-          carry no network structure.
+          carry no network structure.  With one node (K = 1, the 1 x 1
+          matrix ``[[w]]``), ``'strength'`` is ``w`` and the other three
+          measures are 1 at every timepoint.
         - A squared-correlation summary (see ``timecorr.summaries``): a
           ``WeightedStrength`` or ``Communities`` instance, or the strings
           ``'weighted_strength'`` (``WeightedStrength()``),

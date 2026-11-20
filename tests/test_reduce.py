@@ -559,3 +559,60 @@ def test_abs_pagerank_is_a_graph_measure_not_a_model():
         _check_rfun({"model": "pagerank_centrality_abs"})
     with pytest.raises(ValueError, match="ndims"):
         reduce(seeded_vectorized_corrs(), rfun="pagerank_centrality_abs", ndims=2)
+
+
+GRAPH_MEASURES = (
+    "eigenvector_centrality",
+    "pagerank_centrality",
+    "pagerank_centrality_abs",
+    "strength",
+)
+
+
+def _one_node_expected(measure, w):
+    """Graph measure of the 1 x 1 matrix [[w]]: strength is the row sum w;
+    the unit eigenvector is [1]; PageRank normalized to sum 1 is [1]."""
+    return w if measure == "strength" else 1.0
+
+
+@pytest.mark.parametrize("measure", GRAPH_MEASURES)
+def test_graph_measures_with_one_node(measure):
+    # 1 x 1 matrices with signed, zero and unit weights, and a single timepoint
+    weights = np.array([1.0, 0.3, -0.5, 0.0])
+    V = weights[:, None]  # mat2vec of [[w]] is the one-entry vector [w]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = reduce(V, rfun=measure)
+        single = reduce(V[:1], rfun=measure)
+    assert out.shape == (4, 1)
+    expected = np.array([_one_node_expected(measure, w) for w in weights])
+    np.testing.assert_allclose(out[:, 0], expected, rtol=0, atol=1e-15)
+    assert single.shape == (1, 1)
+    np.testing.assert_allclose(single, out[:1], rtol=0, atol=0)
+
+    # through timecorr: one feature, its correlation with itself is 1
+    x = np.random.default_rng(0).standard_normal((50, 1))
+    got = __import__("timecorr").timecorr(x, rfun=measure)
+    assert got.shape == (50, 1)
+    np.testing.assert_allclose(got[:, 0], _one_node_expected(measure, 1.0), atol=1e-12)
+
+
+@pytest.mark.parametrize("measure", GRAPH_MEASURES)
+def test_graph_measures_with_two_nodes(measure):
+    r = np.array([0.4, -0.6, 0.9])
+    V = np.stack([mat2vec(np.array([[1.0, ri], [ri, 1.0]])) for ri in r])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = reduce(V, rfun=measure)
+        single = reduce(V[:1], rfun=measure)
+    assert out.shape == (3, 2)
+    if measure == "strength":
+        expected = np.column_stack([1 + r, 1 + r])
+    elif measure == "eigenvector_centrality":
+        # eigenvalues 1 +- r; the top eigenvector is (1, sign(r)) / sqrt(2)
+        expected = np.full((3, 2), 1 / np.sqrt(2))
+    else:
+        # a symmetric 2 x 2 network: both nodes get rank 1/2
+        expected = np.full((3, 2), 0.5)
+    np.testing.assert_allclose(out, expected, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(single, out[:1], rtol=0, atol=0)

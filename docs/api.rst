@@ -337,7 +337,7 @@ system, and otherwise the uniform vector 1/K, with one ``UserWarning`` per
 ``reduce`` call giving the counts (see ``reduce``).
 ``"pagerank_centrality_abs"`` is PageRank on the absolute values ``|r|``: it
 is defined for every finite matrix, never falls back and never warns, and it
-equals ``"pagerank_centrality"`` when no weight is negative.
+equals ``"pagerank_centrality"`` up to round-off when no weight is negative.
 
 Squared-correlation summaries
 -----------------------------

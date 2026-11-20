@@ -488,6 +488,59 @@ def test_bad_fit_index_raises(nested, fit_index, match):
             summary.transform(A, fit_index=fit_index)
 
 
+@pytest.mark.parametrize(
+    "spelling, plain",
+    [
+        (np.int64(1), 1),
+        (np.uint8(0), 0),
+        (np.array(1), 1),
+        (np.array(0, dtype=np.int32), 0),
+        (range(2), [0, 1]),
+        (range(1, -1, -1), [1, 0]),
+        ((1, 0), [1, 0]),
+        (np.array([1, 0]), [1, 0]),
+        (np.array([1, 1], dtype=np.uint16), [1, 1]),
+        ([np.int64(0), np.int32(1)], [0, 1]),
+    ],
+)
+def test_fit_index_accepts_numpy_integers_ranges_tuples_and_arrays(
+    nested, spelling, plain
+):
+    _, _, A = nested
+    for summary in (tc.WeightedStrength(signed=True), tc.Communities(n=6, signed=True)):
+        summary.fit(A)
+        expected = summary.transform(A, fit_index=plain)
+        got = summary.transform(A, fit_index=spelling)
+        for a, b in zip(got, expected):
+            np.testing.assert_array_equal(a, b)
+
+
+@pytest.mark.parametrize(
+    "fit_index, match",
+    [
+        (np.True_, "fit_index must be"),
+        (np.array(True), "fit_index must be"),
+        (np.float64(1.0), "fit_index must be"),
+        (np.array(1.0), "fit_index must be"),
+        (np.array([1.0, 0.0]), r"fit_index must be .*got fit_index\[0\]=.*1\.0"),
+        (np.array([True, False]), r"fit_index must be .*got fit_index\[0\]=.*True"),
+        ([0, False], r"fit_index must be .*got fit_index\[1\]=False"),
+        ((0, 1.0), r"fit_index must be .*got fit_index\[1\]=1\.0"),
+        (np.array([[0, 1]]), r"fit_index must be .*1-D.*2 dimensions"),
+        (b"mean", "fit_index must be"),
+        (bytearray(b"\x00\x01"), "fit_index must be"),
+        ({0, 1}, "fit_index must be"),
+        (1 + 0j, "fit_index must be"),
+    ],
+)
+def test_fit_index_rejects_bools_floats_and_other_types_clearly(nested, fit_index, match):
+    _, _, A = nested
+    for summary in (tc.WeightedStrength(signed=True), tc.Communities(n=6)):
+        summary.fit(A)
+        with pytest.raises(ValueError, match=match):
+            summary.transform(A, fit_index=fit_index)
+
+
 def test_fit_index_with_a_single_array_needs_a_scalar(nested):
     _, _, A = nested
     ws = tc.WeightedStrength().fit(A)
@@ -1226,13 +1279,23 @@ def _time_varying_communities(sizes, scale, gamma, seed, T=1000):
     return data, labels, rho
 
 
-@pytest.mark.parametrize("gamma, scale", [(0.0, (0.5, 0.25)), (0.2, (0.45, 0.25))])
-def test_default_centering_keeps_the_small_community_on_held_out_seeds(gamma, scale):
-    # Benchmark of the WeightedStrength Notes on its held-out seeds 1000-1003
-    # (measured there, per seed: small-community score .29 to .54, kept
-    # fraction .93 to 1; median centering: score 0, kept 0)
+@pytest.mark.parametrize(
+    "gamma, scale, min_score",
+    [(0.0, (0.5, 0.25), 0.28), (0.2, (0.45, 0.25), 0.31)],
+)
+def test_default_centering_keeps_the_small_community(gamma, scale, min_score):
+    # Benchmark of the WeightedStrength Notes on seeds 2000-2003, which were
+    # used neither to choose the rule (development seeds 0-7) nor to
+    # evaluate it (held-out seeds 1000-1015).  The thresholds were fixed
+    # from the development seeds before these seeds were run: the
+    # small-community score of the lower cluster had mean .403 (sd .076)
+    # without and .465 (sd .097) with the global signal over seeds 0-7, and
+    # min_score is that mean minus 3 standard errors of a 4-seed mean,
+    # rounded down; every development seed kept all 15 small-community
+    # pairs (the bound allows one to drop); median centering scored 0 on
+    # every development seed.
     scores, kept, scores_median = [], [], []
-    for seed in range(1000, 1004):
+    for seed in range(2000, 2004):
         data, labels, rho = _time_varying_communities((18, 6), scale, gamma, seed)
         corrs = tc.timecorr(data, cfun=tc.autofc, rfun=None,
                             weights_params={"var": 25})
@@ -1250,7 +1313,7 @@ def test_default_centering_keeps_the_small_community_on_held_out_seeds(gamma, sc
                 a = sm._clip_weights(np.mean(ws.fits_[-1]["weights"], axis=0))
                 small, iu = _within(labels, 1)
                 kept.append(np.mean(a[iu][small] > 0))
-    assert np.mean(scores) > 0.2, scores
+    assert np.mean(scores) > min_score, scores
     assert min(kept) >= 0.9, kept
     assert np.all(np.array(scores_median) == 0), scores_median
 

@@ -518,7 +518,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uniform prior) on the absolute correlations `|r|`. It is defined for
   every finite matrix, so it never falls back and never warns, unlike
   `"pagerank_centrality"` on signed correlations. It equals
-  `"pagerank_centrality"` when no weight is negative. Timepoints with a
+  `"pagerank_centrality"` up to round-off when no weight is negative.
+  Timepoints with a
   non-finite entry give NaNs.
 - Keyword `fit_index` of `WeightedStrength.transform` and
   `Communities.transform`: names the fitted unit whose pair weights (and,
@@ -544,6 +545,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Graph measures (`rfun` `"strength"`, `"eigenvector_centrality"`,
+  `"pagerank_centrality"`, `"pagerank_centrality_abs"`) with one feature
+  (K = 1) raised `TypeError` or `ValueError`: the 1 x 1 matrix of each
+  timepoint was squeezed to a scalar. They now return one column:
+  `"strength"` gives the matrix entry (1 for correlations) and the other
+  measures give 1.
 - `t_weights` used the exponent `-(df - 1) / 2` with the normalizing constant
   of Student's t density, so its rows were not a t density (with `df=1` every
   weight was equal). Each row is now Student's t density of the lag,

@@ -466,16 +466,18 @@ class _Summary:
         corrs : numpy.ndarray or list of numpy.ndarray
             One (T, K(K+1)/2) array of vectorized correlations per unit, or a
             single array.  K must equal the fit's.
-        fit_index : None, int, "mean", or sequence of int
+        fit_index : None, int, "mean", or list, tuple, range or 1-D array of int
             Which fitted unit's pair weights (and, when signed, mean
             correlations) each unit uses.  None: with as many units as the
             fit, unit u uses fitted unit u (matching by position); otherwise
-            every unit uses the mean over the fitted units.  An int ``i``:
-            every unit uses fitted unit ``i``.  ``"mean"``: every unit uses
-            the mean over the fitted units.  A sequence: unit u uses fitted
-            unit ``fit_index[u]``; it needs one entry per unit (one for a
-            single array), and entries may repeat.  Indices count from 0 and
-            must be below the number of fitted units.  Default: None.
+            every unit uses the mean over the fitted units.  An int ``i``
+            (a Python or NumPy integer, or a 0-d integer array): every unit
+            uses fitted unit ``i``.  ``"mean"``: every unit uses the mean
+            over the fitted units.  A list, tuple, range or 1-D array: unit
+            u uses fitted unit ``fit_index[u]``; it needs one entry per unit
+            (one for a single array), and entries may repeat.  Indices count
+            from 0 and must be below the number of fitted units; bools and
+            floats are not indices.  Default: None.
 
         Returns
         -------
@@ -499,9 +501,10 @@ class _Summary:
         ValueError
             If the instance was never fitted, K differs from the fit's, the
             input has no timepoints or contains NaN or infinite values, or
-            ``fit_index`` is not None, ``"mean"``, an int or a sequence of
-            ints, names a fitted unit that does not exist, or (a sequence)
-            does not have one entry per unit.
+            ``fit_index`` is not None, ``"mean"``, an int or a list, tuple,
+            range or 1-D array of ints (bools and floats included), names a
+            fitted unit that does not exist, or (a list, tuple, range or
+            array) does not have one entry per unit.
 
         Warns
         -----
@@ -524,16 +527,17 @@ class _Summary:
         fitted units ``n_fit``.
         """
         name = type(self).__name__
+        kinds = (
+            "fit_index must be None, 'mean', an int, or a list, tuple, range "
+            "or 1-D array of ints"
+        )
 
         def check(i, label):
             if (
                 not isinstance(i, numbers.Integral)
                 or isinstance(i, (bool, np.bool_))
             ):
-                raise ValueError(
-                    f"{name}.transform: fit_index must be None, 'mean', an int "
-                    f"or a sequence of ints; got {label}={i!r}."
-                )
+                raise ValueError(f"{name}.transform: {kinds}; got {label}={i!r}.")
             if not 0 <= i < n_fit:
                 raise ValueError(
                     f"{name}.transform: {label}={i!r} names no fitted unit; the "
@@ -547,22 +551,31 @@ class _Summary:
         if isinstance(fit_index, str):
             if fit_index != "mean":
                 raise ValueError(
-                    f"{name}.transform: fit_index must be None, 'mean', an int "
-                    f"or a sequence of ints; got fit_index={fit_index!r}."
+                    f"{name}.transform: {kinds}; got fit_index={fit_index!r}."
                 )
             return [None] * n_units
-        if isinstance(fit_index, (list, tuple, np.ndarray)):
-            indices = list(fit_index)
-            if len(indices) != n_units:
+        if isinstance(fit_index, np.ndarray):
+            if fit_index.ndim == 0:  # a 0-d array is a scalar
+                return [check(fit_index[()], "fit_index")] * n_units
+            if fit_index.ndim != 1:
                 raise ValueError(
-                    f"{name}.transform: fit_index has {len(indices)} entries but "
-                    f"the batch has {n_units} unit{'s' if n_units != 1 else ''}; "
-                    "give one fitted unit per unit, a single int for all of "
-                    "them, or None (by position when the batch has as many "
-                    f"units as the fit, {n_fit}; the mean otherwise)."
+                    f"{name}.transform: {kinds}; got an array with "
+                    f"{fit_index.ndim} dimensions."
                 )
-            return [check(i, f"fit_index[{u}]") for u, i in enumerate(indices)]
-        return [check(fit_index, "fit_index")] * n_units
+        elif not isinstance(fit_index, (list, tuple, range)):
+            # a scalar; check rejects bools, floats, bytes, sets and the like
+            return [check(fit_index, "fit_index")] * n_units
+        # a list, tuple, range or 1-D array: one entry per unit
+        indices = list(fit_index)
+        if len(indices) != n_units:
+            raise ValueError(
+                f"{name}.transform: fit_index has {len(indices)} entries but "
+                f"the batch has {n_units} unit{'s' if n_units != 1 else ''}; "
+                "give one fitted unit per unit, a single int for all of "
+                "them, or None (by position when the batch has as many "
+                f"units as the fit, {n_fit}; the mean otherwise)."
+            )
+        return [check(i, f"fit_index[{u}]") for u, i in enumerate(indices)]
 
     def _transform_fit(self, fit, corrs, fit_index=None):
         """``transform`` with the fit record ``fit`` (see ``_auto_emitter``)."""
@@ -682,11 +695,10 @@ class WeightedStrength(_Summary):
     center : True, "median" or False
         True: for K >= 4 the pair weights are centered on the mean ``m`` of
         their low group (the "lower cluster", described above) and clipped
-        at 0 (``a_ij = max(w_ij - m, 0)``).  Any other value raises
-        ``ValueError``.
-        ``"median"``: the same with ``m`` the median of the pair weights.
-        False: the weights are used as
-        they are (``a_ij = w_ij``) for any K.  Default: True.
+        at 0 (``a_ij = max(w_ij - m, 0)``).  ``"median"``: the same with
+        ``m`` the median of the pair weights.  False: the weights are used
+        as they are (``a_ij = w_ij``) for any K.  Any other value raises
+        ``ValueError``.  Default: True.
 
     Attributes
     ----------
@@ -722,10 +734,11 @@ class WeightedStrength(_Summary):
     nodes (153 of the 276 pairs within the larger one; 2 subjects, T 1000,
     static coupling, ``autofc`` with the default kernel, seeds 0-2) and
     loadings 0.4 (larger) and 0.2 (smaller), every median-clipped weight
-    within the smaller community is 0.  The lower cluster lies within the
-    range of the between-community weights in that case (34% of them stay
-    above it in the first row of the table below), so both communities
-    keep their weights.  Benchmark (2 subjects, T 1000,
+    within the smaller community is 0.  In the time-varying setting of the
+    first row of the table below, the lower cluster lies within the range
+    of the between-community weights (34% of them stay above it), so both
+    communities keep their weights.  Benchmark (2
+    subjects, T 1000,
     ``autofc`` with variance 25; each community's coupling ``rho_g(t)``
     varies slowly over time; score = correlation between the mean of a
     community's magnitude columns and ``rho_g(t)**2``, mean over subjects;
@@ -750,8 +763,8 @@ class WeightedStrength(_Summary):
     (.022 to .038).  Other rules measured on the development seeds: the
     lower quartile of the pair weights (also keeps the small community;
     order-2 scores lower by up to .026 +- .006), the shift-null mean pair
-    weight (keeps less with a global signal: .398 +- .018 on the held-out
-    seeds), and no centering (order-2 scores lower by up to .346 +- .062
+    weight (a lower small-community score with a global signal: .398 +-
+    .018 versus .508 +- .017 on the held-out seeds), and no centering (order-2 scores lower by up to .346 +- .062
     with a global signal).
     With K = 2 the two magnitude columns are identical (both are
     ``a_12 r_12(t)**2``), so a following correlation step sees two copies of

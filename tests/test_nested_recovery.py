@@ -139,9 +139,11 @@ expected near that value rather than near 0.  Measured on 30000-30003:
 -.294 +- .157 (communities) and -.235 +- .161 (weighted strength).
 
 K 702 (slow, 2 seeds, ``max_memory_gb=4``, OMP 2; one control subject, not
-asserted): seed 30000 score .825 (control -.014), peak resident memory
-growth 1.08 GB, wall 91 s; seed 30001 score .741 (control .320), growth
-1.09 GB, wall 91 s (250 s and 263 s in an earlier run alongside other jobs).
+asserted): seed 30000 score .826 (control -.010), peak resident memory
+growth 1.22 GB, wall 126 s; seed 30001 score .741 (control .317), growth
+1.22 GB, wall 124 s (measured with the lower-cluster centering, alongside
+other jobs; with median centering: .825 (-.014) and .741 (.320), growth
+1.08 and 1.09 GB, wall 91 s each).
 That run uses ``cfun=tc.autofc``, the analysis kernel with standard
 deviation 33 and weighted strength on both paths at every order,
 order 1 included (``rfun=tc.WeightedStrength(signed=True)``,

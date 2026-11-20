@@ -25,6 +25,7 @@ from timecorr.higher_order import (
     _at_every_timepoint,
     _auto_sd,
     _autocorrelation_width,
+    estimate_memory_gb,
 )
 
 LEGACY = dict(rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
@@ -415,3 +416,59 @@ def test_automatic_feeding_reducer_is_communities_at_every_order():
         assert D[k][0].shape == (3000, entry["n_communities"])
         assert (D[k][0] >= 0).all()  # mean squared correlations
     assert D[1][0].shape[1] == 16 and D[2][0].shape[1] == 4
+
+
+# memory -------------------------------------------------------------------------
+
+
+def test_orders_at_a_lower_rate_are_checked_with_their_rows():
+    # 2 subjects of (4000, 12) noise, signed weighted strength on the feeding
+    # path: order 2 has 24 input features.  With the fixed kernels it runs
+    # on 4000 rows; with the automatic kernels on 2000 rows, where one row
+    # of correlations per block needs less.  A budget between the two
+    # completes, and is refused only with the fixed kernels (before
+    # anything is computed)
+    rng = np.random.default_rng(11)
+    x = [rng.standard_normal((4000, 12)) for _ in range(2)]
+    common = dict(order=2, cfun=tc.autofc, rfun="weighted_strength",
+                  delta_rfun=tc.WeightedStrength(signed=True))
+    one_row = {T: estimate_memory_gb(24, 1, T, 2, streamed=True)[1] for T in (2000, 4000)}
+    assert one_row[4000] > 1.2 * one_row[2000]
+    budget = (one_row[2000] + one_row[4000]) / 2
+    X, info = quiet(tc.features, x, max_memory_gb=budget, return_info=True, **common)
+    assert [e["sampling"] for e in info if e["path"] == "analysis"] == [1, 2]
+    assert X[2][0].shape == (4000, 24)
+    with pytest.raises(MemoryError, match=r"order 2 .*24 input features, T=4000"):
+        quiet(tc.features, x, max_memory_gb=budget, **common, **FIXED)
+
+
+# recovery -------------------------------------------------------------------------
+
+
+def test_default_kernels_follow_the_order2_signal_of_a_long_recording():
+    # 72 nodes in 12 modules in 4 groups, T 6000, order-2 signal at timescale
+    # 100: each column of the top signal is matched with the D[2] column it
+    # correlates with most.  Development (seeds 0-3, same call): .75 to .79
+    # with the default kernels (order-2 kernel about 47 samples), .24 to .27
+    # with the fixed kernels (5 samples)
+    data, truth = tc.simulate_hierarchy(S=2, T=6000, nodes_per_module=6, branching=(3,),
+                                        n_top=4, taus=(5, 100), set_random_seed=10)
+    top = truth["top"][200:-200]
+
+    def followed(**kwargs):
+        (X, D), info = quiet(tc.features, data, order=2, cfun=tc.autofc, return_delta=True,
+                             return_info=True, rfun={1: tc.WeightedStrength(signed=True)},
+                             **kwargs)
+        feeding = [e for e in info if e["order"] == 2 and e["path"] == "feeding"][0]
+        assert feeding["n_communities"] == 4 and feeding["fallback"] is None
+        scores = []
+        for d in D[2]:
+            c = np.corrcoef(d[200:-200].T, top.T)[:4, 4:]
+            scores.append(np.mean(np.max(np.abs(c), axis=0)))
+        return float(np.mean(scores)), feeding
+
+    default, entry = followed()
+    assert 35 < entry["kernel_sd"] * entry["sampling"] < 60
+    fixed, _ = followed(**FIXED)
+    assert default > 0.6
+    assert default > fixed + 0.3

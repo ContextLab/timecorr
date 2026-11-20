@@ -244,7 +244,12 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
     order : int
         Highest order computed.
     T : int
-        Number of timepoints.
+        Number of timepoints.  Every order is estimated with T rows; when
+        ``features`` passes feeding features on at a lower rate (no kernel
+        parameters and no events given, T of 2000 or more), orders 2 and
+        above run on fewer rows (at least 1000) and need less, so the
+        estimate is an upper limit for them (``estimate_memory_gb(d, 1,
+        rows, ...)`` gives one such step).
     n_subjects : int, optional
         Number of subjects.  Default: 1.
     return_delta : bool, optional
@@ -1144,7 +1149,8 @@ def _known_width(rfun, d, ndims):
 
 
 def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfun,
-                          combine, feeding_function, ndims, weights_function=None):
+                          combine, feeding_function, ndims, weights_function=None,
+                          later_T=None):
     """
     Raise MemoryError, before anything is computed, for a streamed step of
     ``features`` that does not fit ``max_memory_gb`` with one row per block.
@@ -1154,19 +1160,23 @@ def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfu
     here.  After a callable that is not a summary, the original K (the
     number of features of the data, not the callable's input width) is
     used (as ``estimate_memory_gb(..., streamed=True)`` uses K).  Every step is checked
-    again, with its actual width, when it runs.
+    again, with its actual width, when it runs.  ``later_T``: the number of
+    rows assumed for orders 2 and above (None: T); ``features`` gives the
+    fewest rows such an order can have when feeding features are passed on
+    at a lower rate, so that a step is refused here only if it cannot fit.
     """
     d = int(K)
+    rows = {k: T if k == 1 or later_T is None else later_T for k in analysis}
     dense_analysis = not _builtin_kernel(weights_function)
     dense_feeding = not _builtin_kernel(feeding_function)
     for k in sorted(analysis):
         if d is not None:
             if _streams(analysis[k], cfun, combine):
-                _streamed_block_elements(d, T, S, max_memory_gb, k, "analysis",
+                _streamed_block_elements(d, rows[k], S, max_memory_gb, k, "analysis",
                                          dense_analysis)
             if (k in fed and feeding_function is not eye_weights
                     and _is_summary(feeding[k])):
-                _streamed_block_elements(d, T, S, max_memory_gb, k, "feeding",
+                _streamed_block_elements(d, rows[k], S, max_memory_gb, k, "feeding",
                                          dense_feeding)
             width = _known_width(feeding[k], d, ndims)
             if width is None and not _is_summary(feeding[k]):
@@ -2313,7 +2323,10 @@ def features(
         estimate exceeds ``max_memory_gb`` (with unreduced feeding features,
         every order is checked before anything is computed; for a streamed
         step, if one row per block does not fit).  Every streamed step is
-        also checked before anything is computed, with its input width where
+        also checked before anything is computed (orders 2 and above with
+        ``min(T, 1000)`` rows, the fewest they can have, when feeding
+        features are passed on at a lower rate; see "Automatic kernels"),
+        with its input width where
         it is known in advance (K at order 1; ``d(d+1)/2`` after an
         unreduced feeding step, ``ndims`` or ``d`` after a model-based one,
         ``d`` after a graph measure, ``d`` times 2 with ``split`` times 2
@@ -2554,12 +2567,19 @@ def features(
                     f"that fits orders up to {order} is K={fit}. Pass a reducer "
                     "(rfun, delta_rfun), lower the order, or raise max_memory_gb."
                 )
+    # with both kernels automatic at every order and no events, each order's
+    # feeding features are passed on at a lower rate
+    thin = all(
+        auto_analysis[k] and auto_feeding[k] and resolved[k] is None for k in orders
+    )
     if max_memory_gb is not None:
-        # streamed steps of later orders are checked before order 1 runs
+        # streamed steps of later orders are checked before order 1 runs; at
+        # a lower rate they have at least min(T, _AUTO_MIN_ROWS) rows
         _check_streamed_steps(
             K, T, S, max_memory_gb, analysis_rfun, feeding_rfun, fed, cfun=cfun,
             combine=combine, feeding_function=feeding_function, ndims=ndims,
             weights_function=weights_function,
+            later_T=min(T, _AUTO_MIN_ROWS) if thin else None,
         )
 
     X = [subjects]
@@ -2573,13 +2593,8 @@ def features(
     nan_warned = [False]  # one NaN-filling warning per call
     info = []  # with return_info: one dict per computed step and path
     previous_communities = None  # communities found by the previous feeding step
-    # with both kernels automatic at every order and no events, each order's
-    # feeding features are passed on at a lower rate; rows: the timepoints
-    # (indices into the T of the data) of the rows of the current feeding
-    # features
-    thin = all(
-        auto_analysis[k] and auto_feeding[k] and resolved[k] is None for k in orders
-    )
+    # rows: the timepoints (indices into the T of the data) of the rows of
+    # the current feeding features
     rows = np.arange(T)
     computed_at = [rows]  # the timepoints of the rows of X[k] and D[k]
     for k in orders:

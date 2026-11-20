@@ -685,7 +685,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into unit-variance round-off noise. On 4,566 outputs of random data
   without such features (12 seeds; 8 kernel functions; `wcorr`, `timecorr`
   with `isfc`, `wisfc` and `autofc`, and `features`), every value and
-  warning is identical to the previous code.
+  warning is identical to the previous code, and the 22 cases of
+  `tests/test_kernels_reference.py` are unchanged (maximum absolute and
+  relative difference 0).
+- Fisher z averaging (the symmetrization of `isfc` and `wisfc`,
+  `corrmean_combine`, the streamed summaries) and `tstat_combine` gave an
+  infinite z to a correlation of exactly +-1 but a finite one to a value
+  one float spacing away: averaging +1 with -1 gave 0, but +1 with
+  -0.9999999999999998 gave 1. Values within 1e-12 of +-1 now count as +-1
+  (one helper, `helpers._correlation_z`); `tstat_combine` likewise gives
+  +inf for 1, 1 - 1.1e-16 and 1. `r2z` itself is unchanged.
 - `vec2mat` failed on a 1 x V input; `z2r(inf)` returned 0 (now 1).
 - `mat2vec` and `vec2mat` are vectorized; `mat2vec` copies row by row, which
   lowers its peak memory from about 3.1 to about 1.1 times the output size.
@@ -776,6 +785,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   user-facing function has Parameters, Returns and Examples sections, that
   every user-facing name is listed on the API page, and that the parameter
   table matches the code.
+- One-sided kernels (`include_timepoints="backward"` or `"forward"`): the
+  `timecorr`, `features` and `wcorr` docstrings state what is guaranteed.
+  The estimator centers each feature on its mean over all timepoints, so an
+  estimate near the zero-variance threshold (variance about 1e-10 of the
+  mean square of the centered feature) can depend on timepoints outside its
+  kernel row: in `features(x, order=2, cfun=tc.autofc, rfun=None,
+  delta_rfun=None, include_timepoints="backward")` on 300 x 5 noise, rows 69,
+  72, 78 and 79 of `X[2]` differ between `x` and `x[:200]` by more than
+  1e-9 (by 1 at row 79).
+  Estimates whose variance is at least 1e-3 of that mean square do not
+  depend on the excluded timepoints (to 1e-9, for `autofc`, `isfc` and
+  `wisfc` with fixed subject weights, at orders 1 and 2;
+  `tests/test_estimator_causality.py`). `wisfc`'s default subject weights
+  use the static correlations over all timepoints.
 
 ### Dependencies and packaging
 

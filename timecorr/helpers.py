@@ -1526,7 +1526,13 @@ def wcorr(a, b, weights):
       standard deviations is tested), but a step much larger than the local
       fluctuations within a kernel window does: a unit-variance series that
       jumps by 1e6 or more halfway through is treated as constant on both
-      sides of the jump.
+      sides of the jump.  Since the 1e-10 rule's mean square is about the
+      overall mean, its decision at ``t`` depends on samples that row ``t``
+      of the kernel does not weight: with a one-sided kernel, an entry near
+      the threshold can differ between a series and a prefix of it (0 in
+      one, up to +-1 in the other).  Entries whose variance is at least
+      1e-3 of that mean square do not depend on those samples (tested to
+      1e-9).
 
     One ``UserWarning`` per call reports, when they occur, how many
     timepoints have fewer than 3 non-zero kernel weights; how many other
@@ -1667,8 +1673,9 @@ def _fisher_symmetrize(c):
     Symmetrize a (K, K, T) cross-correlation array as in Eq. 5 of the timecorr
     paper: ``z2r((r2z(C) + r2z(C.T)) / 2)``.
 
-    Where one of ``C[i, j]`` and ``C[j, i]`` is exactly +-1 (infinite z), the
-    result is that sign; where they are +1 and -1, it is 0.  Entries outside
+    Where one of ``C[i, j]`` and ``C[j, i]`` is +-1 (infinite z; values
+    within 1e-12 of +-1 count as +-1), the result is that sign; where they
+    are +1 and -1, it is 0.  Entries outside
     [-1, 1] (co-fluctuations from a delta kernel, which are not correlations)
     are averaged without the transform (see ``_fisher_mean``).
 
@@ -1685,6 +1692,28 @@ def _fisher_symmetrize(c):
     return c
 
 
+def _correlation_z(r):
+    """
+    ``(z, outside)``: the Fisher z of correlations ``r`` for averaging, and
+    the mask of values that are not correlations.
+
+    Values more than ``_R_TOLERANCE`` (1e-12) outside [-1, 1] are not
+    correlations (for example co-fluctuations from a delta kernel): they are
+    marked in ``outside`` and their z is 0.  Values within ``_R_TOLERANCE``
+    of +-1, on either side, are +-1 up to round-off and have infinite z, as
+    exact +-1 does; so one ulp below 1 does not turn an infinite z into a
+    finite one (which, averaged with -inf, gives 1 instead of 0).  NaN stays
+    NaN.
+    """
+    r = np.asarray(r, dtype=np.float64)
+    a = np.abs(r)
+    outside = a > 1 + _R_TOLERANCE
+    unit = (a >= 1 - _R_TOLERANCE) & ~outside
+    with np.errstate(divide="ignore", invalid="ignore"):
+        z = r2z(np.where(outside, 0.0, np.where(unit, np.sign(r), r)))
+    return z, outside
+
+
 def _fisher_mean(r, axis):
     """
     Average correlations along ``axis`` in Fisher z space: ``z2r(mean(r2z(r)))``.
@@ -1692,18 +1721,17 @@ def _fisher_mean(r, axis):
     Fisher z averaging applies to correlations only.  Where any value along
     ``axis`` lies outside [-1, 1] by more than 1e-12 (for example a
     co-fluctuation from a delta kernel), the values are averaged on the raw
-    scale (plain mean) instead; values within 1e-12 of [-1, 1] are
-    correlations with round-off and are clipped to +-1.
-    Values of exactly +-1 have infinite z.  Where only one sign of infinity
+    scale (plain mean) instead.  Values within 1e-12 of +-1 (above or below)
+    are correlations of +-1 with round-off and have infinite z, as exact
+    +-1 does (``_correlation_z``).  Where only one sign of infinity
     occurs along ``axis`` the result is that sign (+-1).  Where both +inf and
     -inf occur they are excluded and the finite z values are averaged (0 if
     none remain).  NaN anywhere along ``axis`` gives NaN.  No numpy warnings
     are raised.
     """
     r = np.asarray(r, dtype=np.float64)
-    outside = np.abs(r) > 1 + _R_TOLERANCE
+    z, outside = _correlation_z(r)
     raw = np.any(outside, axis=axis)
-    z = r2z(np.where(outside, 0.0, np.clip(r, -1.0, 1.0)))
     pos = np.any(np.isposinf(z), axis=axis)
     neg = np.any(np.isneginf(z), axis=axis)
     nan = np.any(np.isnan(z), axis=axis)
@@ -1724,7 +1752,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     subjects' data.  When the average is not the subject's own data, the
     cross-correlation matrix ``C`` is symmetrized by averaging the Fisher
     z-transforms of ``C`` and ``C.T`` and inverting (``z2r``) before it is
-    vectorized; an entry of exactly +-1 dominates its pair.  NaN samples carry no weight.
+    vectorized; an entry of +-1 (within 1e-12) dominates its pair.  NaN samples carry no weight.
 
     Parameters
     ----------
@@ -2157,7 +2185,8 @@ def corrmean_combine(corrs):
     Compute the mean element-wise correlation across each matrix in a list.
 
     Correlations are averaged in Fisher z space (``z2r(mean(r2z(r)))``).  An
-    entry of exactly +-1 has infinite z: where only one sign occurs across
+    entry of +-1 has infinite z (values within 1e-12 of +-1 count as +-1, so
+    round-off does not make the z finite): where only one sign occurs across
     matrices the mean is that sign; where both +1 and -1 occur they are
     excluded and the remaining values are averaged (0 if none remain).
     Fisher z applies to correlations only: an entry where any matrix has a
@@ -2234,8 +2263,8 @@ def tstat_combine(corrs, return_pvals=False):
     with ``scipy.stats.ttest_1samp``.  Fisher z applies to correlations only:
     an entry where any matrix has a value outside [-1, 1] (for example the
     co-fluctuations of a delta kernel, ``eye_weights``) is tested on the raw
-    values, with no NaN and no warning; values within 1e-12 of [-1, 1] are
-    correlations with round-off (clipped to +-1).  An entry with the same
+    values, with no NaN and no warning; values within 1e-12 of +-1 (above or
+    below) are correlations of +-1 with round-off (infinite z).  An entry with the same
     value in every matrix (zero variance across subjects, for example the
     diagonal of ``autofc`` results, where every value is 1) has t = +inf or
     -inf with the sign of that value (p = 0), or t = 0 (p = 1) when the value
@@ -2285,9 +2314,8 @@ def tstat_combine(corrs, return_pvals=False):
         )
     else:
         stacked = np.asarray(np.stack(corrs, axis=2), dtype=np.float64)
-        outside = np.abs(stacked) > 1 + _R_TOLERANCE
+        z, outside = _correlation_z(stacked)
         raw = np.any(outside, axis=2, keepdims=True)
-        z = r2z(np.where(outside, 0.0, np.clip(stacked, -1.0, 1.0)))
         vals = np.where(raw, stacked, z)
         # zero variance across subjects (every value equal, infinities
         # included): t is +-inf with the sign of the mean, 0 for a mean of 0

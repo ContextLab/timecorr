@@ -234,7 +234,8 @@ def test_backward_kernel_reproduction():
     # and exactly 1 after.  The kernel's tail on those rows gives these
     # columns a genuine, tiny variance, about 1e-10 of the mean square about
     # the column's overall mean, which differs between T 300 and T 200: rows
-    # 69 to 79 of X[2] differ (row 79 by 1: 1 in one call, 0 in the other).
+    # 69, 72, 78 and 79 of X[2] differ by more than 1e-9 (row 79 by 1: 1 in
+    # one call, 0 in the other).
     # Those entries are flagged as ill conditioned; all others agree.
     x = np.random.default_rng(0).standard_normal((300, 5))
     kw = dict(order=2, cfun=tc.autofc, rfun=None, delta_rfun=None,

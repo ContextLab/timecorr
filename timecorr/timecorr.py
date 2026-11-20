@@ -242,7 +242,12 @@ def timecorr(
         Which timepoints may contribute to the estimate at each timepoint:
         "all" (default), "backward" (alias "pre": only timepoints at or before
         ``t``), or "forward" (alias "post": only timepoints at or after ``t``).
-        Applied to the kernel after it is built (see ``one_sided``).
+        Applied to the kernel after it is built (see ``one_sided``).  The
+        estimator centers each feature on its mean over all timepoints, so
+        an estimate whose kernel-weighted variance is a small fraction (near
+        1e-10, see ``wcorr``) of the mean square of the centered feature can
+        change, by round-off or between 0 and a non-zero value, when
+        timepoints outside its kernel row change; other estimates do not.
     exclude_timepoints : int or None
         Further restricts the kernel by distance from ``t``.  A positive value
         ``x`` keeps only the timepoints at most ``x`` samples from ``t``; a

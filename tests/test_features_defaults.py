@@ -256,8 +256,8 @@ def test_default_feeding_runs_with_more_features_than_shift_lags():
     # 22 features: the shift null reuses lags (each used once or twice)
     # and the result is deterministic
     x = [np.random.default_rng(1).normal(size=(40, 22)) for _ in range(2)]
-    first = quiet(tc.features, x, order=1, return_delta=True,
-                  weights_params={"var": 10})
+    with pytest.warns(UserWarning, match="share a lag"):
+        first = tc.features(x, order=1, return_delta=True, weights_params={"var": 10})
     again = quiet(tc.features, x, order=1, return_delta=True,
                   weights_params={"var": 10})
     for part in (0, 1):
@@ -273,7 +273,8 @@ def test_defaults_run_with_more_features_than_shift_lags():
     # 2 subjects, T 120, K 150 (default feeding kernel: L 30, 61 distinct
     # lags in [30, 90]): this raised ValueError before lags could be reused
     x = [np.random.default_rng(s).standard_normal((120, 150)) for s in range(2)]
-    X, D = quiet(tc.features, x, order=2, return_delta=True)
+    with pytest.warns(UserWarning, match="share a lag"):
+        X, D = tc.features(x, order=2, return_delta=True)
     assert len(X) == 3 and len(D) == 3
     for k in (1, 2):
         assert len(X[k]) == 2 and len(D[k]) == 2
@@ -480,7 +481,8 @@ def test_original_input_with_more_features_than_shift_lags_runs():
     # the result is deterministic
     x = noise(2, (40, 22), 2)
     for kw in (dict(order=3), dict(order=2), dict(order=1, return_delta=True)):
-        first = quiet(tc.features, x, weights_params={"var": 10}, **kw)
+        with pytest.warns(UserWarning, match="share a lag"):
+            first = tc.features(x, weights_params={"var": 10}, **kw)
         again = quiet(tc.features, x, weights_params={"var": 10}, **kw)
         X = first[0] if kw.get("return_delta") else first
         X_again = again[0] if kw.get("return_delta") else again

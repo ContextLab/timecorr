@@ -726,9 +726,12 @@ def test_more_features_than_shift_lags_runs():
     # T 40 gives 21 distinct lags in [10, 30] for 24 features: the shift
     # null reuses lags (each used once or twice); deterministic
     data, _ = nested(T=40)
-    runs = [quiet(tc.features, data, order=1, cfun=tc.autofc, weights_params=WIDE,
-                  rfun="PCA", delta_rfun=tc.Communities(), return_delta=True, **FEED)
-            for _ in range(2)]
+    runs = []
+    for _ in range(2):
+        with pytest.warns(UserWarning, match="share a lag"):
+            runs.append(tc.features(data, order=1, cfun=tc.autofc, weights_params=WIDE,
+                                    rfun="PCA", delta_rfun=tc.Communities(),
+                                    return_delta=True, **FEED))
     for a, b in zip(runs[0][1][1], runs[1][1][1]):
         assert a.shape[0] == 40 and np.all(np.isfinite(a))
         np.testing.assert_array_equal(a, b)

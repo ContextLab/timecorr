@@ -20,6 +20,7 @@ the threshold of the automatic number of communities.
 
 import numbers
 import warnings
+from fractions import Fraction
 
 import numpy as np
 from sklearn.cluster import KMeans
@@ -765,8 +766,9 @@ class Communities(_Summary):
     integers in ``[L, T - L]``: when K <= n, the K lags of a subject are
     distinct (drawn without replacement); when K > n, each lag is used
     ``K // n`` or ``ceil(K / n)`` times within a subject, and columns that
-    share a lag (about a fraction ``1 / n`` of the column pairs) keep their
-    dependence in that surrogate.  It assumes that dependence between
+    share a lag (a fraction [n q (q - 1) + 2 r q] / [K (K - 1)] of the
+    column pairs, K = q n + r: 1/231 at K = 22, n = 21) keep their
+    dependence in that surrogate, and a ``UserWarning`` says so.  It assumes that dependence between
     columns does not survive a relative shift of the sizes drawn; strongly
     autocorrelated signals can violate this.  In ``features`` and
     ``two_path_step``, ``L = min(T // 4, max(10, 10 * sd))``, with sd =
@@ -1124,8 +1126,10 @@ def _shift_lags(rng, T, K, L):
     permutation of the n lags is repeated, truncated to K and shuffled with
     the same generator, so each lag is used ``K // n`` or ``ceil(K / n)``
     times.  Columns that share a lag keep their dependence under that
-    surrogate: with K > n, about a fraction ``1 / n`` of the column pairs
-    share a lag.  Raise ``ValueError`` when there is no lag (n < 1).
+    surrogate: with K = q n + r > n, a fraction
+    [n q (q - 1) + 2 r q] / [K (K - 1)] of the column pairs share a lag
+    (``_shared_lag_fraction``; below 1 / n, and near it only when K is much
+    larger than n).  Raise ``ValueError`` when there is no lag (n < 1).
     """
     n_lags = int(T) - 2 * int(L) + 1
     K = int(K)
@@ -1141,6 +1145,20 @@ def _shift_lags(rng, T, K, L):
     return int(L) + lags
 
 
+def _shared_lag_fraction(K, n_lags):
+    """
+    The fraction of the K (K - 1) / 2 column pairs that share a lag in each
+    draw of ``_shift_lags`` with ``n_lags`` lags: with K = q n + r (n the
+    number of lags), r lags are used q + 1 times and n - r lags q times, so
+    the fraction is [n q (q - 1) + 2 r q] / [K (K - 1)] (0 when K <= n).
+    """
+    K, n = int(K), int(n_lags)
+    if K < 2:
+        return Fraction(0)
+    q, r = divmod(K, n)
+    return Fraction(n * q * (q - 1) + 2 * r * q, K * (K - 1))
+
+
 def _shift_null_threshold(
     subjects, kernels, n_null=5, bandwidth=5.0, max_block_elements=None
 ):
@@ -1153,8 +1171,9 @@ def _shift_null_threshold(
     replacement within a subject when K <= n (``_shift_lags``: the K columns
     of a subject get K distinct lags); when K > n, each lag is used
     ``K // n`` or ``ceil(K / n)`` times within a subject, and columns that
-    share a lag (about a fraction ``1 / n`` of the column pairs) keep their
-    dependence in that surrogate; computes the subjects' pair weights ``w`` with the given
+    share a lag (a fraction [n q (q - 1) + 2 r q] / [K (K - 1)] of the
+    column pairs, K = q n + r) keep their dependence in that surrogate, and
+    one ``UserWarning`` per call says so; computes the subjects' pair weights ``w`` with the given
     kernels and ``autofc`` (streamed, in blocks of at most
     ``max_block_elements`` correlations; None: the estimator's default block
     size, see ``_rows_per_block``); and records the
@@ -1184,6 +1203,20 @@ def _shift_null_threshold(
         )
     L = int(min(T // 4, max(10, 10 * float(bandwidth))))
     n_null = _check_n_null(n_null)
+    n_lags = T - 2 * L + 1
+    if 1 <= n_lags < K:
+        fraction = _shared_lag_fraction(K, n_lags)
+        warnings.warn(
+            f"The shift null has more columns (K = {K} columns) than "
+            f"distinct lags ({n_lags} distinct lags in [{L}, {T - L}] at "
+            f"T = {T}): each lag is used {K // n_lags} or "
+            f"{-(-K // n_lags)} times within a subject, and the columns that "
+            f"share a lag ({fraction} = {float(fraction):.3g} of the column "
+            "pairs) keep their dependence in the surrogates.  To avoid this, "
+            "give the number of communities n.",
+            UserWarning,
+            stacklevel=2,
+        )
     rng = np.random.default_rng(0)
     probe = _Units(subjects, kernels, autofc)
     T_out = probe.kernels[0].shape[0]

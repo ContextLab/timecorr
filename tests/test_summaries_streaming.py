@@ -377,10 +377,39 @@ def test_shift_null_with_more_columns_than_lags_runs():
     rng = np.random.default_rng(1)
     w = tc.gaussian_weights(40, {"var": 9})
     data = [rng.standard_normal((40, 22)) for _ in range(2)]
-    first = sm._shift_null_threshold(data, w)
+    with pytest.warns(UserWarning, match="22 columns") as record:
+        first = sm._shift_null_threshold(data, w)
+    # one warning per fit (not per subject or surrogate)
+    assert len([r for r in record if "share a lag" in str(r.message)]) == 1
+    message = str(record[0].message)
+    assert "21 distinct lags" in message
+    assert "keep their dependence" in message
+    assert "give the number of communities n" in message
+    assert "1/231" in message  # [n q (q - 1) + 2 r q] / [K (K - 1)], q 1, r 1
     assert np.isfinite(first)
-    assert sm._shift_null_threshold(data, w) == first
-    sm._shift_null_threshold([d[:, :21] for d in data], w)
+    with pytest.warns(UserWarning, match="share a lag"):
+        assert sm._shift_null_threshold(data, w) == first
+    # K <= n: no warning
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        sm._shift_null_threshold([d[:, :21] for d in data], w)
+
+
+@pytest.mark.parametrize("T, K, L", [(40, 22, 10), (40, 42, 10), (40, 64, 10),
+                                     (120, 150, 30), (100, 51, 25), (100, 60, 25)])
+def test_fraction_of_pairs_sharing_a_lag_is_exact(T, K, L):
+    # every draw of _shift_lags has [n q (q - 1) + 2 r q] / [K (K - 1)] of
+    # its column pairs sharing a lag, K = q n + r
+    n = T - 2 * L + 1
+    q, r = divmod(K, n)
+    expected = (n * q * (q - 1) + 2 * r * q) / (K * (K - 1))
+    assert sm._shared_lag_fraction(K, n) == pytest.approx(expected, rel=1e-15)
+    rng = np.random.default_rng(0)
+    for _ in range(5):
+        lags = sm._shift_lags(rng, T, K, L)
+        counts = np.bincount(lags - L)
+        shared = np.sum(counts * (counts - 1))  # ordered pairs
+        assert shared / (K * (K - 1)) == pytest.approx(expected, rel=1e-15)
 
 
 def test_shift_lags_up_to_the_number_of_lags_are_unchanged():

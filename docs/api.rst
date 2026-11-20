@@ -116,8 +116,10 @@ deviation ``sqrt(var)`` when its parameters have a ``"var"``, and 5 otherwise:
 the width parameters of other kernels, such as ``scale`` of
 ``laplace_weights``, are not read): with at most n columns, the lags of a subject are distinct; with
 K > n columns, each lag is used ``K // n`` or ``ceil(K / n)`` times within a
-subject, and columns that share a lag (about a fraction ``1 / n`` of the column
-pairs) keep their dependence in that surrogate. When the
+subject, and columns that share a lag keep their dependence in that surrogate:
+with K = q n + r, a fraction [n q (q - 1) + 2 r q] / [K (K - 1)] of the column
+pairs (1/231 at K = 22, n = 21), and one ``UserWarning`` per fit says so (giving
+the number of communities ``n`` avoids the shift null). When the
 communities found at a feeding step would emit fewer than 4 columns (at most
 half its input features; one when the shift null finds no structure), that step
 emits ``WeightedStrength(split=False, signed=False, center=False)`` of the same

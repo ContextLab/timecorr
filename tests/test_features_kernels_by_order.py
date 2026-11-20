@@ -302,7 +302,8 @@ def test_feeding_shift_null_check_uses_each_orders_bandwidth():
         (_, info) = quiet(tc.features, x, cfun=tc.autofc, return_info=True, **kw)
         return next(d for d in info if d["order"] == 1 and d["path"] == "feeding")
 
-    default = threshold(25)
+    with pytest.warns(UserWarning, match="60 columns"):  # 51 lags at sd 5
+        default = threshold(25)
     assert default != threshold(1)
     first = recorded(order=1, return_delta=True)
     assert first["null_threshold"] == pytest.approx(default, rel=1e-12)

@@ -2073,8 +2073,9 @@ def features(
     in ``[L, T - L]`` are at least the d input features (drawn without
     replacement); with d > n, each lag is used ``d // n`` or
     ``ceil(d / n)`` times within a subject, and columns that share a lag
-    (about a fraction ``1 / n`` of the column pairs) keep their dependence
-    in that surrogate; and the summary's ``n_null`` surrogates.
+    (a fraction [n q (q - 1) + 2 r q] / [d (d - 1)] of the column pairs,
+    d = q n + r) keep their dependence in that surrogate, with one
+    ``UserWarning`` per fit; and the summary's ``n_null`` surrogates.
 
     Examples
     --------

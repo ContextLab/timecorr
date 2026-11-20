@@ -18,7 +18,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lag is then used `K // n` or `ceil(K / n)` times within a subject (a
   random permutation of the lags, repeated, truncated to K and shuffled
   with the same generator); columns that share a lag keep their dependence
-  in that surrogate, about a fraction `1 / n` of the column pairs. With
+  in that surrogate. With K = q n + r, the fraction of column pairs that
+  share a lag is exactly [n q (q - 1) + 2 r q] / [K (K - 1)] (1/231 at
+  K = 22, n = 21; below 1 / n, and near it only for K much larger than n),
+  and one `UserWarning` per fit gives K, n and that fraction and says that
+  the number of communities `n` can be given instead. With
   K <= n the lags are drawn as before (distinct, without replacement), so
   those results are unchanged. The other requirements (at least 4
   columns, T >= 40) still raise.

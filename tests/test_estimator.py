@@ -1214,3 +1214,24 @@ class TestCorrRowBlocks:
         a = _iterator_data(self.T, self.K)["random"]
         with pytest.raises(ValueError, match="symmetric"):
             _corr_row_blocks(a, a[:, :3], gaussian_weights(self.T), True)
+
+
+# Variances whose product underflows: rows whose only weights are tiny (for
+# example the far tail of a narrow Gaussian next to NaN samples) used to give
+# a zero denominator, a RuntimeWarning and r = +-1 (or NaN).
+@pytest.mark.parametrize("with_nan", [False, True])
+def test_tiny_weights_give_the_weighted_correlation(with_nan):
+    rng = np.random.RandomState(11)
+    T = 12
+    a = rng.randn(T, 3)
+    if with_nan:
+        a[0, 2] = np.nan
+    w = np.zeros((2, T))
+    w[0, 3:9] = 1e-170  # products of the variances underflow to 0
+    w[1, 3:9] = 1.0  # the same row at ordinary scale
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = tc.wcorr(a, a, w)
+    assert np.all(np.isfinite(out))
+    np.testing.assert_allclose(out[:, :, 0], out[:, :, 1], rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(out[:, :, 1], np.corrcoef(a[3:9].T), rtol=1e-12, atol=1e-12)

@@ -509,6 +509,8 @@ def _kernel_row_problems(weights):
     if np.all(support == 0) or np.all(support == 1):
         return None
     undefined = support < 3
+    # scaled by each row's largest weight, so tiny weights do not underflow
+    w = _safe_divide(w, w.max(axis=1, keepdims=True))
     ess = _safe_divide(w.sum(axis=1) ** 2, (w**2).sum(axis=1))
     return undefined, ~undefined & (ess < 2)
 
@@ -988,6 +990,14 @@ def _wcorr_block(state, i0, i1, j0):
 
     zero_all = zero.reshape(shape[0], -1).all(axis=1)
     den = np.sqrt(np.where(undefined, 1.0, var_a * var_b))
+    tiny = (den == 0) & ~undefined
+    if tiny.any():
+        # the product of two tiny variances underflowed: take the square
+        # roots first
+        den[tiny] = (
+            np.sqrt(np.broadcast_to(var_a, shape)[tiny])
+            * np.sqrt(np.broadcast_to(var_b, shape)[tiny])
+        )
     r = np.where(undefined, 0.0, np.clip(num / den, -1.0, 1.0))
     return r, undefined, zero_all, few_any
 

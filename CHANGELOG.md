@@ -464,6 +464,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `rfun=None`.
 - Importing timecorr changed matplotlib's global font sizes (to 18-24
   points); it no longer changes any matplotlib setting.
+- `wcorr`: a kernel row whose only weights are tiny (for example the far tail
+  of a narrow Gaussian next to NaN samples, weights near 1e-165) made the
+  product of the two variances underflow to 0, which raised a NumPy
+  "divide by zero" `RuntimeWarning` and gave correlations of +-1 or NaN;
+  the denominator is now the product of the square roots there (all other
+  entries unchanged). The effective-sample-size check is computed on each
+  kernel row scaled by its largest weight, so such rows are no longer
+  reported as having an effective sample size below 2.
 
 ### Documentation
 

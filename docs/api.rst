@@ -59,11 +59,14 @@ Higher-order features
 of Owen, Chang & Manning (2021): at each order the analysis path applies the
 analysis kernel to the previous order's feeding features, and the feeding path
 (named ``delta_*`` in the arguments for historical reasons) gives the features
-passed to the next order. With the defaults the feeding path computes each
-subject's correlations with a Gaussian kernel of variance 25 (standard
-deviation 5 samples) and summarizes them with ``Communities()``; the analysis
-path is reduced with PCA at order 1 and with ``WeightedStrength(signed=True)``
-at orders 2 and above. In the original pipeline of the paper a delta kernel
+passed to the next order. With the defaults both kernels are Gaussians whose
+width is set from each order's input: the feeding kernel's standard deviation
+is 5 autocorrelation widths of the input (at least 5 rows, at most a hundredth
+of its rows) and the analysis kernel's is that or 10 rows, whichever is
+larger. The feeding path summarizes each subject's correlations with
+``Communities()``; the analysis path is reduced with PCA at order 1 and with
+``WeightedStrength(signed=True)`` at orders 2 and above. In the original
+pipeline of the paper a delta kernel
 (``eye_weights``) gives the co-fluctuations passed to the next order and PCA
 reduces both paths.
 
@@ -92,7 +95,7 @@ order's feeding features. The memory estimate is in ``timecorr.higher_order``:
 
 The keyword-only arguments ``delta_weights_function`` and
 ``delta_weights_params`` set the kernel of the feeding path (default:
-``gaussian_weights`` with ``{"var": 25}``); ``eye_weights`` gives
+``gaussian_weights``); ``eye_weights`` gives
 co-fluctuations, and any other kernel gives kernel-weighted correlations
 (``autofc``), shaped by ``include_timepoints``, ``include_zero`` and the
 events of each order like the analysis kernel. ``rfun`` and ``delta_rfun``
@@ -102,7 +105,24 @@ with the number of communities set by a shift null) and dicts keyed by order.
 In ``features``, ``weights_params`` and ``delta_weights_params`` also accept
 dicts keyed by order (for example ``{1: {"var": 100}, 2: {"var": 400}}``), which
 set each order's analysis or feeding kernel; orders missing from such a dict use
-the default parameters. A dict whose keys are all integers is read as such
+the default. Kernel parameters of None (the default) with Gaussian kernels on
+both paths are set from each order's input: the feeding kernel's standard
+deviation is ``min(5 w, max(5, T' / 100))`` rows and the analysis kernel's is
+that or 10 rows, whichever is larger, where ``w`` is the autocorrelation width
+of the order's input (the lag at which the mean autocorrelation of its columns
+falls below ``exp(-1/2)``, at least 1) and ``T'`` its number of rows. For white
+data these are the fixed kernels of earlier versions at order 1 (variances 100
+and 25, which can also be given: ``weights_params={"var": 100},
+delta_weights_params={"var": 25}``), and recordings of up to 1000 timepoints
+use kernels of at most 10 samples at every order. When no kernel parameters
+and no events are given, each order's feeding features are passed on at every
+``floor(sd / 2)``-th row while at least 1000 rows remain, so later orders of
+long recordings are computed at fewer timepoints, and every output is returned
+at all timepoints by linear interpolation; ``return_info=True`` gives each
+automatic kernel's ``"kernel_sd"`` (in rows of its order's input) and
+``"sampling"`` (timepoints per row). With another kernel function, or with
+``eye_weights`` on the feeding path, None means that function's own default
+parameters. A dict whose keys are all integers is read as such
 an order map, so the parameters of a custom kernel that are keyed by integers
 must be wrapped in one (for example ``{1: params, 2: params}``); only the outer
 dict is examined, and each value is passed to the kernel unchanged. A dict
@@ -119,7 +139,11 @@ K > n columns, each lag is used ``K // n`` or ``ceil(K / n)`` times within a
 subject, and columns that share a lag keep their dependence in that surrogate:
 with K = q n + r, a fraction [n q (q - 1) + 2 r q] / [K (K - 1)] of the column
 pairs (1/231 at K = 22, n = 21), and one ``UserWarning`` per fit says so (giving
-the number of communities ``n`` avoids the shift null). When the
+the number of communities ``n`` avoids the shift null). With a built-in kernel
+function the surrogates' squared correlations are averaged over every ``s``-th
+timepoint, ``s`` being the largest step at which two rows of the kernel still
+overlap by ``exp(-1/4)`` (the standard deviation, rounded down, for
+``gaussian_weights``). When the
 communities found at a feeding step would emit fewer than 4 columns (at most
 half its input features; one when the shift null finds no structure), that step
 emits ``WeightedStrength(split=False, signed=False, center=False)`` of the same

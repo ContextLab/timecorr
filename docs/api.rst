@@ -360,7 +360,9 @@ correlations and apply them to another (when the new list has as many
 units as the fit, ``transform`` matches them by position: the unit at
 position u gets the weights fitted to the unit at position u, whether or not
 it is the same subject; with a different number of units every unit gets
-the mean over the fitted units), and ``fits_`` records the fits
+the mean over the fitted units; ``transform(corrs, fit_index=...)`` names the
+fitted unit instead: an int for every unit, a list with one fitted unit per
+unit, or ``"mean"``), and ``fits_`` records the fits
 (calling an instance keeps only that call's fit; ``fit`` and each step of
 ``features`` and ``two_path_step`` append one). ``WeightedStrength(center=False)``
 uses the pair weights without median centering (with ``center=True``, the

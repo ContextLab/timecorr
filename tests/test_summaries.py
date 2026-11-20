@@ -394,6 +394,106 @@ def test_transform_matches_units_by_position(nested):
         )
 
 
+def _ws_ref(v, fit, unit):
+    """Expected signed weighted strength of ``v`` with fitted unit ``unit``."""
+    if unit == "mean":
+        w = np.mean(fit["weights"], axis=0)
+        m = np.mean(fit["mean_r"], axis=0)
+    else:
+        w, m = fit["weights"][unit], fit["mean_r"][unit]
+    return ref_weighted_strength(v, True, w=w, mean_r=m.copy())
+
+
+def test_fit_index_reorders_outputs_only_when_it_says_so(nested):
+    _, _, A = nested
+    swapped = [A[1], A[0]]
+    ws = tc.WeightedStrength(signed=True).fit(A)
+    fit = ws.fits_[0]
+    original = ws.transform(A)
+    # default: by position, so the swapped batch is not the swapped output
+    by_position = ws.transform(swapped)
+    assert not np.allclose(by_position[0], original[1])
+    # fit_index names each unit's fit: the outputs are the originals, swapped
+    named = ws.transform(swapped, fit_index=[1, 0])
+    np.testing.assert_allclose(named[0], original[1], atol=1e-12, rtol=0)
+    np.testing.assert_allclose(named[1], original[0], atol=1e-12, rtol=0)
+    # fit_index=None is the default rule; [0, 1] is position matching spelled out
+    for a, b in zip(ws.transform(swapped, fit_index=None), by_position):
+        np.testing.assert_array_equal(a, b)
+    for a, b in zip(ws.transform(swapped, fit_index=[0, 1]), by_position):
+        np.testing.assert_array_equal(a, b)
+
+    comm = tc.Communities(n=6, signed=True).fit(A)
+    corig = comm.transform(A)
+    cnamed = comm.transform(swapped, fit_index=[1, 0])
+    np.testing.assert_allclose(cnamed[0], corig[1], atol=1e-12, rtol=0)
+    np.testing.assert_allclose(cnamed[1], corig[0], atol=1e-12, rtol=0)
+    assert not np.allclose(comm.transform(swapped)[0], corig[1])
+
+
+def test_fit_index_transforms_a_held_out_subject_with_a_chosen_fit(
+    nested, nested_other
+):
+    _, _, A = nested
+    held_out = nested_other[2]
+    ws = tc.WeightedStrength(signed=True).fit(A)
+    fit = ws.fits_[0]
+    for unit in (0, 1):
+        # a single array with a chosen fit
+        got = ws.transform(held_out, fit_index=unit)
+        assert isinstance(got, np.ndarray)
+        np.testing.assert_allclose(got, _ws_ref(held_out, fit, unit), atol=1e-10, rtol=0)
+        # an int applies one fit to every unit of a list of any length
+        got3 = ws.transform(nested_other, fit_index=unit)
+        for o, v in zip(got3, nested_other):
+            np.testing.assert_allclose(o, _ws_ref(v, fit, unit), atol=1e-10, rtol=0)
+    # without fit_index a single array (1 unit, fit of 2) gets the mean weights
+    np.testing.assert_allclose(
+        ws.transform(held_out), _ws_ref(held_out, fit, "mean"), atol=1e-10, rtol=0
+    )
+    # "mean" asks for the mean weights even when the counts are equal
+    for o, v in zip(ws.transform(A, fit_index="mean"), A):
+        np.testing.assert_allclose(o, _ws_ref(v, fit, "mean"), atol=1e-10, rtol=0)
+    # a list of indices may repeat a fit
+    got = ws.transform([held_out, held_out], fit_index=[1, 1])
+    for o in got:
+        np.testing.assert_allclose(o, _ws_ref(held_out, fit, 1), atol=1e-10, rtol=0)
+    assert not np.allclose(got[0], _ws_ref(held_out, fit, 0))
+
+
+@pytest.mark.parametrize(
+    "fit_index, match",
+    [
+        (2, r"fit_index=2 .*2 fitted units"),
+        (-1, r"fit_index=-1 .*2 fitted units"),
+        (True, "fit_index must be"),
+        (1.0, "fit_index must be"),
+        ("first", "fit_index must be"),
+        ([0], r"1 entries .* 2 units"),
+        ([0, 1, 0], r"3 entries .* 2 units"),
+        ([0, 2], r"fit_index\[1\]=2 .*2 fitted units"),
+        ([0, "mean"], "fit_index must be"),
+        ([], r"0 entries .* 2 units"),
+    ],
+)
+def test_bad_fit_index_raises(nested, fit_index, match):
+    _, _, A = nested
+    for summary in (tc.WeightedStrength(signed=True), tc.Communities(n=6)):
+        summary.fit(A)
+        with pytest.raises(ValueError, match=match):
+            summary.transform(A, fit_index=fit_index)
+
+
+def test_fit_index_with_a_single_array_needs_a_scalar(nested):
+    _, _, A = nested
+    ws = tc.WeightedStrength().fit(A)
+    with pytest.raises(ValueError, match=r"2 entries .* 1 unit"):
+        ws.transform(A[0], fit_index=[0, 1])
+    np.testing.assert_array_equal(
+        ws.transform(A[0], fit_index=[1]), ws.transform(A[0], fit_index=1)
+    )
+
+
 # ----------------------------------------------------------------------------
 # null_threshold (the data-driven count)
 # ----------------------------------------------------------------------------

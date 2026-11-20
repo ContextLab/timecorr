@@ -42,6 +42,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"pagerank_centrality"` when no weight is negative. Timepoints with a
   non-finite entry give NaNs. `"pagerank_centrality"` is unchanged.
 
+- Keyword `fit_index` of `WeightedStrength.transform` and
+  `Communities.transform`: names the fitted unit whose pair weights (and,
+  when signed, mean correlations) each unit uses. An int applies one fitted
+  unit to every unit (for example a held-out subject), a sequence gives one
+  fitted unit per unit (so a reordered list can keep each subject's own
+  fit), and `"mean"` applies the mean over the fitted units. A sequence
+  with the wrong number of entries, an index with no fitted unit, or any
+  other value raises `ValueError`. The default (None) keeps the previous
+  rule: by position when the counts are equal, the mean otherwise.
+
 - Tutorial `docs/tutorial/htfa_network_animations.ipynb`: features of
   orders 1 to 4 (defaults of `features`, with `return_info=True`) of the
   HTFA node weights of the story-listening fMRI data analyzed by Owen,

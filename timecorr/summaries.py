@@ -412,7 +412,7 @@ class _Summary:
 
     # -- output -------------------------------------------------------------
 
-    def transform(self, corrs):
+    def transform(self, corrs, *, fit_index=None):
         """
         Summarize correlations with the most recent fit.
 
@@ -421,29 +421,42 @@ class _Summary:
         corrs : numpy.ndarray or list of numpy.ndarray
             One (T, K(K+1)/2) array of vectorized correlations per unit, or a
             single array.  K must equal the fit's.
+        fit_index : None, int, "mean", or sequence of int
+            Which fitted unit's pair weights (and, when signed, mean
+            correlations) each unit uses.  None: with as many units as the
+            fit, unit u uses fitted unit u (matching by position); otherwise
+            every unit uses the mean over the fitted units.  An int ``i``:
+            every unit uses fitted unit ``i``.  ``"mean"``: every unit uses
+            the mean over the fitted units.  A sequence: unit u uses fitted
+            unit ``fit_index[u]``; it needs one entry per unit (one for a
+            single array), and entries may repeat.  Indices count from 0 and
+            must be below the number of fitted units.  Default: None.
 
         Returns
         -------
         list of numpy.ndarray or numpy.ndarray
             One (T, c) array per unit (a single array for a single array).
-            With as many units as the fit, unit u uses the fit's weights of
-            unit u; otherwise every unit uses the fit's mean weights.
 
         Notes
         -----
-        Units are matched to the fitted units by position only: when the new
-        batch has as many units as the fit, the unit at position u receives
-        the pair weights (and, when signed, the mean correlations) fitted to
-        the unit at position u, whether or not it is the same subject, and no
-        warning is given.  Pass the units in the order of the fit, or a
-        different number of units to use the mean over the fitted units.
+        With ``fit_index=None``, units are matched to the fitted units by
+        position only: when the new batch has as many units as the fit, the
+        unit at position u receives the pair weights (and, when signed, the
+        mean correlations) fitted to the unit at position u, whether or not
+        it is the same subject, and no warning is given.  Pass the units in
+        the order of the fit, or name the fits with ``fit_index`` (for
+        example ``[1, 0]`` for two subjects in the reverse order, or ``0``
+        for a held-out subject summarized with the first subject's fit).
         The communities (``labels``) are shared by all units either way.
 
         Raises
         ------
         ValueError
-            If the instance was never fitted, K differs from the fit's, or
-            the input has no timepoints or contains NaN or infinite values.
+            If the instance was never fitted, K differs from the fit's, the
+            input has no timepoints or contains NaN or infinite values, or
+            ``fit_index`` is not None, ``"mean"``, an int or a sequence of
+            ints, names a fitted unit that does not exist, or (a sequence)
+            does not have one entry per unit.
 
         Warns
         -----
@@ -457,9 +470,56 @@ class _Summary:
         name = type(self).__name__
         if not self.fits_:
             raise ValueError(f"{name}: call fit (or the instance itself) before transform.")
-        return self._transform_fit(self.fits_[-1], corrs)
+        return self._transform_fit(self.fits_[-1], corrs, fit_index=fit_index)
 
-    def _transform_fit(self, fit, corrs):
+    def _fitted_units(self, fit_index, n_units, n_fit):
+        """
+        The fitted unit (an index, or None for the mean) each of ``n_units``
+        units uses, from ``fit_index`` (see ``transform``) and the number of
+        fitted units ``n_fit``.
+        """
+        name = type(self).__name__
+
+        def check(i, label):
+            if (
+                not isinstance(i, numbers.Integral)
+                or isinstance(i, (bool, np.bool_))
+            ):
+                raise ValueError(
+                    f"{name}.transform: fit_index must be None, 'mean', an int "
+                    f"or a sequence of ints; got {label}={i!r}."
+                )
+            if not 0 <= i < n_fit:
+                raise ValueError(
+                    f"{name}.transform: {label}={i!r} names no fitted unit; the "
+                    f"fit has {n_fit} fitted unit{'s' if n_fit != 1 else ''} "
+                    f"(indices 0 to {n_fit - 1})."
+                )
+            return int(i)
+
+        if fit_index is None:
+            return list(range(n_units)) if n_units == n_fit else [None] * n_units
+        if isinstance(fit_index, str):
+            if fit_index != "mean":
+                raise ValueError(
+                    f"{name}.transform: fit_index must be None, 'mean', an int "
+                    f"or a sequence of ints; got fit_index={fit_index!r}."
+                )
+            return [None] * n_units
+        if isinstance(fit_index, (list, tuple, np.ndarray)):
+            indices = list(fit_index)
+            if len(indices) != n_units:
+                raise ValueError(
+                    f"{name}.transform: fit_index has {len(indices)} entries but "
+                    f"the batch has {n_units} unit{'s' if n_units != 1 else ''}; "
+                    "give one fitted unit per unit, a single int for all of "
+                    "them, or None (by position when the batch has as many "
+                    f"units as the fit, {n_fit}; the mean otherwise)."
+                )
+            return [check(i, f"fit_index[{u}]") for u, i in enumerate(indices)]
+        return [check(fit_index, "fit_index")] * n_units
+
+    def _transform_fit(self, fit, corrs, fit_index=None):
         """``transform`` with the fit record ``fit`` (see ``_auto_emitter``)."""
         name = type(self).__name__
         units, K, single = _as_units(corrs, name)
@@ -468,12 +528,12 @@ class _Summary:
             raise ValueError(
                 f"{name}: the fit has {K_fit} nodes but the correlations have {K} nodes."
             )
-        same = len(units) == len(fit["weights"])
+        chosen = self._fitted_units(fit_index, len(units), len(fit["weights"]))
         c = self._n_columns(fit, K)
         outs = []
         for i, u in enumerate(units):
             R = vec2mat(u)
-            unit = self._unit_params(fit, i if same else None)
+            unit = self._unit_params(fit, chosen[i])
             out = np.zeros((R.shape[2], c))
             self._emit(fit, unit, 0, K, R, out)
             outs.append(out)
@@ -616,7 +676,9 @@ class WeightedStrength(_Summary):
     units: the weights (and communities) come from the data being summarized.
     ``fit`` and ``transform`` separate the two; ``transform`` matches units
     to the fitted units by position when their numbers are equal (unit u
-    gets the weights fitted to unit u; see ``transform``).  The summary of a unit
+    gets the weights fitted to unit u), and ``transform(...,
+    fit_index=...)`` names the fitted unit of each unit instead (see
+    ``transform``).  The summary of a unit
     returned by a combine function other than ``null_combine`` describes the
     combined correlations.  The correlations must be finite (NaN or infinite
     values, on the diagonal too, raise ``ValueError``).
@@ -792,7 +854,9 @@ class Communities(_Summary):
     summarized.  ``fit`` and ``transform`` separate the two; with
     ``signed=True``, ``transform`` matches units to the fitted units by
     position when their numbers are equal (unit u gets the signs of the
-    mean correlations fitted to unit u; see ``transform``).  The
+    mean correlations fitted to unit u), and ``transform(...,
+    fit_index=...)`` names the fitted unit of each unit instead (see
+    ``transform``).  The
     correlations must be finite (NaN or infinite values, on the diagonal
     too, raise ``ValueError``).
 

@@ -26,7 +26,10 @@ correlations summarized by community.  The feeding kernel is shaped by
 the analysis kernel is.  The default feeding reducer needs at least 4
 features and 40 timepoints (``ValueError`` otherwise);
 ``delta_rfun="weighted_strength"`` takes any number of features and
-timepoints.  The original two-path pipeline (Owen, Chang & Manning, 2021,
+timepoints.  When the communities of a default feeding step would emit
+fewer than 4 columns, that step emits ``WeightedStrength(split=False,
+signed=False, center=True)`` of the same correlations instead (one column
+per input feature), with a ``UserWarning``.  The original two-path pipeline (Owen, Chang & Manning, 2021,
 Fig. 10) is ``rfun="PCA", delta_rfun=None, delta_weights_function=eye_weights``.
 
 A step whose reducer is a squared-correlation summary (``WeightedStrength``
@@ -76,6 +79,7 @@ from .summaries import (
     _streamed_peak_elements,
     _streamed_summary,
     _Summary,
+    _auto_emitter,
 )
 from .timecorr import _event_kernels, _restricted, _shaped_kernel, timecorr
 
@@ -437,10 +441,12 @@ def _apply_reducer(corrs, rfun, ndims, order=None, path=None, null_threshold=Non
     if summary is None:
         return _reduce(corrs, rfun, ndims)
     summary.fit(corrs, order=order, path=path, null_threshold=null_threshold)
+    fit = summary.fits_[-1]
     if null_threshold is not None:
         # the threshold came from the shift null with the summary's n_null
-        summary.fits_[-1]["n_null"] = summary.n_null
-    out = summary.transform(corrs)
+        fit["n_null"] = summary.n_null
+    K = fit["weights"][0].shape[0]
+    out = _auto_emitter(summary, fit, K, order)._transform_fit(fit, corrs)
     if not append_fit:
         del summary.fits_[:-1]
     return out
@@ -910,7 +916,9 @@ def _check_auto_feeding(delta_rfun, d, T, order, bandwidth=_DEFAULT_BANDWIDTH,
     than d distinct shift-null lags in ``[L, T - L]`` (``L = min(T // 4,
     max(10, 10 * bandwidth))``, ``bandwidth`` the feeding kernel's standard
     deviation).  ``previous``: the number of communities found at the
-    previous order when the d inputs are that order's community columns.
+    previous order when the d inputs are the community columns of an
+    explicit ``Communities`` there (the automatic reducer keeps at least 4
+    columns; see ``summaries._auto_emitter``).
     """
     if not getattr(delta_rfun, "_from_auto", False):
         return
@@ -1129,9 +1137,11 @@ def two_path_step(
         "auto".
     delta_rfun : None, str, dict, or callable
         Reducer for the feeding (delta) path, as ``rfun``; ``"auto"`` is
-        ``Communities()`` (at least 4 features and 40 timepoints; see
-        ``features``), None is the same as ``rfun`` at this order.  Default:
-        "auto".
+        ``Communities()`` (at least 4 features and 40 timepoints; when its
+        communities would emit fewer than 4 columns, the step emits
+        unsigned weighted strength of the same correlations instead, with a
+        ``UserWarning``; see ``features``), None is the same as ``rfun`` at
+        this order.  Default: "auto".
     ndims : int, optional
         Output width of model-based reduction (a model name or dict) on
         either path (see ``helpers.reduce``); it is not passed to a graph
@@ -1218,6 +1228,10 @@ def two_path_step(
         ``eye_weights``.
     UserWarning
         From the summaries (see ``WeightedStrength`` and ``Communities``).
+    UserWarning
+        When the default feeding reducer's communities would emit fewer than
+        4 columns and the step emits weighted strength instead (see
+        ``features``).
 
     Raises
     ------
@@ -1520,7 +1534,10 @@ def features(
     ``order``, and ``order`` itself with ``return_delta=True``); otherwise
     ``ValueError`` names the alternatives: ``delta_rfun="weighted_strength"``
     (one column per feature, any number of features and timepoints) or the
-    original pipeline.
+    original pipeline.  At a default feeding step whose communities would
+    emit fewer than 4 columns, the step emits weighted strength of the same
+    correlations instead (one column per input feature; see
+    ``delta_rfun``), so the feeding width never drops below 4.
 
     The original two-path pipeline (Owen, Chang & Manning, 2021, Fig. 10) is
     ``rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights``:
@@ -1593,14 +1610,22 @@ def features(
         ``"auto"`` is ``Communities()`` at every order (automatic count; at
         least 4 features, 40 timepoints, and as many distinct shift-null
         lags in ``[L, T - L]`` as features, otherwise ``ValueError`` naming
-        the alternatives).  The feeding width at order k is then the number
-        of communities found at order k - 1, at most half the features of
-        that order, so a later feeding step raises when fewer than 4 remain
-        (for example with 4 to 7 input features, ``order=3`` or ``order=2``
-        with ``return_delta=True``); ``delta_rfun="weighted_strength"`` or
-        the original pipeline's settings (``rfun="PCA", delta_rfun=None,
-        delta_weights_function=tc.eye_weights``) avoid it.  None (also as an
-        order map value) is the same as ``rfun`` at that order.  A
+        the alternatives).  At each feeding step it computes, the candidate
+        communities are fitted to that step's correlations (with the shift
+        null) and their emitted columns counted (communities with at least
+        2 members; at most half the step's input features).  With 4 or more
+        columns, the step emits the communities, as an explicit
+        ``Communities()`` does.  With fewer (including the case where no
+        eigenvalue exceeds the shift null, which gives one community), it
+        emits ``WeightedStrength(split=False, signed=False, center=True)``
+        of the same correlations (from the same pair weights; no second
+        null), one column per input feature, with one ``UserWarning`` per
+        such order; the feeding width then stays at least 4 (for example
+        with 4 to 7 input features, every default feeding step emits
+        weighted strength).  An explicit ``Communities()`` or
+        ``"communities"`` keeps its communities whatever their number.
+        None (also as an order map value) is the same as ``rfun`` at that
+        order.  A
         delta-kernel co-fluctuation matrix ``z z^T`` has rank one, so with
         ``eye_weights`` eigenvector centrality equals ``|z| / ||z||`` and the
         graph measures carry no network structure.  Default: "auto".
@@ -1725,7 +1750,14 @@ def features(
         0 before a model-based, graph-measure or summary reduction.
     UserWarning
         From the summaries: no community structure above the shift null
-        (one community), or output columns constant over time.
+        (one community; explicit ``Communities`` and split
+        ``WeightedStrength``), or output columns constant over time.
+    UserWarning
+        Once per order whose default feeding step (``delta_rfun="auto"``)
+        emits weighted strength because its communities would emit fewer
+        than 4 columns; the message gives the number of community columns
+        (or says that the shift null found no structure) and the number of
+        input features.
 
     Raises
     ------
@@ -1742,10 +1774,11 @@ def features(
         feeding step and its reducer ``Communities()``); if the default
         feeding reducer (``delta_rfun="auto"``) gets fewer than 4 features,
         fewer than 40 timepoints, or fewer distinct shift-null lags than
-        features at a computed feeding step, including a later order whose
-        input is fewer than 4 communities found at the previous order (the message
-        names ``delta_rfun="weighted_strength"`` and the original pipeline's
-        settings); for a ``Communities`` (or split ``WeightedStrength``) without
+        features at a computed feeding step: the input data, or the output
+        of an explicit reducer of the previous order (for example an
+        explicit ``Communities()``, whose communities the message then
+        names); the message names ``delta_rfun="weighted_strength"`` and
+        the original pipeline's settings; for a ``Communities`` (or split ``WeightedStrength``) without
         ``n`` where the number of communities cannot be counted (analysis
         steps with a ``cfun`` other than ``autofc`` or a ``combine`` other
         than ``null_combine``; T < 40; fewer distinct shift-null lags than
@@ -1953,9 +1986,12 @@ def features(
         )
         X.append(x)
         previous = feeding_rfun[k]
+        # explicit Communities only: the automatic feeding reducer keeps at
+        # least 4 columns (see summaries._auto_emitter)
         previous_communities = (
             previous.fits_[-1]["n"]
-            if isinstance(previous, Communities) and previous.fits_ else None
+            if isinstance(previous, Communities) and previous.fits_
+            and not getattr(previous, "_from_auto", False) else None
         )
         if delta is not None:
             fed_by = delta

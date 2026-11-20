@@ -28,11 +28,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   example at most 21 features at T = 40) at every feeding step that is
   computed; otherwise `ValueError` names `delta_rfun="weighted_strength"`
   (any number of features and timepoints) and the original pipeline's
-  settings. The feeding width at order k is the number of communities
-  found at order k - 1 (at most half the features of that order), so a
-  later order raises when fewer than 4 remain: with 4 to 7 input features,
-  `order=3`, and `order=2` with `return_delta=True`, raise, while `order=2`
-  without it completes. `ndims` with the defaults raises
+  settings. At each default feeding step, the communities are fitted to
+  that step's correlations; when they would emit fewer than 4 columns (at
+  most half the step's input features; one when no eigenvalue exceeds the
+  shift null), the step emits `WeightedStrength(split=False, signed=False,
+  center=True)` of the same correlations instead (one column per input
+  feature, from the same pair weights), with one `UserWarning` per such
+  order, so the feeding width never drops below 4 and, for example, 4 to 7
+  input features complete at `order=3`. An explicit `Communities()` keeps
+  its communities (and its "no community structure" warning). `ndims` with the defaults raises
   `ValueError` in `features` at `order >= 2` (the order-2 analysis reducer
   is a summary) and at `order=1` with `return_delta=True` (the order-1
   feeding reducer is `Communities()`), and in `two_path_step` at every

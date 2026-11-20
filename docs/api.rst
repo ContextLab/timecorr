@@ -99,11 +99,13 @@ accept ``"auto"`` (the defaults; analysis path: PCA at order 1 and
 ``WeightedStrength(signed=True)`` above; feeding path: ``Communities()``,
 with the number of communities set by a shift null) and dicts keyed by order.
 The default feeding reducer needs at least 4 features, 40 timepoints and as
-many distinct shift-null lags in ``[L, T - L]`` as features. Its output width,
-the input of the next feeding step, is the number of communities found (at most
-half its input features), so a later order raises when fewer than 4 remain;
-``delta_rfun="weighted_strength"`` (any number of features) and the original
-pipeline's settings avoid this. Steps reduced by a summary (with
+many distinct shift-null lags in ``[L, T - L]`` as features. When the
+communities found at a feeding step would emit fewer than 4 columns (at most
+half its input features; one when the shift null finds no structure), that step
+emits ``WeightedStrength(split=False, signed=False, center=True)`` of the same
+correlations instead (one column per input feature), with a ``UserWarning``, so
+the feeding width never drops below 4. An explicit ``Communities()`` keeps its
+communities; ``delta_rfun="weighted_strength"`` takes any number of features. Steps reduced by a summary (with
 ``null_combine`` and ``cfun`` ``autofc``, ``isfc`` or ``wisfc``) are computed
 in blocks of rows of the ``(K, K, T)`` correlation array, so the whole array is
 held only when one block covers all K rows.

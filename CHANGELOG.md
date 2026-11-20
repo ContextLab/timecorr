@@ -669,6 +669,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standard deviations or more was treated as constant (all zeros); the
   zero-variance test now uses the centered data, with a round-off allowance
   so that a constant feature stays constant.
+- A feature equal to a constant up to round-off (samples `c (1 + d)` with
+  `|d|` of a few float64 spacings, for example 1 times `1 + 1e-16` noise)
+  had a kernel-weighted variance of round-off size rather than exactly 0,
+  so the estimator returned ratios of round-off as its correlations (up to
+  0.77 in magnitude with a Gaussian kernel of variance 10 on 80
+  timepoints, where an exactly constant feature gives 0). A kernel-weighted variance at most `(64 eps)**2` times the
+  kernel-weighted mean square of the raw samples (`eps` is the float64
+  machine epsilon) now counts as zero, as an exact zero does: correlation 0
+  and the same count in the zero-variance warning, for array and built-in
+  kernels, with or without NaN samples, and in the streamed summaries. The
+  rule is relative, so it does not depend on the scale of the feature
+  (tested at 1e150 and 1e-150). The z-scores of the delta kernel and of
+  `segment` use the same rule; `segment` previously turned such a feature
+  into unit-variance round-off noise. On 4,566 outputs of random data
+  without such features (12 seeds; 8 kernel functions; `wcorr`, `timecorr`
+  with `isfc`, `wisfc` and `autofc`, and `features`), every value and
+  warning is identical to the previous code.
 - `vec2mat` failed on a 1 x V input; `z2r(inf)` returned 0 (now 1).
 - `mat2vec` and `vec2mat` are vectorized; `mat2vec` copies row by row, which
   lowers its peak memory from about 3.1 to about 1.1 times the output size.

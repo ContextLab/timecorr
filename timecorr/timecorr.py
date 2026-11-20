@@ -206,8 +206,12 @@ def timecorr(
     estimator weights the covariance and variance sums as well as the means;
     it differs from Eq. 4 of Owen, Chang & Manning (2021) and from timecorr
     0.2.0, where the kernel set only the means, so numerical results differ
-    from 0.2.0.  For higher-order correlations computed as in the paper
-    (Fig. 10), see ``timecorr.features``.
+    from 0.2.0.  A feature whose kernel-weighted variance at a timepoint is
+    zero, or zero up to round-off relative to its kernel-weighted mean
+    square (``wcorr`` gives the rule; it does not depend on the units of the
+    data), has correlation 0 with every feature there.  For higher-order
+    correlations computed as in the paper (Fig. 10), see
+    ``timecorr.features``.
 
     Parameters
     ----------

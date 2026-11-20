@@ -796,8 +796,47 @@ _VARIANCE_PRODUCT_MIN = 1e-290
 _KERNEL_ROW_MIN = 1e-100
 _KERNEL_ROW_MAX = 1e100
 
-# Relative round-off of removing a column's mean (a few float64 spacings).
+# Relative round-off of a column's samples (a few float64 spacings): a column
+# whose samples agree to within this fraction of their magnitude is constant
+# (see _round_off_variance).
 _ROUND_OFF = 64 * np.finfo(np.float64).eps
+
+
+def _round_off_variance(var, s, mean):
+    """
+    True where a (kernel-)weighted variance is at the round-off level of its
+    column: ``var <= _ROUND_OFF**2 * (var + s * mean**2)``.
+
+    ``var`` is ``sum |w| (x - mean)**2``, ``s`` is ``sum |w|`` and ``mean``
+    the weighted mean of the raw samples (overall mean included), so
+    ``var + s * mean**2`` is the column's weighted mean square
+    ``sum |w| x**2``.  Bound: samples ``x = c (1 + d)`` that equal ``c`` up
+    to round-off, ``|d| <= k * eps`` (one rounding gives ``k = 1/2``; a
+    computation that sums n terms gives up to about ``k = n``), have
+    ``var <= sum |w| (c d)**2 <= (k eps)**2 * s c**2``, which is at most
+    ``(k eps)**2 / (1 - k eps)**2`` times the mean square: below the bound
+    for ``k`` below 64 (``_ROUND_OFF / eps``).  The variance is compared as
+    a standard deviation with ``hypot``, so neither side overflows or
+    underflows before the comparison; the rule does not depend on the units
+    of the column.  A genuine spread is above it unless it is within
+    ``_ROUND_OFF`` (1.4e-14) of the column's magnitude: an offset of 1e11
+    standard deviations is a relative spread of 1e-11.
+    """
+    sd = np.sqrt(np.maximum(var, 0.0))
+    return sd <= _ROUND_OFF * np.hypot(sd, np.sqrt(s) * np.abs(mean))
+
+
+def _zero_variance(var, msq, s, mean):
+    """
+    The estimator's zero-variance rule: True where a kernel-weighted variance
+    ``var`` counts as zero.  ``msq`` is the kernel-weighted mean square of the
+    globally centered column, ``s`` the kernel's ``sum |w|`` and ``mean``
+    the kernel-weighted mean of the raw column.  The variance is zero when it
+    is at most ``_ZERO_VARIANCE_TOL`` times ``msq`` (the numerical limit of
+    computing it from centered sums) or at the round-off level of the raw
+    column (``_round_off_variance``).
+    """
+    return (var <= _ZERO_VARIANCE_TOL * msq) | _round_off_variance(var, s, mean)
 
 # Values at most this far outside [-1, 1] are correlations with round-off error
 # (clipped to +-1), not co-fluctuations.
@@ -811,11 +850,16 @@ def _safe_divide(num, den):
     return out
 
 
-def _nan_center(x):
-    """Subtract each column's mean over its non-NaN samples (0 for all-NaN columns)."""
+def _nan_mean(x):
+    """Each column's mean over its non-NaN samples (0 for all-NaN columns)."""
     valid = ~np.isnan(x)
     total = np.where(valid, x, 0.0).sum(axis=0)
-    return x - _safe_divide(total, valid.sum(axis=0))
+    return _safe_divide(total, valid.sum(axis=0))
+
+
+def _nan_center(x):
+    """Subtract each column's mean over its non-NaN samples (0 for all-NaN columns)."""
+    return x - _nan_mean(x)
 
 
 def _zscore_columns(x):
@@ -823,16 +867,19 @@ def _zscore_columns(x):
     Population z-scores of each column; NaN samples and constant columns give 0.
 
     A column is constant when its standard deviation is at most 1e-10 of its
-    largest centered value, or within the round-off of removing its mean (a
-    few float spacings of its largest raw value), so a large constant offset
-    neither zeroes a varying column nor turns a constant one into signal.
+    largest centered value, or at the round-off level of its root mean
+    square (``_round_off_variance``, the estimator's rule with equal
+    weights), so a large constant offset neither zeroes a varying column nor
+    turns a constant one into signal.
     """
     valid = ~np.isnan(x)
-    magnitude = np.where(valid, np.abs(x), 0.0).max(axis=0)
-    x0 = np.where(valid, _nan_center(x), 0.0)
-    sd = np.sqrt(_safe_divide((x0**2).sum(axis=0), valid.sum(axis=0)))
+    n = valid.sum(axis=0)
+    mean = _nan_mean(x)
+    x0 = np.where(valid, x - mean, 0.0)
+    ss = (x0**2).sum(axis=0)
+    sd = np.sqrt(_safe_divide(ss, n))
     constant = (sd <= _ZERO_VARIANCE_TOL * np.abs(x0).max(axis=0)) | (
-        sd <= _ROUND_OFF * magnitude
+        _round_off_variance(ss, n, mean + _safe_divide(x0.sum(axis=0), n))
     )
     return _safe_divide(x0, np.where(constant, 0.0, sd))
 
@@ -1175,10 +1222,14 @@ def _wcorr_setup(a, b, rows, autocorrelation):
     ``b`` too).  Returns a dict.
     """
     finite = _products_finite(a, b)  # an infinite sample makes its column NaN
-    a = _nan_center(a)
-    b = _nan_center(b)
+    # the overall means are kept: with the kernel-weighted means of the
+    # centered columns they give the raw ones, which the round-off rule needs
+    ca = _nan_mean(a)
+    cb = _nan_mean(b)
+    a = a - ca
+    b = b - cb
     rows.prepare(finite and _products_finite(a, b))
-    state = {"T": a.shape[0], "rows": rows, "a": a, "b": b}
+    state = {"T": a.shape[0], "rows": rows, "a": a, "b": b, "ca": ca, "cb": cb}
     s = rows.row_sum("a")
     state["active"] = s > 0
     state["has_nan"] = bool(np.isnan(a).any() or np.isnan(b).any())
@@ -1187,14 +1238,14 @@ def _wcorr_setup(a, b, rows, autocorrelation):
         s = s[:, np.newaxis]
         state["sw"] = rows.row_sum("w")[:, np.newaxis]
 
-        def moments(x):
+        def moments(x, center):
             mean = _safe_divide(rows.product(x, "a"), s)
             msq = rows.product(x**2, "a")
             var = msq - s * mean**2
-            zero = var <= _ZERO_VARIANCE_TOL * msq
+            zero = _zero_variance(var, msq, s, mean + center)
             return mean, rows.product(x, "w"), np.where(zero, 0.0, var), zero
 
-        state["ma"], state["wa"], state["va"], state["za"] = moments(a)
+        state["ma"], state["wa"], state["va"], state["za"] = moments(a, ca)
         if autocorrelation:
             state["mb"], state["wb"], state["vb"], state["zb"] = (
                 state["ma"],
@@ -1203,7 +1254,7 @@ def _wcorr_setup(a, b, rows, autocorrelation):
                 state["za"],
             )
         else:
-            state["mb"], state["wb"], state["vb"], state["zb"] = moments(b)
+            state["mb"], state["wb"], state["vb"], state["zb"] = moments(b, cb)
         state["n_products"] = 1
     else:
         state["ok_a"] = ~np.isnan(a)
@@ -1267,7 +1318,12 @@ def _wcorr_block(state, i0, i1, j0):
         num = (wxy - mx * wy - my * wx + mx * my * w0).reshape(shape)
         var_a = sxx - s0 * mx**2
         var_b = syy - s0 * my**2
-        zero = (var_a <= _ZERO_VARIANCE_TOL * sxx) | (var_b <= _ZERO_VARIANCE_TOL * syy)
+        pairs = (i1 - i0, Kb - j0)
+        ca = np.broadcast_to(state["ca"][i0:i1, np.newaxis], pairs).reshape(-1)
+        cb = np.broadcast_to(state["cb"][np.newaxis, j0:], pairs).reshape(-1)
+        zero = _zero_variance(var_a, sxx, s0, mx + ca) | _zero_variance(
+            var_b, syy, s0, my + cb
+        )
         var_a, var_b, zero = (v.reshape(shape) for v in (var_a, var_b, zero))
         # two samples always give r = +-1: fewer than 3 is undefined
         few = rows.product(terms[:, :n], "s").reshape(shape) < 3
@@ -1455,8 +1511,15 @@ def wcorr(a, b, weights):
     - A feature is treated as constant at timepoint ``t`` when its
       kernel-weighted variance there is at most 1e-10 times its
       kernel-weighted mean square (after the feature's overall mean is
-      removed).  A constant feature has correlation 0 with every feature,
-      itself included, at that timepoint.  This is a numerical limit:
+      removed), or at most ``(64 eps)**2`` (about 2e-28; ``eps`` is the
+      float64 machine epsilon) times the kernel-weighted mean square of its
+      raw samples: samples ``c (1 + d)`` with ``|d|`` below ``64 eps``
+      (about 1.4e-14; for example values equal to 1 up to round-off, at any
+      scale ``c``) are constant.  A constant feature has correlation 0 with every
+      feature, itself included, at that timepoint, and counts in the
+      zero-variance warning as an exactly constant one does.  Both rules
+      are relative, so multiplying a feature by a constant does not change
+      which entries are set to 0.  This is a numerical limit:
       features whose local variance is below about 1e-10 of their mean square
       are treated as constant.  A constant offset of the whole series does
       not matter (the overall mean is removed first; an offset of 1e9

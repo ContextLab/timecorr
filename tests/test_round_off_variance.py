@@ -102,7 +102,9 @@ def test_round_off_constant_stretch_counts_in_the_zero_variance_warning():
     ref, ref_msgs = _quiet(wcorr, exact, exact, w)
     assert len(ref_msgs) == 1 and "16 of 50 timepoints" in ref_msgs[0]
     assert msgs == ref_msgs
-    assert np.array_equal(out, ref)
+    assert np.array_equal(out == 0, ref == 0)
+    # windows that reach the stretch see the round-off noise in its samples
+    assert np.allclose(out, ref, atol=1e-12, rtol=0)
 
 
 @pytest.mark.parametrize("cfun", [tc.isfc, tc.wisfc, tc.autofc])

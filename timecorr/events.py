@@ -585,10 +585,13 @@ class _quiet_hmmlearn:
 
 
 def _zscore_columns(x):
-    """Z-score each feature (constant features become 0)."""
-    sd = x.std(axis=0)
-    sd[sd == 0] = 1.0
-    return (x - x.mean(axis=0)) / sd
+    """
+    Z-score each feature; constant features, including those constant up to
+    round-off, become 0 (the estimator's rule, ``helpers._zscore_columns``).
+    """
+    from .helpers import _zscore_columns as zscore
+
+    return zscore(np.asarray(x, dtype=np.float64))
 
 
 def _finite_model(model):

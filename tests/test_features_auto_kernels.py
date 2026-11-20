@@ -95,6 +95,12 @@ def test_width_ignores_constant_columns_and_nan_samples():
     holes = x.copy()
     holes[::97, 0] = np.nan
     assert _autocorrelation_width([holes]) == pytest.approx(w, rel=0.05)
+    # NaN samples in every column: the columns still count
+    every = x.copy()
+    for column in range(4):
+        every[column::97, column] = np.nan
+    assert _autocorrelation_width([every]) == pytest.approx(w, rel=0.05)
+    assert w > 5
     assert _autocorrelation_width([np.ones((50, 3))]) == 1.0
 
 

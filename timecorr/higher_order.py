@@ -1066,6 +1066,72 @@ def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfu
             d = width
 
 
+_PARAMS_MAP_EXAMPLE = "{1: {'var': 100}, 2: {'var': 400}}"
+
+
+def _has_integer_keys(value):
+    """True for a dict with at least one integer key (booleans included)."""
+    return isinstance(value, dict) and any(
+        isinstance(k, numbers.Integral) for k in value
+    )
+
+
+def _params_by_order(value, name, max_order):
+    """
+    ``{order: params}`` for an order map of kernel parameters (a non-empty
+    dict whose keys are all integers in ``1..max_order``; booleans are not
+    orders), after checking its values (a dict of kernel parameters or
+    None); None for any other value (kernel parameters for every order: a
+    dict without integer keys, an empty dict, None).  A dict that mixes
+    integer and other keys, or has boolean keys, raises ``ValueError``.
+    """
+    if not _has_integer_keys(value):
+        return None
+    keys = list(value)
+    if not all(isinstance(k, numbers.Integral) and not isinstance(k, bool)
+               for k in keys):
+        raise ValueError(
+            f"A dict {name} is either kernel parameters (keys that are not "
+            "integers, for example {'var': 100}, used at every order) or an "
+            "order map: a dict whose keys are all integer orders in "
+            f"1..{max_order} and whose values are kernel parameters or None "
+            f"(for example {_PARAMS_MAP_EXAMPLE}); got keys "
+            f"{sorted(map(repr, keys))}."
+        )
+    bad = [k for k in keys if k < 1 or k > max_order]
+    if bad:
+        raise ValueError(
+            f"The keys of the order map {name} must be integers in "
+            f"1..{max_order}; got {sorted(int(k) for k in bad)}."
+        )
+    for k, v in value.items():
+        if _has_integer_keys(v):
+            raise ValueError(
+                f"{name}[{int(k)}] must be the kernel parameters of order "
+                f"{int(k)}; order maps cannot be nested; got keys "
+                f"{sorted(map(repr, v))}."
+            )
+        if v is not None and not isinstance(v, dict):
+            raise ValueError(
+                f"{name}[{int(k)}] must be a dict of kernel parameters or None "
+                f"(the default of order {int(k)}); got {v!r}."
+            )
+    return {int(k): v for k, v in value.items()}
+
+
+def _refuse_params_map(value, name):
+    """Raise ``ValueError`` for an order map (any dict with integer keys)
+    given to ``two_path_step``, which computes one order."""
+    if _has_integer_keys(value):
+        raise ValueError(
+            f"two_path_step computes one order, so {name} holds the kernel "
+            "parameters of that order; got an order map (a dict keyed by "
+            f"integer orders, keys {sorted(map(repr, value))}).  Order maps of "
+            f"kernel parameters are accepted by features, which computes every "
+            f"order: tc.features(..., {name}={_PARAMS_MAP_EXAMPLE})."
+        )
+
+
 def _feeding_kernel(weights_function, weights_params, default=None):
     """
     ``(function, params)`` of the feeding kernel: None selects the kernel
@@ -1139,7 +1205,9 @@ def two_path_step(
         ``t`` of the kernel (``weights[t, :]``) is the kernel used at timepoint
         ``t``.  Default: ``gaussian_weights``.
     weights_params : dict or None
-        Parameters of the analysis kernel.  Default: None (the kernel's
+        Parameters of the analysis kernel.  An order map (a dict with
+        integer keys) raises ``ValueError``: order maps of kernel parameters
+        are accepted by ``features``.  Default: None (the kernel's
         defaults, for example ``gaussian_params``).
     cfun : function
         Analysis-path correlation function (``isfc``, ``wisfc``, ``autofc``).
@@ -1206,7 +1274,8 @@ def two_path_step(
         ``"var"`` raises ``ValueError``); with a given function,
         None means that function's own defaults; with ``eye_weights``, which
         takes no parameters, they must be None (``ValueError`` otherwise).
-        Default: None.
+        An order map (a dict with integer keys) raises ``ValueError``, as
+        for ``weights_params``.  Default: None.
     order : int
         The order this step computes (keyword-only), used to resolve
         ``"auto"`` and order maps (whose keys may be any positive integers
@@ -1256,7 +1325,9 @@ def two_path_step(
         Before the step allocates its arrays, if the estimate of either path
         exceeds ``max_memory_gb``.
     ValueError
-        If ``order`` is not a positive integer; if ``rfun`` or ``delta_rfun``
+        If ``order`` is not a positive integer; if ``weights_params`` or
+        ``delta_weights_params`` is a dict with integer keys (an order map;
+        see ``features``); if ``rfun`` or ``delta_rfun``
         is an unknown model, graph measure or summary name, a dict that is
         neither a model configuration (with a ``'model'`` key) nor an order
         map, or an order map with a key that is not a positive integer or a
@@ -1324,6 +1395,8 @@ def two_path_step(
     ):
         raise ValueError(f"order must be a positive integer; got {order!r}.")
     order = int(order)
+    _refuse_params_map(weights_params, "weights_params")
+    _refuse_params_map(delta_weights_params, "delta_weights_params")
     analysis, feeding = _resolve_reducers(rfun, delta_rfun, [order], None)
     ndims = _check_ndims(ndims)
     _check_ndims_steps(
@@ -1683,8 +1756,17 @@ def features(
     weights_function, weights_params : function, dict or None
         Analysis kernel and its parameters (see ``timecorr``); row ``t`` of the
         kernel (``weights[t, :]``) is the kernel used at timepoint ``t``.
-        Default: ``gaussian_weights`` with ``weights_params=None`` (its
-        defaults, ``gaussian_params``).
+        ``weights_params`` may also be an order map: a non-empty dict whose
+        keys are all integers in ``1..order`` and whose values are the
+        kernel parameters of that order (a dict, or None for the kernel's
+        defaults), for example ``{1: {"var": 100}, 2: {"var": 400}}``;
+        orders missing from it use the kernel's defaults.  A dict without
+        integer keys (or an empty dict) is the parameters of every order; a
+        dict that mixes integer and other keys, has boolean keys or keys
+        outside ``1..order``, or maps an order to a value that is neither a
+        dict nor None, raises ``ValueError``.  Default:
+        ``gaussian_weights`` with ``weights_params=None`` (its defaults,
+        ``gaussian_params``).
     cfun : function
         Analysis-path correlation function (``isfc``, ``wisfc``, ``autofc``).
         Default: ``isfc``, which correlates each subject's features with the
@@ -1829,7 +1911,13 @@ def features(
         samples; a dict without ``"var"`` raises ``ValueError``); with a
         given function, None means that function's own
         defaults; with ``eye_weights``, which takes no parameters, they must
-        be None (``ValueError`` otherwise).  Default: None.
+        be None (``ValueError`` otherwise).  An order map, as for
+        ``weights_params``, sets the feeding kernel's parameters order by
+        order; orders missing from it (or mapped to None) use what
+        ``delta_weights_params=None`` gives (``{"var": 25}`` for the default
+        Gaussian; with ``eye_weights`` every value must be None).  The
+        shift null of a feeding step reads that order's standard deviation.
+        Default: None.
     return_info : bool
         If True (keyword-only), return ``(result, info)``, where ``result``
         is what the call returns otherwise (``X``, or ``(X, D)`` with
@@ -1896,7 +1984,9 @@ def features(
         dict that is neither a model configuration (with a ``'model'`` key)
         nor an order map, or an order map with keys outside ``1..order`` or
         a value that is not a reducer (all are checked before anything is
-        computed, even when a reducer would not be called); if ``ndims`` is
+        computed, even when a reducer would not be called); for a malformed
+        order map in ``weights_params`` or ``delta_weights_params`` (see
+        ``weights_params``; checked before anything is computed); if ``ndims`` is
         not a positive integer, or is given with a summary on a computed
         step (with the defaults, whenever ``order >= 2``, and at
         ``order=1`` with ``return_delta=True``, which computes the order-1
@@ -1989,6 +2079,16 @@ def features(
     >>> X[2][0].shape
     (300, 12)
 
+    Kernels by order: a wider analysis kernel at order 2 than at order 1,
+    and a feeding kernel of variance 64 at order 1 (orders missing from a
+    map use the defaults):
+
+    >>> X = tc.features(data, order=2, cfun=tc.autofc,
+    ...                 weights_params={1: {"var": 100}, 2: {"var": 400}},
+    ...                 delta_weights_params={1: {"var": 64}})
+    >>> X[1][0].shape, X[2][0].shape
+    ((300, 24), (300, 12))
+
     Weighted strength on the feeding path (one column per feature; any
     number of features and timepoints):
 
@@ -2031,9 +2131,26 @@ def features(
         [(analysis_rfun[k], "rfun", k) for k in orders]
         + [(feeding_rfun[k], "delta_rfun", k) for k in fed],
     )
-    feeding_function, feeding_params = _feeding_kernel(
-        delta_weights_function, delta_weights_params
-    )
+    analysis_map = _params_by_order(weights_params, "weights_params", order)
+    feeding_map = _params_by_order(delta_weights_params, "delta_weights_params", order)
+    # kernel parameters of each order: an order map's value (None, the
+    # default, for orders missing from it), or the same parameters at every
+    # order
+    analysis_params = {
+        k: weights_params if analysis_map is None else analysis_map.get(k)
+        for k in orders
+    }
+    if feeding_map is None:
+        feeding_function, plain = _feeding_kernel(
+            delta_weights_function, delta_weights_params
+        )
+        feeding_params = {k: plain for k in orders}
+    else:
+        feeding_function, _ = _feeding_kernel(delta_weights_function, None)
+        feeding_params = {
+            k: _feeding_kernel(delta_weights_function, feeding_map.get(k))[1]
+            for k in orders
+        }
     for summary in _summary_instances(rfun, delta_rfun):
         summary.fits_ = []
 
@@ -2100,9 +2217,9 @@ def features(
             nan_warned=nan_warned,
             feed=k in fed,
             feeding_function=feeding_function,
-            feeding_params=feeding_params,
+            feeding_params=feeding_params[k],
             weights_function=weights_function,
-            weights_params=weights_params,
+            weights_params=analysis_params[k],
             cfun=cfun,
             rfun=analysis_rfun[k],
             ndims=ndims,

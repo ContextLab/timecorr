@@ -53,6 +53,7 @@ Higher-order features
    :nosignatures:
 
    features
+   two_path_step
 
 ``features`` computes features of every order through the two paths of Fig. 10
 of Owen, Chang & Manning (2021): at each order the analysis path applies the
@@ -68,13 +69,13 @@ reduces both paths.
 
 .. currentmodule:: timecorr.higher_order
 
-The building blocks are in ``timecorr.higher_order``:
+``two_path_step`` computes one order of the pipeline from the previous
+order's feeding features. The memory estimate is in ``timecorr.higher_order``:
 
 .. autosummary::
    :toctree: generated/
    :nosignatures:
 
-   two_path_step
    estimate_memory_gb
 
 .. code-block:: python
@@ -98,6 +99,10 @@ events of each order like the analysis kernel. ``rfun`` and ``delta_rfun``
 accept ``"auto"`` (the defaults; analysis path: PCA at order 1 and
 ``WeightedStrength(signed=True)`` above; feeding path: ``Communities()``,
 with the number of communities set by a shift null) and dicts keyed by order.
+In ``features``, ``weights_params`` and ``delta_weights_params`` also accept
+dicts keyed by order (for example ``{1: {"var": 100}, 2: {"var": 400}}``), which
+set each order's analysis or feeding kernel; orders missing from such a dict use
+the default parameters. ``two_path_step`` takes the parameters of one order.
 The default feeding reducer needs at least 4 features, 40 timepoints and as
 many distinct shift-null lags in ``[L, T - L]`` as features. When the
 communities found at a feeding step would emit fewer than 4 columns (at most

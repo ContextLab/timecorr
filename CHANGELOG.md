@@ -219,7 +219,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   passed only to model-based reducers. The estimate counts the `(d, d, T)` correlation array,
   every subject's results, the `T x T` kernels and the block temporaries; it
   does not count reducers or `combine` functions other than `null_combine`.
-- `timecorr.higher_order.two_path_step` (one order of the pipeline) and
+- `features`: `weights_params` and `delta_weights_params` also accept an
+  order map, a dict whose keys are all integers in `1..order` and whose
+  values are that order's kernel parameters (a dict, or None for the
+  defaults), for example `{1: {"var": 100}, 2: {"var": 400}}`; orders
+  missing from it use the default parameters. A dict without integer keys is
+  the parameters of every order, as before; a dict mixing integer and other
+  keys, boolean keys or keys outside `1..order` raise `ValueError`.
+  `two_path_step` takes the parameters of one order and raises `ValueError`
+  for an order map.
+- `tc.two_path_step` (also `timecorr.higher_order.two_path_step`; one order
+  of the pipeline) and
   `timecorr.higher_order.estimate_memory_gb` (keyword `delta_weights_function`:
   with None, the default Gaussian feeding kernel, or any kernel other than
   `eye_weights`, the feeding path's block temporaries are counted).

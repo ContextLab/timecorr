@@ -37,7 +37,7 @@ from .helpers import (
     wisfc,
 )
 from .events import segment
-from .higher_order import features
+from .higher_order import features, two_path_step
 from .summaries import Communities, WeightedStrength
 from .simulate import (
     carrier_columns,

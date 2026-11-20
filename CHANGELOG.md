@@ -26,7 +26,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   recovery cases of `tests/test_nested_recovery.py` the decode scores
   changed by -.002 to -.006, each below the standard error of its score
   (.022 to .038). The `WeightedStrength` Notes give the full comparison.
-  `Communities` still centers its matrix `C` on the median.
+  `Communities` still centers its matrix `C` on the median. The tables of
+  the README, the API overview and `tests/test_nested_recovery.py` were
+  re-measured with the new default (same seeds); for example, `X[2]` of the
+  default call with `cfun=tc.autofc` on `shared="order2"` data scores
+  .552 +- .023 (.559 +- .022 with median centering), and with `cfun=tc.isfc`
+  on `shared="order1"` data .652 +- .026 (.638 +- .028).
 
 - **Shift null with more columns than lags.** The shift null of the
   automatic community count (`Communities()` and split `WeightedStrength`

@@ -26,7 +26,8 @@ Including the control subjects in the call changes the fitted communities
 and therefore the score: with global signal 0.5 and communities, the score
 was .617 +- .023 (adjusted Rand index .887) with one control subject in the
 call (3 subjects) and .677 +- .021 (index .956) with four (6 subjects), on
-the same 24 development seeds.  The first design used one control subject
+the same 24 development seeds (both measured with the median centering of
+``WeightedStrength`` of timecorr 0.3.0).  The first design used one control subject
 per seed; its control bound failed on asserted seeds (3 of 6 T 1000 cases
 on 30000-30003), as its development standard deviation predicts (about .2
 per seed at T 1000 and .3 at T 3000, so a 4-seed mean has a standard error
@@ -35,22 +36,26 @@ the control group is computed in its own call, with the communities fitted
 on the data group (frozen, as in the spike).
 
 Development table (``_development_table()``; seeds 20000 + i; mean and
-standard error over seeds; the seed counts are given per row):
+standard error over seeds; the seed counts are given per row; measured
+with the default ``WeightedStrength`` centering, on the lower cluster of
+the pair weights.  ``DEV_MEAN``, which sets the asserted thresholds, holds
+the earlier development means, measured with median centering; they
+differ from this table by at most .009):
 
 | case | seeds | score | control (mean of 4 subjects) |
 |-|-|-|-|
-| sustained, communities (`rfun="auto"`, `delta_rfun="auto"`) | 24 | .753 +- .019 | -.025 +- .018 |
-| sustained, weighted strength | 24 | .645 +- .028 | -.025 +- .017 |
-| sign-flip, communities | 24 | .690 +- .018 | .000 +- .025 |
-| sign-flip, weighted strength | 24 | .563 +- .026 | .005 +- .020 |
-| global 0.5, communities | 24 | .677 +- .021 | -.035 +- .018 |
-| global 0.5, weighted strength | 24 | .549 +- .035 | -.039 +- .016 |
+| sustained, communities (`rfun="auto"`, `delta_rfun="auto"`) | 24 | .751 +- .019 | -.025 +- .018 |
+| sustained, weighted strength | 24 | .643 +- .028 | -.026 +- .017 |
+| sign-flip, communities | 24 | .687 +- .018 | .001 +- .025 |
+| sign-flip, weighted strength | 24 | .560 +- .026 | .003 +- .020 |
+| global 0.5, communities | 24 | .668 +- .022 | -.034 +- .018 |
+| global 0.5, weighted strength | 24 | .547 +- .035 | -.040 +- .016 |
 | tau2 15, T 3000, communities (slow) | 12 | .844 +- .016 | -.031 +- .050 |
-| tau2 15, T 3000, weighted strength (slow) | 12 | .804 +- .022 | -.035 +- .048 |
-| isfc, shared="order1", T 3000, tau3 40 (sd 11), transductive time split, communities (slow) | 12 | .366 +- .027 | .053 +- .025 |
-| same, weighted strength (slow) | 12 | .261 +- .029 | .042 +- .018 |
-| isfc, same data, held out with training fits, communities (slow) | 12 | .337 +- .029 | .044 +- .023 |
-| same, weighted strength (slow) | 12 | .235 +- .030 | .038 +- .018 |
+| tau2 15, T 3000, weighted strength (slow) | 12 | .802 +- .024 | -.037 +- .048 |
+| isfc, shared="order1", T 3000, tau3 40 (sd 11), transductive time split, communities (slow) | 12 | .366 +- .027 | .052 +- .024 |
+| same, weighted strength (slow) | 12 | .262 +- .029 | .043 +- .018 |
+| isfc, same data, held out with training fits, communities (slow) | 12 | .334 +- .030 | .044 +- .023 |
+| same, weighted strength (slow) | 12 | .236 +- .030 | .038 +- .018 |
 
 The transductive isfc rows (``isfc_scores``) fit the ridge map on the first
 40% of the timepoints and score it on the last 40%, but the summaries
@@ -61,7 +66,7 @@ last 40% test, the middle 20% dropped), fit every summary on the training
 part only, and compute the test part's features with those frozen fits
 (``transform``, step by step); on the development seeds the frozen route
 reproduced the pipeline's training features to within 1.3e-12.  The isfc
-development controls (.053 +- .025 and .042 +- .018 transductive, .044 +-
+development controls (.052 +- .024 and .043 +- .018 transductive, .044 +-
 .023 and .038 +- .018 held out) are about 2 standard errors above 0.
 
 Standard deviation of the control over seeds: .08-.12 at T 1000, .17 at
@@ -97,7 +102,8 @@ order-1 PCA features of one 6-subject call), not that the order-1
 features hold no information about h.
 Adjusted Rand index of the order-1 communities against the modules: 1.000
 on all seeds (sustained, sign-flip, T 3000), .956 +- .005 with global
-signal 0.5 (not asserted).  Automatic count on independent autocorrelated
+signal 0.5 (not asserted; .942 +- .005 when
+re-measured on the same seeds with the current code).  Automatic count on independent autocorrelated
 noise (K 108, T 1000, two subjects, Gaussian smoothing sd 5, 8 seeds): one
 community (no eigenvalue above the null) on 7 of 8.  The T 3000 and isfc
 rows used 12 seeds to keep the development run near 15 minutes (6
@@ -106,12 +112,12 @@ processes); the T 1000 rows used 24.
 Assertions run on the fixed seeds 30000-30003 (30000-30007 for the T 3000
 cases; 30000-30003 for the isfc rows): mean score above half the
 development mean and |mean control| below 0.15.  Held-out isfc rows,
-measured on 30000-30003: communities score .387 +- .038, control -.026 +-
-.073; weighted strength score .293 +- .031, control -.026 +- .064.  The T 3000 control has a development standard deviation of about .17
+measured on 30000-30003: communities score .386 +- .038, control -.029 +-
+.071; weighted strength score .293 +- .030, control -.026 +- .064.  The T 3000 control has a development standard deviation of about .17
 per seed (12 seeds, 4 control subjects each), so its standard error is about
 .085 at 4 seeds and .061 at 8 seeds.  Measured on 30000-30007: communities
 score .858 +- .016, control -.104 +- .046 (sd .131); weighted strength score
-.819 +- .029, control -.092 +- .056 (sd .158).
+.819 +- .028, control -.090 +- .056 (sd .157).
 
 Control of the T 3000 cases pooled over the development and asserted seeds
 (20000-20011 and 30000-30007, 20 seeds; mean and standard error over seeds):
@@ -119,18 +125,18 @@ Control of the T 3000 cases pooled over the development and asserted seeds
 | case | seeds | control (mean of 4 subjects) |
 |-|-|-|
 | tau2 15, T 3000, communities | 20 | -.060 +- .035 (sd .158) |
-| tau2 15, T 3000, weighted strength | 20 | -.058 +- .036 (sd .162) |
+| tau2 15, T 3000, weighted strength | 20 | -.058 +- .036 (sd .161) |
 
 Time-reversed control (``"reversed"`` in ``case_scores``; not asserted): the
 prediction for subject B (the map fitted on A to ``h``) scored against the
 subsampled ``h`` reversed in time.  Development seeds (20000-20023): sustained,
-communities -.231 +- .052 (sd .257); sustained, weighted strength -.246 +-
-.049 (sd .242).  This is not centered on 0: ``h`` itself correlates with its
+communities -.230 +- .052 (sd .256); sustained, weighted strength -.246 +-
+.050 (sd .244).  This is not centered on 0: ``h`` itself correlates with its
 own time reversal at -.213 +- .048 over the same seeds (mean over the
 columns of ``h``, subsampled every 10th timepoint; T 1000), and the
-prediction follows ``h`` (score .753 and .645), so the reversed score is
+prediction follows ``h`` (score .751 and .643), so the reversed score is
 expected near that value rather than near 0.  Measured on 30000-30003:
--.293 +- .157 (communities) and -.233 +- .161 (weighted strength).
+-.294 +- .157 (communities) and -.235 +- .161 (weighted strength).
 
 K 702 (slow, 2 seeds, ``max_memory_gb=4``, OMP 2; one control subject, not
 asserted): seed 30000 score .825 (control -.014), peak resident memory
@@ -151,7 +157,7 @@ return_delta=True)`` with no other arguments, so ``cfun=tc.isfc``, the
 analysis kernel's default variance 100 (standard deviation 10),
 ``rfun="auto"``, ``delta_rfun="auto"``; 108 nodes, T 1000, A, B and 4
 control subjects in one call).  Development seeds 20000-20011: ``X[2]``
-score -.035 +- .029, control .055 +- .019 (``h`` is not recovered from
+score -.031 +- .033, control .059 +- .020 (``h`` is not recovered from
 ``X[2]``; no assertion; ``isfc`` correlates each subject's features with
 the other subjects', and under ``shared="order2"``, the generator's default,
 the order-1 couplings are private to each subject); ``D[2]`` (the order-2
@@ -160,15 +166,15 @@ where the feeding step fell back to weighted strength) score .199 +- .021,
 control .013 +- .015 (with the uncentered fallback; .201 +- .020, control
 .006 +- .017 with the earlier centered one).  Asserted on 30000-30003 for
 ``D[2]`` (slow; measured score .249 +- .049, control .051 +- .009;
-``X[2]`` there: -.038 +- .038, control .018 +- .050).  Same call with
-``cfun=tc.autofc``: development ``X[2]`` .559 +- .022, control -.008 +-
+``X[2]`` there: -.032 +- .033, control .009 +- .056).  Same call with
+``cfun=tc.autofc``: development ``X[2]`` .552 +- .023, control -.008 +-
 .025 (``D[2]`` as above: the feeding path does not use ``cfun``); asserted
-on 30000-30003 for both (measured ``X[2]`` .559 +- .026, control .069 +-
-.025).  Literal defaults on ``shared="order1"`` data (order-1 couplings
-shared across subjects): development ``X[2]`` .638 +- .028, control .074
-+- .009; ``D[2]`` .293 +- .027, control .012 +- .014; asserted on
-30000-30003 for both (measured ``X[2]`` .659 +- .029, control .067 +-
-.030; ``D[2]`` .250 +- .044, control .007 +- .022).  Also asserted on
+on 30000-30003 for both (measured ``X[2]`` .557 +- .027, control .069 +-
+.027).  Literal defaults on ``shared="order1"`` data (order-1 couplings
+shared across subjects): development ``X[2]`` .652 +- .026, control .078
++- .010; ``D[2]`` .293 +- .027, control .012 +- .014; asserted on
+30000-30003 for both (measured ``X[2]`` .665 +- .033, control .068 +-
+.029; ``D[2]`` .250 +- .044, control .007 +- .022).  Also asserted on
 30000-30003: the literal defaults on ``shared="order2"`` data keep the
 ``X[2]`` score below 0.15 (``isfc`` correlates subjects with one another,
 and the order-1 couplings are private).  Recovery of structure above
@@ -186,14 +192,14 @@ not depend on ``cfun`` or the analysis kernel: .199 +- .021 (control .013
 ============  ========  ========  ==================  ==================
 ``shared``    ``cfun``  kernel    ``X[2]`` score      ``X[2]`` control
 ============  ========  ========  ==================  ==================
-order2        isfc      default   -.035 +- .029       .055 +- .019
-order2        isfc      sd 33     -.016 +- .065       .032 +- .042
-order2        autofc    default   .559 +- .022        -.008 +- .025
-order2        autofc    sd 33     .733 +- .031        -.051 +- .032
-order1        isfc      default   .638 +- .028        .074 +- .009
-order1        isfc      sd 33     .876 +- .017        .072 +- .028
-order1        autofc    default   .702 +- .012        -.008 +- .025
-order1        autofc    sd 33     .902 +- .006        -.051 +- .032
+order2        isfc      default   -.031 +- .033       .059 +- .020
+order2        isfc      sd 33     -.009 +- .062       .033 +- .040
+order2        autofc    default   .552 +- .023        -.008 +- .025
+order2        autofc    sd 33     .731 +- .031        -.052 +- .033
+order1        isfc      default   .652 +- .026        .078 +- .010
+order1        isfc      sd 33     .878 +- .017        .084 +- .029
+order1        autofc    default   .700 +- .012        -.008 +- .025
+order1        autofc    sd 33     .902 +- .006        -.052 +- .033
 ============  ========  ========  ==================  ==================
 
 The ``autofc`` controls are the same under both settings because the
@@ -768,7 +774,7 @@ def _literal_default_rows():
 @pytest.mark.slow
 def test_literal_defaults_recover_h_in_the_order2_feeding_features():
     # Literal defaults (literal_default_scores), development seeds
-    # 20000-20011: X[2] score -.035 +- .029, control .055 +- .019 (no
+    # 20000-20011: X[2] score -.031 +- .033, control .059 +- .020 (no
     # recovery: no assertion on X[2]; isfc correlates each subject's
     # features with the other subjects', and under shared="order2" the
     # order-1 couplings are private to each subject, so the order-2 analysis
@@ -788,9 +794,9 @@ def test_literal_defaults_do_not_recover_h_in_x2_on_private_couplings():
     # The default cfun=isfc correlates each subject's features with the
     # other subjects', and under shared="order2" the order-1 couplings are
     # private to each subject, so h is not recovered from X[2]: development
-    # seeds 20000-20011 -.035 +- .029 (control .055 +- .019), seeds
-    # 30000-30003 -.038 +- .038.  cfun=tc.autofc on the same data gives
-    # .559 +- .022, so this protects the isfc/autofc distinction of the
+    # seeds 20000-20011 -.031 +- .033 (control .059 +- .020), seeds
+    # 30000-30003 -.032 +- .033.  cfun=tc.autofc on the same data gives
+    # .552 +- .023, so this protects the isfc/autofc distinction of the
     # default.  Same computation as the D[2] test above.
     rows = _literal_default_rows()
     score = np.mean([r["X2_score"] for r in rows])
@@ -808,9 +814,10 @@ def _assert_recovered(rows, name, dev_mean):
 def test_autofc_defaults_recover_h_in_order2_features():
     # cfun=tc.autofc, every other argument default, shared="order2"
     # (literal_default_scores(seed, cfun=tc.autofc)), development seeds
-    # 20000-20011: X[2] score .559 +- .022, control -.008 +- .025; D[2]
+    # 20000-20011: X[2] score .552 +- .023, control -.008 +- .025; D[2]
     # score .199 +- .021, control .013 +- .015 (the feeding path does not
-    # depend on cfun).  Asserted with the file's rule.
+    # depend on cfun).  Asserted with the file's rule, with the threshold
+    # from the earlier development mean (.559, median centering).
     rows = [literal_default_scores(s, cfun=tc.autofc) for s in TEST_SEEDS]
     _assert_recovered(rows, "X2", 0.559)
     _assert_recovered(rows, "D2", 0.199)
@@ -820,9 +827,10 @@ def test_autofc_defaults_recover_h_in_order2_features():
 def test_literal_defaults_recover_h_on_shared_order1_data():
     # Literal defaults on shared="order1" data (the module couplings g are
     # shared across subjects, so isfc at order 2 sees them), development
-    # seeds 20000-20011: X[2] score .638 +- .028, control .074 +- .009;
+    # seeds 20000-20011: X[2] score .652 +- .026, control .078 +- .010;
     # D[2] score .293 +- .027, control .012 +- .014.  Asserted with the
-    # file's rule.
+    # file's rule, with the threshold from the earlier development mean
+    # (.638, median centering).
     rows = [literal_default_scores(s, shared="order1") for s in TEST_SEEDS]
     _assert_recovered(rows, "X2", 0.638)
     _assert_recovered(rows, "D2", 0.293)

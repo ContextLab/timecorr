@@ -12,7 +12,11 @@ correlations among the modules' time-varying couplings: an order-2 signal.
 The two subjects share only ``h``; their modules' couplings, signs and noise
 are private.
 
-``tc.features(order=2)`` is called with its defaults: a Gaussian kernel with
+``tc.features(order=2)`` is called with its default reducers and feeding
+kernel and two arguments changed: ``cfun=tc.autofc`` (the default is
+``tc.isfc``) and an analysis kernel with a standard deviation of 33
+timepoints (``weights_params={"var": 33 ** 2}``; the default Gaussian has a
+standard deviation of 10).  The defaults kept are a Gaussian kernel with
 a standard deviation of 5 timepoints on the path that feeds order 2 (the
 delta path, also called the feeding path) and the squared-correlation
 summaries: at order 1 the delta path is summarized by ``Communities()``
@@ -20,7 +24,8 @@ summaries: at order 1 the delta path is summarized by ``Communities()``
 number set by a shift null), and at order 2 the analysis path by
 ``WeightedStrength(signed=True)``.  A ``Communities`` object is passed as
 ``delta_rfun`` only to read its fit; the default ``delta_rfun="auto"``
-creates the same summary.
+creates the same summary when its communities give at least 4 columns, as
+here.
 
 A ridge map from subject A's order-2 features to ``h`` (every 10th timepoint,
 z-scored columns, penalty equal to the mean eigenvalue of the Gram matrix) is

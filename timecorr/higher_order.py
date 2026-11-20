@@ -26,7 +26,12 @@ correlations summarized by community.  The feeding kernel is shaped by
 the analysis kernel is.  The default feeding reducer needs at least 4
 features and 40 timepoints (``ValueError`` otherwise);
 ``delta_rfun="weighted_strength"`` takes any number of features and
-timepoints.  The original two-path pipeline (Owen, Chang & Manning, 2021,
+timepoints.  When the communities of a default feeding step would emit
+fewer than 4 columns, that step emits ``WeightedStrength(split=False,
+signed=False, center=False)`` of the same correlations instead (one column
+per input feature; the pair weights are used as they are, without median
+clipping); a ``UserWarning`` is issued only when the shift null
+found no structure.  The original two-path pipeline (Owen, Chang & Manning, 2021,
 Fig. 10) is ``rfun="PCA", delta_rfun=None, delta_weights_function=eye_weights``.
 
 A step whose reducer is a squared-correlation summary (``WeightedStrength``
@@ -76,6 +81,8 @@ from .summaries import (
     _streamed_peak_elements,
     _streamed_summary,
     _Summary,
+    _auto_emitter,
+    _auto_fallback,
 )
 from .timecorr import _event_kernels, _restricted, _shaped_kernel, timecorr
 
@@ -243,14 +250,26 @@ def _largest_k(order, T, max_memory_gb, n_subjects=1, return_delta=False,
     return lo
 
 
+# named in the MemoryError of a features step that holds its correlations
+# although a summary reducer would stream it
+def _stream_hint(order):
+    """The MemoryError hint for a materialized analysis step at ``order``."""
+    k = 1 if order is None else int(order)
+    return (
+        " A summary reducer streams the analysis step in blocks of rows: "
+        "rfun=tc.WeightedStrength(signed=True), or a dict by order such as "
+        f"rfun={{{k}: tc.WeightedStrength(signed=True)}} for order {k} only."
+    )
+
+
 def _check_step_memory(d, T, n_subjects, n_outputs, max_memory_gb, order=None,
-                       kernel_feeding=False, held_elements=0):
+                       kernel_feeding=False, held_elements=0, hint=""):
     """
     Raise MemoryError before an unreduced correlation step on ``n_subjects``
     (T, d) inputs whose estimate (``_step_gb``), plus ``held_elements``
     float64 values retained by the caller (earlier outputs and fits of a
     ``features`` run), exceeds ``max_memory_gb``.  ``max_memory_gb=None``
-    checks nothing.  Shared by ``features``, the path functions and the
+    checks nothing.  ``hint`` is appended to the message.  Shared by ``features``, the path functions and the
     decoders, so all refuse the same steps.
     """
     if max_memory_gb is None:
@@ -272,6 +291,7 @@ def _check_step_memory(d, T, n_subjects, n_outputs, max_memory_gb, order=None,
             f"{retained}, more than max_memory_gb={max_memory_gb}. The largest "
             f"number of input features that fits one step is K={fit}. Reduce "
             "to fewer features (ndims, rfun, delta_rfun) or raise max_memory_gb."
+            + hint
         )
 
 
@@ -427,10 +447,12 @@ def _apply_reducer(corrs, rfun, ndims, order=None, path=None, null_threshold=Non
     if summary is None:
         return _reduce(corrs, rfun, ndims)
     summary.fit(corrs, order=order, path=path, null_threshold=null_threshold)
+    fit = summary.fits_[-1]
     if null_threshold is not None:
         # the threshold came from the shift null with the summary's n_null
-        summary.fits_[-1]["n_null"] = summary.n_null
-    out = summary.transform(corrs)
+        fit["n_null"] = summary.n_null
+    K = fit["weights"][0].shape[0]
+    out = _auto_emitter(summary, fit, K, order)._transform_fit(fit, corrs)
     if not append_fit:
         del summary.fits_[:-1]
     return out
@@ -828,6 +850,16 @@ def _is_auto(value):
     return isinstance(value, str) and value == "auto"
 
 
+def _auto_at(rfun, k):
+    """Whether order ``k``'s analysis reducer comes from ``"auto"`` (the
+    caller did not choose it): ``rfun`` is ``"auto"``, or an order map that
+    leaves order ``k`` out or maps it to ``"auto"``.  Called after
+    ``_resolve_reducers`` has checked ``rfun``."""
+    if isinstance(rfun, dict) and "model" not in rfun:
+        return _is_auto(rfun.get(k, "auto"))
+    return _is_auto(rfun)
+
+
 def _check_reducer(value, name):
     """Raise for a value that is not "auto" or a reducer ``reduce`` accepts."""
     if _is_auto(value):
@@ -900,7 +932,9 @@ def _check_auto_feeding(delta_rfun, d, T, order, bandwidth=_DEFAULT_BANDWIDTH,
     than d distinct shift-null lags in ``[L, T - L]`` (``L = min(T // 4,
     max(10, 10 * bandwidth))``, ``bandwidth`` the feeding kernel's standard
     deviation).  ``previous``: the number of communities found at the
-    previous order when the d inputs are that order's community columns.
+    previous order when the d inputs are the community columns of an
+    explicit ``Communities`` there (the automatic reducer keeps at least 4
+    columns; see ``summaries._auto_emitter``).
     """
     if not getattr(delta_rfun, "_from_auto", False):
         return
@@ -1013,8 +1047,9 @@ def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfu
     Input widths follow ``_known_width`` from K.  After ``Communities``,
     whose output width is found by the fit, the width is unknown until it
     runs, and the later steps whose width follows from it are not checked
-    here.  After a callable that is not a summary, K is used (as
-    ``estimate_memory_gb(..., streamed=True)``).  Every step is checked
+    here.  After a callable that is not a summary, the original K (the
+    number of features of the data, not the callable's input width) is
+    used (as ``estimate_memory_gb(..., streamed=True)`` uses K).  Every step is checked
     again, with its actual width, when it runs.
     """
     d = int(K)
@@ -1027,7 +1062,7 @@ def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfu
                 _streamed_block_elements(d, T, S, max_memory_gb, k, "feeding")
             width = _known_width(feeding[k], d, ndims)
             if width is None and not _is_summary(feeding[k]):
-                width = int(K)  # a callable: K, as estimate_memory_gb uses
+                width = int(K)  # a callable: the original K, as estimate_memory_gb uses
             d = width
 
 
@@ -1118,9 +1153,12 @@ def two_path_step(
         "auto".
     delta_rfun : None, str, dict, or callable
         Reducer for the feeding (delta) path, as ``rfun``; ``"auto"`` is
-        ``Communities()`` (at least 4 features and 40 timepoints; see
-        ``features``), None is the same as ``rfun`` at this order.  Default:
-        "auto".
+        ``Communities()`` (at least 4 features and 40 timepoints; when its
+        communities would emit fewer than 4 columns, the step emits
+        unsigned weighted strength of the same correlations instead, with a
+        ``UserWarning`` only when the shift null found no structure; see
+        ``features``), None is the same as ``rfun`` at
+        this order.  Default: "auto".
     ndims : int, optional
         Output width of model-based reduction (a model name or dict) on
         either path (see ``helpers.reduce``); it is not passed to a graph
@@ -1207,6 +1245,10 @@ def two_path_step(
         ``eye_weights``.
     UserWarning
         From the summaries (see ``WeightedStrength`` and ``Communities``).
+    UserWarning
+        When the default feeding reducer found no eigenvalue above the shift
+        null and the step emits weighted strength instead (see
+        ``features``).
 
     Raises
     ------
@@ -1302,6 +1344,7 @@ def two_path_step(
         cfun=cfun,
         rfun=analysis[order],
         delta_rfun=feeding[order],
+        auto_analysis=_auto_at(rfun, order),
         feeding_function=feeding_function,
         feeding_params=feeding_params,
         order=order,
@@ -1333,6 +1376,7 @@ def _two_path_step(
     reducers=(),
     previous_communities=None,
     input_elements=0,
+    auto_analysis=False,
     **analysis
 ):
     """
@@ -1351,6 +1395,9 @@ def _two_path_step(
     step's input (the previous order's feeding features); a materialized
     check leaves it out, as its estimate (``_step_gb``) counts the input,
     while a streamed check, whose estimate excludes the inputs, keeps it.
+    ``auto_analysis``: the analysis reducer comes from ``rfun="auto"``; only
+    then may a MemoryError of the analysis step carry the streamed-reducer
+    hint.
     """
     if delta_rfun is None:
         delta_rfun = analysis.get("rfun", "PCA")
@@ -1394,8 +1441,27 @@ def _two_path_step(
                 order, "analysis",
             )
         else:
+            # the hint is given only for an analysis reducer from "auto" (an
+            # explicitly given rfun, the original pipeline's included, keeps
+            # the message without it) and only when following it (a summary
+            # as this order's analysis reducer) would stream this step and
+            # leave the feeding step able to run: absent, streamed, or
+            # materialized but fitting alone; not when the feeding reducer
+            # is inherited from rfun (the hint would change it too)
+            streamable = auto_analysis and _streams(
+                "weighted_strength", analysis.get("cfun", isfc),
+                analysis.get("combine", null_combine),
+            )
+            if streamable and feed:
+                if delta_rfun is analysis_rfun:
+                    streamable = False
+                elif not feeding_streamed:
+                    alone = _step_gb(d, T, S, 1, kernel_feeding)
+                    held_gb = 8 * (retained_m + fits) / _BYTES_PER_GB
+                    streamable = alone + held_gb <= max_memory_gb
             _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
-                               kernel_feeding, retained_m + fits)
+                               kernel_feeding, retained_m + fits,
+                               _stream_hint(order) if streamable else "")
         if feed and feeding_streamed:
             _streamed_block_elements(
                 d, T, S,
@@ -1440,6 +1506,63 @@ def _two_path_step(
     return X_next, D_next
 
 
+def _requested(value, k):
+    """The reducer given for order ``k`` (an order map's value, or ``"auto"``)."""
+    if isinstance(value, dict) and "model" not in value:
+        return value.get(k, "auto")
+    return value
+
+
+def _describe(reducer):
+    """A reducer as a string (None stays None), without arrays."""
+    if reducer is None or isinstance(reducer, str):
+        return reducer
+    if isinstance(reducer, _Summary):
+        return repr(reducer)
+    if isinstance(reducer, dict):
+        return repr({key: reducer[key] for key in sorted(reducer, key=str)})
+    return getattr(reducer, "__name__", None) or repr(reducer)
+
+
+def _width(out):
+    """Number of columns of an output (an array or a list of arrays)."""
+    return int(np.asarray(_as_list(out)[0]).shape[1])
+
+
+def _step_info(k, inputs, x, delta, analysis_rfun, feeding_rfun, requested,
+               requested_delta):
+    """
+    The ``return_info`` entries of order ``k`` of ``features``: one dict for
+    the analysis path and, when it was computed, one for the feeding path.
+    """
+    d = _width(inputs)
+    entries = [{
+        "order": k, "path": "analysis", "requested": _describe(requested),
+        "effective": _describe(analysis_rfun), "input_width": d,
+        "output_width": _width(x),
+    }]
+    if delta is None:
+        return entries
+    entry = {
+        "order": k, "path": "feeding", "requested": _describe(requested_delta),
+        "effective": _describe(feeding_rfun), "input_width": d,
+        "output_width": _width(delta),
+    }
+    if getattr(feeding_rfun, "_from_auto", False):
+        fit = feeding_rfun.fits_[-1]
+        if fit["fallback"] is not None:
+            entry["effective"] = _describe(_auto_fallback())
+        entry.update(
+            n_communities=int(fit["n_columns"]),
+            n_exceed=int(fit["n_exceed"]),
+            null_threshold=float(fit["null_threshold"]),
+            n_null=int(fit["n_null"]),
+            fallback=fit["fallback"],
+        )
+    entries.append(entry)
+    return entries
+
+
 def _check_events_order_zero(events, T, n_subjects, events_params):
     """
     Check ``events`` / ``events_params`` for ``features(order=0)``, which has no
@@ -1478,6 +1601,7 @@ def features(
     events_params=None,
     delta_weights_function=None,
     delta_weights_params=None,
+    return_info=False,
 ):
     """
     Compute features of every order from 0 to ``order`` with the two-path pipeline.
@@ -1503,7 +1627,15 @@ def features(
     ``order``, and ``order`` itself with ``return_delta=True``); otherwise
     ``ValueError`` names the alternatives: ``delta_rfun="weighted_strength"``
     (one column per feature, any number of features and timepoints) or the
-    original pipeline.
+    original pipeline.  At a default feeding step whose communities would
+    emit fewer than 4 columns, the step emits weighted strength of the same
+    correlations instead (one column per input feature; see
+    ``delta_rfun``), so the feeding width never drops below 4.  This also
+    changes calls that completed before the fallback was added: on 4
+    independent noise features (T 100), ``features(x, order=1,
+    return_delta=True)`` returned 1 community column in ``D[1]`` and now
+    returns 4 weighted-strength columns, and ``features(x, order=2)``
+    returns 8 columns in ``X[2]`` instead of 2.
 
     The original two-path pipeline (Owen, Chang & Manning, 2021, Fig. 10) is
     ``rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights``:
@@ -1555,7 +1687,18 @@ def features(
         defaults, ``gaussian_params``).
     cfun : function
         Analysis-path correlation function (``isfc``, ``wisfc``, ``autofc``).
-        Default: ``isfc``.
+        Default: ``isfc``, which correlates each subject's features with the
+        other subjects' and so reflects structure shared across subjects;
+        ``autofc`` computes within-subject correlations.  On
+        ``simulate_nested`` data (108 nodes, T 1000, 6 subjects in one call,
+        12 seeds, other arguments default), ``h`` was decoded from ``X[2]``
+        with ``autofc`` (score .559 +- .022, control -.008 +- .025) but not
+        with ``isfc`` (-.035 +- .029, control .055 +- .019) when the order-1
+        couplings are drawn per subject (``shared="order2"``), and with both
+        when they are shared (``shared="order1"``: ``isfc`` .638 +- .028,
+        control .074 +- .009; ``autofc`` .702 +- .012, control -.008 +-
+        .025); see ``tests/test_nested_recovery.py``.  The feeding path
+        does not use ``cfun``.
     rfun : None, str, dict, or callable
         Analysis-path reducer: anything ``helpers.reduce`` accepts (None, a
         model name, a model dict with a ``'model'`` key, a graph measure, a
@@ -1576,14 +1719,23 @@ def features(
         ``"auto"`` is ``Communities()`` at every order (automatic count; at
         least 4 features, 40 timepoints, and as many distinct shift-null
         lags in ``[L, T - L]`` as features, otherwise ``ValueError`` naming
-        the alternatives).  The feeding width at order k is then the number
-        of communities found at order k - 1, at most half the features of
-        that order, so a later feeding step raises when fewer than 4 remain
-        (for example with 4 to 7 input features, ``order=3`` or ``order=2``
-        with ``return_delta=True``); ``delta_rfun="weighted_strength"`` or
-        the original pipeline's settings (``rfun="PCA", delta_rfun=None,
-        delta_weights_function=tc.eye_weights``) avoid it.  None (also as an
-        order map value) is the same as ``rfun`` at that order.  A
+        the alternatives).  At each feeding step it computes, the candidate
+        communities are fitted to that step's correlations (with the shift
+        null) and their emitted columns counted (communities with at least
+        2 members; at most half the step's input features).  With 4 or more
+        columns, the step emits the communities, as an explicit
+        ``Communities()`` does.  With fewer (including the case where no
+        eigenvalue exceeds the shift null, which gives one community), it
+        emits ``WeightedStrength(split=False, signed=False, center=False)``
+        of the same correlations (from the same pair weights, used as
+        they are, without median clipping; no second null), one column per input feature (recorded in ``return_info``;
+        one ``UserWarning`` per order only when no eigenvalue exceeds the
+        shift null); the feeding width then stays at least 4 (for example
+        with 4 to 7 input features, every default feeding step emits
+        weighted strength).  An explicit ``Communities()`` or
+        ``"communities"`` keeps its communities whatever their number.
+        None (also as an order map value) is the same as ``rfun`` at that
+        order.  A
         delta-kernel co-fluctuation matrix ``z z^T`` has rank one, so with
         ``eye_weights`` eigenvector centrality equals ``|z| / ||z||`` and the
         graph measures carry no network structure.  Default: "auto".
@@ -1678,6 +1830,22 @@ def features(
         given function, None means that function's own
         defaults; with ``eye_weights``, which takes no parameters, they must
         be None (``ValueError`` otherwise).  Default: None.
+    return_info : bool
+        If True (keyword-only), return ``(result, info)``, where ``result``
+        is what the call returns otherwise (``X``, or ``(X, D)`` with
+        ``return_delta=True``) and ``info`` is a list with one dict per
+        computed step and path, in the order computed: ``"order"``,
+        ``"path"`` (``"analysis"`` or ``"feeding"``), ``"requested"`` (the
+        reducer given for that order and path, for example ``"auto"``;
+        objects as their ``repr``, functions by name), ``"effective"`` (the
+        reducer that produced the output, as a string; None when
+        unreduced), ``"input_width"`` and ``"output_width"`` (numbers of
+        columns).  Default feeding steps (``delta_rfun="auto"``) also have
+        ``"n_communities"`` (the columns the candidate communities emit),
+        ``"n_exceed"`` (eigenvalues above the shift-null threshold),
+        ``"null_threshold"``, ``"n_null"`` and ``"fallback"`` (None,
+        ``"too_few_community_columns"`` or ``"no_null_exceedance"``).  No
+        arrays.  Default: False.
 
     Returns
     -------
@@ -1688,6 +1856,9 @@ def features(
     D : list
         Only with ``return_delta=True``: ``[D_0, ..., D_order]``, with the same
         container types (never combined across subjects).
+    info : list of dict
+        Only with ``return_info=True`` (see ``return_info``); the call then
+        returns ``(X, info)`` or ``((X, D), info)``.
 
     Warns
     -----
@@ -1708,7 +1879,14 @@ def features(
         0 before a model-based, graph-measure or summary reduction.
     UserWarning
         From the summaries: no community structure above the shift null
-        (one community), or output columns constant over time.
+        (one community; explicit ``Communities`` and split
+        ``WeightedStrength``), or output columns constant over time.
+    UserWarning
+        Once per order whose default feeding step (``delta_rfun="auto"``)
+        found no eigenvalue above the shift null and so emits weighted
+        strength; the message gives the threshold and the number of input
+        features.  Communities that were found but emit fewer than 4 columns
+        fall back without a warning (see ``return_info``).
 
     Raises
     ------
@@ -1725,10 +1903,11 @@ def features(
         feeding step and its reducer ``Communities()``); if the default
         feeding reducer (``delta_rfun="auto"``) gets fewer than 4 features,
         fewer than 40 timepoints, or fewer distinct shift-null lags than
-        features at a computed feeding step, including a later order whose
-        input is fewer than 4 communities found at the previous order (the message
-        names ``delta_rfun="weighted_strength"`` and the original pipeline's
-        settings); for a ``Communities`` (or split ``WeightedStrength``) without
+        features at a computed feeding step: the input data, or the output
+        of an explicit reducer of the previous order (for example an
+        explicit ``Communities()``, whose communities the message then
+        names); the message names ``delta_rfun="weighted_strength"`` and
+        the original pipeline's settings; for a ``Communities`` (or split ``WeightedStrength``) without
         ``n`` where the number of communities cannot be counted (analysis
         steps with a ``cfun`` other than ``autofc`` or a ``combine`` other
         than ``null_combine``; T < 40; fewer distinct shift-null lags than
@@ -1753,14 +1932,21 @@ def features(
         it is known in advance (K at order 1; ``d(d+1)/2`` after an
         unreduced feeding step, ``ndims`` or ``d`` after a model-based one,
         ``d`` after a graph measure, ``d`` times 2 with ``split`` times 2
-        with ``signed`` after weighted strength) and K after a callable (a
-        callable reducer is assumed to keep the width K of the input data
-        in this up-front check; its actual width is checked when the next
-        step runs), as ``estimate_memory_gb(..., streamed=True)`` does.  After
+        with ``signed`` after weighted strength) and K after a callable
+        (this up-front check takes K, the number of features of the input
+        data, as the output width of a callable reducer that is not a
+        summary, whatever the callable's own input width; its actual width
+        is checked when the next step runs), as
+        ``estimate_memory_gb(..., streamed=True)`` uses K.  After
         ``Communities``, whose width is found by the fit, the steps whose
         width follows from it are checked when they run.
         The message gives the estimate and the largest number of features
-        that would fit.
+        that would fit; for an analysis step that holds its correlations
+        although a summary would stream it (for example the default
+        order-1 PCA step, with ``cfun`` ``isfc``, ``wisfc`` or ``autofc``
+        and ``combine=null_combine``), it also names
+        ``rfun=tc.WeightedStrength(signed=True)`` and the order map
+        ``rfun={1: tc.WeightedStrength(signed=True)}``.
 
     Notes
     -----
@@ -1896,6 +2082,7 @@ def features(
         if isinstance(r, _Summary)
     )
     nan_warned = [False]  # one NaN-filling warning per call
+    info = []  # with return_info: one dict per computed step and path
     previous_communities = None  # communities found by the previous feeding step
     for k in orders:
         # the outputs kept so far (each array once; the input data are the
@@ -1907,6 +2094,7 @@ def features(
         x, delta = _two_path_step(
             fed_by,
             delta_rfun=feeding_rfun[k],
+            auto_analysis=_auto_at(rfun, k),
             max_memory_gb=max_memory_gb,
             order=k,
             nan_warned=nan_warned,
@@ -1929,10 +2117,18 @@ def features(
         )
         X.append(x)
         previous = feeding_rfun[k]
+        # explicit Communities only: the automatic feeding reducer keeps at
+        # least 4 columns (see summaries._auto_emitter)
         previous_communities = (
             previous.fits_[-1]["n"]
-            if isinstance(previous, Communities) and previous.fits_ else None
+            if isinstance(previous, Communities) and previous.fits_
+            and not getattr(previous, "_from_auto", False) else None
         )
+        if return_info:
+            info.extend(_step_info(
+                k, fed_by, x, delta, analysis_rfun[k], feeding_rfun[k],
+                _requested(rfun, k), _requested(delta_rfun, k),
+            ))
         if delta is not None:
             fed_by = delta
             if return_delta:
@@ -1941,6 +2137,7 @@ def features(
     if single:
         X = [x[0] if isinstance(x, list) else x for x in X]
         D = [d[0] for d in D]
-    if return_delta:
-        return X, D
-    return X
+    result = (X, D) if return_delta else X
+    if return_info:
+        return result, info
+    return result

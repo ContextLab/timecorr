@@ -48,6 +48,10 @@ __all__ = ["WeightedStrength", "Communities"]
 # ----------------------------------------------------------------------------
 
 
+# relative tolerance below which an output column's range over time is
+# round-off (see ``_Summary._warn_constant``)
+_CONSTANT_RTOL = 1e-9
+
 def _new_state(K, T, signed):
     """
     Empty fitting state of one unit with K nodes and T timepoints.
@@ -114,15 +118,24 @@ def _centered(wbar):
     return C
 
 
+def _exceedances(wbar, threshold):
+    """Number of eigenvalues of ``_centered(wbar)`` above ``threshold``."""
+    ev = np.linalg.eigvalsh(_centered(wbar))
+    return int(np.sum(ev > threshold))
+
+
+def _count_from_exceedances(c, K):
+    """``_count_above`` from the number ``c`` of eigenvalues above the threshold."""
+    return 0 if c == 0 else int(min(max(2, c), K // 2))
+
+
 def _count_above(wbar, threshold, K):
     """
     Number of communities from the eigenvalues of ``_centered(wbar)``: 0 when
     no eigenvalue exceeds ``threshold``; otherwise ``max(2, c)`` for ``c``
     eigenvalues above it, capped at ``K // 2``.
     """
-    ev = np.linalg.eigvalsh(_centered(wbar))
-    c = int(np.sum(ev > threshold))
-    return 0 if c == 0 else int(min(max(2, c), K // 2))
+    return _count_from_exceedances(_exceedances(wbar, threshold), K)
 
 
 def _renumber(labels):
@@ -356,20 +369,24 @@ class _Summary:
             if self.signed:
                 means.append(_mean_r(state["sum_r"], state["T"]))
 
-        labels, n = None, None
+        auto = getattr(self, "_from_auto", False)
+        labels, n, n_exceed = None, None, None
         if self._needs_communities:
             wbar = np.mean(weights, axis=0)
             if self.n is not None:
                 n = self.n
             else:
-                n = _count_above(wbar, null_threshold, K)
+                n_exceed = _exceedances(wbar, null_threshold)
+                n = _count_from_exceedances(n_exceed, K)
                 if n == 0:
-                    _warn_user(
-                        f"{type(self).__name__}: no community structure above the "
-                        f"shift null (no eigenvalue above "
-                        f"null_threshold={null_threshold!r}); one community holds "
-                        "every node."
-                    )
+                    if not auto:
+                        # the automatic feeding reducer warns in _auto_emitter
+                        _warn_user(
+                            f"{type(self).__name__}: no community structure above "
+                            f"the shift null (no eigenvalue above "
+                            f"null_threshold={null_threshold!r}); one community "
+                            "holds every node."
+                        )
                     n = 1
             labels = _find_communities(wbar, n)
             _check_labels(labels, self._what())
@@ -386,6 +403,10 @@ class _Summary:
         }
         if n_null is not None:
             record["n_null"] = int(n_null)
+        if auto and n_exceed is not None:
+            # the automatic feeding reducer: raw number of eigenvalues above
+            # the threshold (_auto_emitter adds the emitted columns)
+            record["n_exceed"] = n_exceed
         self.fits_.append(record)
 
     # -- output -------------------------------------------------------------
@@ -417,12 +438,19 @@ class _Summary:
         -----
         UserWarning
             Once per call when some output column is constant over time (for
-            example when all weights are 0).
+            example when all weights are 0).  A column whose range over time
+            is nonzero but at most ``1e-9 * max(1, max|column|)`` is
+            round-off: it is set to its mean exactly and counted in the same
+            warning.
         """
         name = type(self).__name__
         if not self.fits_:
             raise ValueError(f"{name}: call fit (or the instance itself) before transform.")
-        fit = self.fits_[-1]
+        return self._transform_fit(self.fits_[-1], corrs)
+
+    def _transform_fit(self, fit, corrs):
+        """``transform`` with the fit record ``fit`` (see ``_auto_emitter``)."""
+        name = type(self).__name__
         units, K, single = _as_units(corrs, name)
         K_fit = fit["weights"][0].shape[0]
         if K != K_fit:
@@ -442,16 +470,36 @@ class _Summary:
         return outs[0] if single else outs
 
     def _warn_constant(self, outs):
-        """One ``UserWarning`` when some column of the outputs is constant over time."""
-        constant = sum(
-            int(np.sum(np.ptp(o, axis=0) == 0)) for o in outs if o.shape[0] > 0
-        )
+        """
+        Set columns that are constant up to round-off to their means (in
+        place), then issue one ``UserWarning`` when some column of the
+        outputs is constant over time.
+
+        A column of one unit's output counts as constant when its range over
+        time is at most ``_CONSTANT_RTOL * max(1, max|column|)`` with
+        ``_CONSTANT_RTOL = 1e-9``.  A nonzero range within that tolerance is
+        round-off (for example 1e-13 on values of 3 when nearly identical
+        input features give identical summaries), and the column is set to
+        its mean exactly, so a later order meets exact zero variance rather
+        than amplified round-off; exact constants are returned unchanged.
+        """
+        constant = 0
+        for o in outs:
+            if o.shape[0] == 0:
+                continue
+            rng = np.ptp(o, axis=0)
+            tol = _CONSTANT_RTOL * np.maximum(1.0, np.max(np.abs(o), axis=0))
+            snap = (rng > 0) & (rng <= tol)
+            if snap.any():
+                o[:, snap] = np.mean(o[:, snap], axis=0)
+            constant += int(np.sum(rng <= tol))
         if constant:
             _warn_user(
                 f"{type(self).__name__}: {constant} output "
                 f"column{'s are' if constant > 1 else ' is'} constant over time "
-                "(zero variance), for example because every weight is 0; returned "
-                "as computed."
+                "(zero variance, or a range within round-off of 0, set to the "
+                "column's mean), for example because every weight is 0; "
+                "returned as computed otherwise."
             )
 
     def __call__(self, corrs):
@@ -538,6 +586,9 @@ class WeightedStrength(_Summary):
     coupling.  The recovery of the order-2 signal with a global signal
     added (``tests/test_nested_recovery.py``) was measured with centering;
     it was not measured with ``center=False``.
+    With K = 2 the two magnitude columns are identical (both are
+    ``a_12 r_12(t)**2``), so a following correlation step sees two copies of
+    one series; with K = 1 there are no pairs and the column is 0.
     Calling the instance fits to the given units and transforms the same
     units: the weights (and communities) come from the data being summarized.
     ``fit`` and ``transform`` separate the two.  The summary of a unit
@@ -766,6 +817,55 @@ _NAMED = {
 def _from_name(name):
     """A new summary instance for a name in ``helpers._SUMMARY_NAMES``."""
     return _NAMED[name]()
+
+
+# the fewest community columns the automatic feeding reducer (features and
+# two_path_step with delta_rfun="auto") emits; with fewer, the step emits
+# _AUTO_FALLBACK of the same correlations instead
+_AUTO_MIN_COLUMNS = 4
+
+
+def _auto_fallback():
+    """The summary an automatic feeding step emits when communities are too few."""
+    return WeightedStrength(split=False, signed=False, center=False)
+
+
+def _auto_emitter(summary, fit, K, order=None):
+    """
+    The summary that emits the output of a step fitted by ``summary``
+    (``fit``: its new record, on K nodes).
+
+    For any summary but the automatic feeding reducer (a ``Communities``
+    marked ``_from_auto``), ``summary`` itself.  For the automatic feeding
+    reducer: ``summary`` when its communities emit at least
+    ``_AUTO_MIN_COLUMNS`` columns; otherwise ``_auto_fallback()``, which
+    emits from the same fit (its pair weights, uncentered; no second null).  A
+    ``UserWarning`` is issued only when no eigenvalue exceeded the shift
+    null (one community); communities that emit fewer than 4 columns fall
+    back without a warning.  The record gains ``"n_columns"`` (the columns the
+    communities emit, singletons excluded) and ``"fallback"`` (None,
+    ``"too_few_community_columns"`` or ``"no_null_exceedance"``).
+    """
+    if not getattr(summary, "_from_auto", False):
+        return summary
+    columns = summary._n_columns(fit, K)
+    fit["n_columns"] = int(columns)
+    fit["fallback"] = None
+    if columns >= _AUTO_MIN_COLUMNS:
+        return summary
+    if fit.get("n_exceed") == 0:
+        fit["fallback"] = "no_null_exceedance"
+        at = "" if order is None else f" at order {order}"
+        _warn_user(
+            f"Automatic feeding reducer{at}: the shift null found no structure "
+            f"(no eigenvalue above null_threshold={fit['null_threshold']:.4g}); "
+            f"this order uses WeightedStrength on its {K} input features."
+        )
+    else:
+        # communities were found but emit fewer than 4 columns: a documented
+        # rule, recorded in the fit (and in features' return_info), no warning
+        fit["fallback"] = "too_few_community_columns"
+    return _auto_fallback()
 
 
 # ----------------------------------------------------------------------------
@@ -1154,13 +1254,14 @@ def _streamed_summary(
     del states
 
     fit = summary.fits_[-1]
-    c = summary._n_columns(fit, K)
+    emitter = _auto_emitter(summary, fit, K, order)
+    c = emitter._n_columns(fit, K)
     outs = []
     for s in range(len(units)):
-        unit = summary._unit_params(fit, s)
+        unit = emitter._unit_params(fit, s)
         out = np.zeros((T_out, c))
         for i0, i1, R, _, _ in units.blocks(s, b):
-            summary._emit(fit, unit, i0, i1, R, out)
+            emitter._emit(fit, unit, i0, i1, R, out)
         outs.append(out)
-    summary._warn_constant(outs)
+    emitter._warn_constant(outs)
     return outs, message

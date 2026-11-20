@@ -99,14 +99,44 @@ accept ``"auto"`` (the defaults; analysis path: PCA at order 1 and
 ``WeightedStrength(signed=True)`` above; feeding path: ``Communities()``,
 with the number of communities set by a shift null) and dicts keyed by order.
 The default feeding reducer needs at least 4 features, 40 timepoints and as
-many distinct shift-null lags in ``[L, T - L]`` as features. Its output width,
-the input of the next feeding step, is the number of communities found (at most
-half its input features), so a later order raises when fewer than 4 remain;
-``delta_rfun="weighted_strength"`` (any number of features) and the original
-pipeline's settings avoid this. Steps reduced by a summary (with
+many distinct shift-null lags in ``[L, T - L]`` as features. When the
+communities found at a feeding step would emit fewer than 4 columns (at most
+half its input features; one when the shift null finds no structure), that step
+emits ``WeightedStrength(split=False, signed=False, center=False)`` of the same
+correlations instead (one column per input feature; uncentered pair weights,
+without median clipping), so the feeding width never
+drops below 4; a ``UserWarning`` is issued only when the shift null found no
+structure, and ``return_info=True`` records every fallback. The fallback also
+changes calls that completed without it: on 4 independent noise features
+(T 100), ``D[1]`` from ``features(x, order=1, return_delta=True)`` had 1
+community column and now has 4 weighted-strength columns, and ``X[2]`` of
+``features(x, order=2)`` has 8 columns instead of 2. Summary columns whose
+range over time is nonzero but at most ``1e-9 * max(1, max|column|)`` are
+round-off; they are set to their means exactly and reported by the
+constant-output warning. An explicit ``Communities()`` keeps its
+communities; ``delta_rfun="weighted_strength"`` takes any number of features. Steps reduced by a summary (with
 ``null_combine`` and ``cfun`` ``autofc``, ``isfc`` or ``wisfc``) are computed
 in blocks of rows of the ``(K, K, T)`` correlation array, so the whole array is
 held only when one block covers all K rows.
+
+The default ``cfun=isfc`` correlates each subject's features with the other
+subjects' and so reflects structure shared across subjects; ``cfun=autofc``
+computes within-subject correlations. On ``simulate_nested`` data (108 nodes,
+T 1000, 6 subjects per call, 12 seeds, other arguments default; mean +-
+standard error, control in parentheses):
+
+========================  ==========  ==============================  ==============================
+data (``shared=``)        ``cfun``    ``X[2]`` score                  ``D[2]`` score
+========================  ==========  ==============================  ==============================
+``"order2"`` (default)    ``isfc``    -.035 +- .029 (.055 +- .019)    .199 +- .021 (.013 +- .015)
+``"order2"``              ``autofc``  .559 +- .022 (-.008 +- .025)    .199 +- .021 (.013 +- .015)
+``"order1"``              ``isfc``    .638 +- .028 (.074 +- .009)     .293 +- .027 (.012 +- .014)
+``"order1"``              ``autofc``  .702 +- .012 (-.008 +- .025)    .293 +- .027 (.012 +- .014)
+========================  ==========  ==============================  ==============================
+
+Under ``shared="order2"`` the order-1 couplings are drawn per subject, and
+``h`` was not recovered from ``X[2]`` with ``isfc``; the feeding features ``D[k]``
+do not depend on ``cfun``.
 
 .. currentmodule:: timecorr
 

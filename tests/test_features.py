@@ -710,7 +710,7 @@ def test_events_signatures_keep_positional_order():
         assert names == positional, f.__name__
         # keyword-only arguments added later follow events and events_params
         later = ["delta_weights_function", "delta_weights_params"] + (
-            ["order"] if f is two_path_step else [])
+            ["order"] if f is two_path_step else ["return_info"])
         assert list(params) == positional + ["events", "events_params"] + later, (
             f.__name__)
         assert all(params[n].kind == inspect.Parameter.KEYWORD_ONLY

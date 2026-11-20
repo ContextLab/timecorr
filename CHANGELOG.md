@@ -28,15 +28,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   example at most 21 features at T = 40) at every feeding step that is
   computed; otherwise `ValueError` names `delta_rfun="weighted_strength"`
   (any number of features and timepoints) and the original pipeline's
-  settings. The feeding width at order k is the number of communities
-  found at order k - 1 (at most half the features of that order), so a
-  later order raises when fewer than 4 remain: with 4 to 7 input features,
-  `order=3`, and `order=2` with `return_delta=True`, raise, while `order=2`
-  without it completes. `ndims` with the defaults raises
+  settings. At each default feeding step, the communities are fitted to
+  that step's correlations; when they would emit fewer than 4 columns (at
+  most half the step's input features; one when no eigenvalue exceeds the
+  shift null), the step emits `WeightedStrength(split=False, signed=False,
+  center=False)` of the same correlations instead (one column per input
+  feature, from the same pair weights, used uncentered: no median
+  clipping), so the feeding width never drops below 4 and, for example, 4 to 7
+  input features complete at `order=3`. This also changes calls that
+  completed before the fallback was added (earlier in the development of
+  this release), not only calls that failed: on 4 independent noise
+  features (T 100), `features(x, order=1, return_delta=True)` returned 1
+  community column in `D[1]` and now returns 4 weighted-strength columns,
+  and `features(x, order=2)` returns 8 columns in `X[2]` instead of 2.
+  Summary output columns whose range over time is nonzero but at most
+  `1e-9 * max(1, max|column|)` (round-off, for example when nearly
+  identical input features give identical summaries) are set to their
+  means exactly and counted in the constant-output `UserWarning`, so the
+  next order meets exact zero variance (correlations set to 0) instead of
+  amplified round-off. A `UserWarning` (one per order) is
+  issued only when no eigenvalue exceeds the shift null; `features(...,
+  return_info=True)` returns `(result, info)` with one dict per computed
+  step and path (reducer requested and used, input and output widths, and
+  for default feeding steps the community columns, exceedances, threshold
+  and fallback reason). An explicit `Communities()` keeps
+  its communities (and its "no community structure" warning). `ndims` with the defaults raises
   `ValueError` in `features` at `order >= 2` (the order-2 analysis reducer
   is a summary) and at `order=1` with `return_delta=True` (the order-1
   feeding reducer is `Communities()`), and in `two_path_step` at every
   order.
+  The `features` docs state that the default `cfun=isfc` correlates each
+  subject's features with the other subjects' (structure shared across
+  subjects) and `cfun=autofc` computes within-subject correlations, with
+  measured recovery of `h` on `simulate_nested` data (12 seeds, 108 nodes,
+  T 1000): from `X[2]`, -.035 +- .029 with `isfc` and .559 +- .022 with
+  `autofc` when the order-1 couplings are drawn per subject
+  (`shared="order2"`), .638 +- .028 and .702 +- .012 when they are shared
+  (`shared="order1"`); from `D[2]`, .199 +- .021 and .293 +- .027.
   `delta_weights_params` without `delta_weights_function` sets the
   parameters of the Gaussian feeding kernel. The decoders are unchanged
   (co-fluctuations on the path that feeds the next level).
@@ -298,11 +326,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   streamed step, and `features` checks every streamed step whose input
   width is known in advance against `max_memory_gb` before computing
   anything (steps after `Communities`, whose width is found by the fit,
-  when they run); a streamed step also counts the kernels of distinct
+  when they run; after a callable reducer that is not a summary, this
+  check takes the number of features of the data, K, as its output width,
+  whatever the callable's own input width); a streamed step also counts the kernels of distinct
   per-subject event sets, the analysis results held while the feeding step
   runs, and the arrays kept in summaries' `fits_`. The default order-1 reducer (PCA)
   still holds `K(K+1)/2` columns per subject, so memory is bounded only when
-  every step uses a summary (for example `rfun=tc.WeightedStrength(signed=True)`).
+  every step uses a summary (for example `rfun=tc.WeightedStrength(signed=True)`);
+  the `MemoryError` of an analysis step that holds its correlations although
+  a summary would stream it names `rfun=tc.WeightedStrength(signed=True)`
+  and `rfun={k: tc.WeightedStrength(signed=True)}` for the failing order
+  `k`, only when that order's analysis reducer comes from `rfun="auto"`
+  (the caller did not choose it) and the change would let the order run:
+  the feeding step is absent, streamed, or materialized but fitting the
+  budget alone, and its reducer is not inherited from `rfun`
+  (`delta_rfun=None`). With an explicitly given `rfun` (including the
+  original pipeline's `"PCA"`) the `MemoryError` has no hint, and its text
+  is unchanged.
   These are the defaults (see "Changed defaults of the higher-order
   pipeline" above).
 - `tc.simulate_nested`: nodes in modules in supergroups, with an order-2
@@ -314,7 +354,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   across subjects on `simulate_nested` data, with controls from an
   independent `h`, the raw data and the order-1 features; recovery of the
   modules by `Communities`; the automatic community count on autocorrelated
-  noise; and a streamed run at K = 702 (marked slow).
+  noise; and a streamed run at K = 702 (marked slow). These use
+  `cfun=tc.autofc` (except the isfc cases) and an analysis kernel wider
+  than the default (standard deviation 33 at T 1000); the K = 702 run uses
+  weighted strength on both paths at every order, order 1 included (the
+  default order-1 PCA step is estimated at 10.31 GB there). With the
+  literal defaults, `h` was recovered from `D[2]` but not from `X[2]` (see
+  the module docstring); structure above order 2 was not measured with the
+  default reducers.
 
 ### Fixed
 
@@ -389,7 +436,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Dependencies and packaging
 
-- Python 3.10 or later; continuous integration on Python 3.10 to 3.13.
+- Python 3.10 or later; continuous integration on Python 3.10 to 3.13 (the
+  tests marked slow run in a separate job on Python 3.12).
 - Added `pydata-wrangler`; `hypertools>=0.8`; `numpy`, `pandas` and
   `matplotlib` are listed explicitly.
 - Removed `nose`, `sphinx` and `duecredit` from the install requirements.

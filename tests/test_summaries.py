@@ -765,3 +765,74 @@ def test_center_on_simulated_equicorrelated_data(seed):
     for i in range(K):
         assert np.corrcoef(plain[:, i], rho)[0, 1] > 0.8
     assert np.mean(np.abs(centered)) < 0.1 * np.mean(np.abs(plain))
+
+
+# columns constant up to round-off ------------------------------------------
+
+
+def _duplicated_pair(seed=10, T=100):
+    rng = np.random.default_rng(seed)
+    a, b = rng.standard_normal(T), rng.standard_normal(T)
+    return np.column_stack([a, a, b, b])
+
+
+def _order2_feeding_corrs():
+    """The correlations of the order-2 feeding step of the default
+    ``features`` call on the duplicated pair [a, a, b, b] (whose order-1
+    feeding features are four copies of nearly one column)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _, D = tc.features(_duplicated_pair(), order=1, rfun=None, return_delta=True)
+        return tc.timecorr(D[1], cfun=tc.autofc, weights_params={"var": 25})
+
+
+def test_round_off_constant_columns_are_set_to_their_mean():
+    corrs = _order2_feeding_corrs()
+    ws = tc.WeightedStrength(split=False, signed=False, center=False)
+    # what the column range was before: round-off of about 1e-13 on values
+    # of about 3
+    with pytest.warns(UserWarning, match="constant over time"):
+        out = ws(corrs)
+    assert out.shape == (100, 4)
+    assert np.all(np.ptp(out, axis=0) == 0)
+    np.testing.assert_allclose(out, 3, rtol=1e-12)
+
+
+def test_small_real_variation_is_not_snapped():
+    # a column whose range is 1e-6 of its magnitude is kept as computed
+    T = 200
+    small = 1 + 1e-6 * np.sin(2 * np.pi * np.arange(T) / 50)
+    M = np.empty((4, 4, T))
+    M[:] = 0.5 * np.sqrt(small)
+    M[np.arange(4), np.arange(4), :] = 1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = tc.WeightedStrength(center=False)(tc.mat2vec(M))
+    rel = np.ptp(out, axis=0) / np.abs(out).max(axis=0)
+    assert np.all(rel > 1e-7) and np.all(rel < 1e-5)
+
+
+def test_exact_constants_are_returned_unchanged():
+    # exact constants (range 0) are not replaced by a recomputed mean
+    v, _ = _equicorrelated(4)
+    M = tc.vec2mat(v)
+    M[:] = 0.3
+    M[np.arange(4), np.arange(4), :] = 1
+    with pytest.warns(UserWarning, match="constant over time"):
+        out = tc.WeightedStrength(center=False)(tc.mat2vec(M))
+    direct = 3 * np.mean(np.full(M.shape[2], 0.3) ** 2) * 0.3**2
+    assert np.all(np.ptp(out, axis=0) == 0)
+    np.testing.assert_allclose(out, direct, rtol=1e-12)
+
+
+def test_round_off_snapping_agrees_streamed_and_materialized():
+    x = _duplicated_pair()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _, D = tc.features(x, order=2, rfun=None, return_delta=True)
+    corrs = _order2_feeding_corrs()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        mat = tc.WeightedStrength(split=False, signed=False, center=False)(corrs)
+    assert np.all(np.ptp(D[2], axis=0) == 0)
+    np.testing.assert_allclose(D[2], mat, rtol=1e-12)

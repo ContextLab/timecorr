@@ -195,6 +195,16 @@ def test_memory_estimate_counts_the_kernel_feeding_path(cfun):
 # second review, F2: the default pipeline after community compression ---------
 
 
+def _feeding(info, k):
+    """The feeding entry of order k in features' return_info."""
+    (entry,) = [e for e in info if e["order"] == k and e["path"] == "feeding"]
+    return entry
+
+
+def _auto_warning(message, k):
+    return message.startswith(f"Automatic feeding reducer at order {k}")
+
+
 def _alternatives_named(message):
     assert 'delta_rfun="weighted_strength"' in message
     assert 'rfun="PCA", delta_rfun=None' in message
@@ -203,15 +213,28 @@ def _alternatives_named(message):
 
 @pytest.mark.parametrize("kw", [dict(order=3), dict(order=2, return_delta=True)],
                          ids=["order3", "order2-return-delta"])
-def test_default_feeding_after_community_compression_raises(kw):
-    # 4 features: the order-1 communities keep at most 4 // 2 = 2 columns, so
-    # the order-2 feeding step gets fewer than 4 features
+def test_default_feeding_after_community_compression_keeps_the_width(kw):
+    # 4 features: communities would keep at most 4 // 2 = 2 columns, so every
+    # automatic feeding step emits weighted strength of its 4 input features
+    # instead (recorded in info; a warning only where the shift null found
+    # no structure), and the run completes
     x = np.random.default_rng(0).normal(size=(100, 4))
-    with pytest.raises(ValueError, match="at order 2") as info:
-        quiet(tc.features, x, **kw)
-    message = str(info.value)
-    _alternatives_named(message)
-    assert "communities found at order 1" in message
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        out, info = tc.features(x, return_info=True, **kw)
+    fed = range(1, kw["order"] + (1 if kw.get("return_delta") else 0))
+    for k in fed:
+        entry = _feeding(info, k)
+        assert entry["fallback"] in ("too_few_community_columns", "no_null_exceedance")
+        assert entry["output_width"] == 4
+        warned = sum(_auto_warning(str(r.message), k) for r in rec)
+        assert warned == (entry["fallback"] == "no_null_exceedance"), k
+    if kw.get("return_delta"):
+        X, D = out
+        assert [d.shape for d in D] == [(100, 4)] * 3
+    else:
+        X = out
+    assert X[-1].shape == (100, 8)
 
 
 def test_default_order_two_without_the_last_feeding_step_completes():
@@ -238,3 +261,470 @@ def test_default_feeding_needs_k_distinct_shift_lags():
     X = quiet(tc.features, [a[:, :21] for a in x], order=1, return_delta=True,
               weights_params={"var": 10})
     assert len(X) == 2
+
+
+# wave 4, D1: the automatic feeding reducer keeps the width -------------------
+
+FALLBACK = dict(split=False, signed=False, center=False)
+GAUSS25 = dict(weights_function=tc.gaussian_weights, weights_params={"var": 25})
+
+
+def noise(S, shape, seed):
+    """S subjects of independent standard normal noise of the given shape."""
+    rng = np.random.default_rng(seed)
+    return [rng.normal(size=shape) for _ in range(S)]
+
+
+def recorded(f, *args, **kwargs):
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        out = f(*args, **kwargs)
+    return out, [str(r.message) for r in rec]
+
+
+def auto_messages(messages, k):
+    return [m for m in messages if _auto_warning(m, k)]
+
+
+def nested_modules(sg, per, nodes, S=2, T=300, seed=0):
+    data, _ = tc.simulate_nested(S=S, T=T, n_supergroups=sg, modules_per_supergroup=per,
+                                 nodes_per_module=nodes, set_random_seed=seed)
+    return data
+
+
+def assert_close(a, b, rtol=1e-9, atol=1e-12):
+    # the tolerance of the streamed-versus-materialized tests
+    a = a if isinstance(a, list) else [a]
+    b = b if isinstance(b, list) else [b]
+    assert len(a) == len(b)
+    for x, y in zip(a, b):
+        assert x.shape == y.shape
+        np.testing.assert_allclose(x, y, rtol=rtol, atol=atol)
+
+
+@pytest.mark.parametrize("K", [4, 5, 6, 7])
+def test_four_to_seven_features_complete_with_the_width_kept(K):
+    # communities can emit at most K // 2 <= 3 columns, so every automatic
+    # feeding step falls back to weighted strength of its K inputs
+    x = noise(2, (100, K), K)
+    (X, info), messages = recorded(tc.features, x, order=3, return_info=True)
+    assert X[3][0].shape == (100, 2 * K)
+    for k in (1, 2):
+        entry = _feeding(info, k)
+        assert entry["fallback"] is not None and entry["n_communities"] < 4
+        assert (entry["input_width"], entry["output_width"]) == (K, K)
+        found = auto_messages(messages, k)
+        assert len(found) == (entry["fallback"] == "no_null_exceedance"), (k, messages)
+        for m in found:
+            assert m.endswith(f"uses WeightedStrength on its {K} input features.")
+    assert not auto_messages(messages, 3)  # the order-3 feeding step is not computed
+    assert not [e for e in info if e["order"] == 3 and e["path"] == "feeding"]
+    (X, D), messages = recorded(tc.features, x, order=2, return_delta=True)
+    assert [d[0].shape for d in D] == [(100, K)] * 3
+
+
+@pytest.mark.parametrize("modules, columns", [((1, 2, 6), 2), ((1, 3, 6), 3)],
+                         ids=["2-columns", "3-columns"])
+@pytest.mark.parametrize("feeding", ["gaussian", "eye"])
+def test_two_or_three_community_columns_fall_back(modules, columns, feeding):
+    # 2 or 3 modules of 6 nodes: the communities would emit 2 or 3 columns;
+    # the step emits weighted strength of the same correlations instead,
+    # equal to the materialized computation (streamed with the Gaussian
+    # feeding kernel; materialized with eye_weights)
+    data = nested_modules(*modules)
+    K = data[0].shape[1]
+    kw = {} if feeding == "gaussian" else dict(delta_weights_function=tc.eye_weights)
+    ((X, D), info), messages = recorded(tc.features, data, order=1, return_delta=True,
+                                        return_info=True, **SETTINGS, **kw)
+    # communities were found: the fallback is silent and recorded in info
+    assert auto_messages(messages, 1) == []
+    entry = _feeding(info, 1)
+    assert entry["fallback"] == "too_few_community_columns"
+    assert entry["n_communities"] == columns and entry["n_exceed"] >= 1
+    if feeding == "gaussian":
+        corrs = tc.timecorr(data, cfun=tc.autofc, rfun=None, **GAUSS25)
+    else:
+        corrs = tc.timecorr(data, cfun=tc.autofc, rfun=None,
+                            weights_function=tc.eye_weights)
+    expected = quiet(tc.WeightedStrength(**FALLBACK), corrs)
+    assert D[1][0].shape == (300, K)
+    assert_close(D[1], expected)
+    # the explicit reducer keeps its communities
+    comm = tc.Communities()
+    _, D_explicit = quiet(tc.features, data, order=1, return_delta=True,
+                          delta_rfun=comm, **SETTINGS, **kw)
+    assert D_explicit[1][0].shape == (300, columns) and comm.fits_[0]["n"] == columns
+
+
+def test_one_community_column_after_an_exceedance_falls_back():
+    # 4 noise features (seed 6): one eigenvalue above the null gives two
+    # clusters, one of them a single node, so the communities emit 1 column
+    x = np.random.default_rng(6).normal(size=(100, 4))
+    ((X, D), info), messages = recorded(tc.features, x, order=1, return_delta=True,
+                                        return_info=True)
+    entry = _feeding(info, 1)
+    assert entry["fallback"] == "too_few_community_columns"
+    assert entry["n_communities"] == 1 and entry["n_exceed"] >= 1
+    assert auto_messages(messages, 1) == []
+    corrs = tc.timecorr(x, cfun=tc.autofc, rfun=None, **GAUSS25)
+    assert_close(D[1], quiet(tc.WeightedStrength(**FALLBACK), corrs))
+
+
+def test_no_exceedance_on_noise_falls_back():
+    # independent noise: no eigenvalue above the shift null; the automatic
+    # reducer says so and keeps the width, without the explicit reducer's
+    # "one community" warning
+    x = noise(2, (200, 10), 7)  # no exceedance with this seed (5 of seeds 0-7)
+    ((X, D), info), messages = recorded(tc.features, x, order=1, return_delta=True,
+                                        return_info=True)
+    found = auto_messages(messages, 1)
+    assert len(found) == 1
+    assert found[0].startswith("Automatic feeding reducer at order 1: the shift null "
+                               "found no structure (no eigenvalue above null_threshold=")
+    assert found[0].endswith("); this order uses WeightedStrength on its 10 input "
+                             "features.")
+    entry = _feeding(info, 1)
+    assert entry["fallback"] == "no_null_exceedance"
+    assert entry["n_exceed"] == 0 and entry["n_communities"] == 1
+    assert not any("no community structure" in m for m in messages)
+    assert D[1][0].shape == (200, 10)
+    corrs = tc.timecorr(x, cfun=tc.autofc, rfun=None, **GAUSS25)
+    assert_close(D[1], quiet(tc.WeightedStrength(**FALLBACK), corrs))
+    # the explicit reducer keeps its warning and its one community
+    comm = tc.Communities()
+    (_, D_explicit), messages = recorded(tc.features, x, order=1, return_delta=True,
+                                         delta_rfun=comm)
+    assert any("no community structure above the shift null" in m for m in messages)
+    assert not auto_messages(messages, 1)
+    assert D_explicit[1][0].shape == (200, 1)
+
+
+@pytest.mark.parametrize("modules", [(2, 2, 6), (1, 4, 4), (2, 3, 4)],
+                         ids=["4-modules", "4-modules-of-4", "6-modules"])
+def test_four_or_more_community_columns_are_unchanged(modules):
+    # at least 4 columns: the automatic reducer emits the communities,
+    # identical to an explicit Communities(), without the fallback warning
+    data = nested_modules(*modules)
+    ((X, D), info), messages = recorded(tc.features, data, order=1, return_delta=True,
+                                        return_info=True, **SETTINGS)
+    assert not auto_messages(messages, 1)
+    comm = tc.Communities()
+    _, D_explicit = quiet(tc.features, data, order=1, return_delta=True,
+                          delta_rfun=comm, **SETTINGS)
+    assert comm.fits_[0]["n"] >= 4
+    entry = _feeding(info, 1)
+    assert entry["fallback"] is None and entry["n_communities"] == comm.fits_[0]["n"]
+    assert entry["effective"] == repr(tc.Communities())
+    assert_identical(D[1], D_explicit[1])
+
+
+def test_explicit_communities_still_raise_after_compression():
+    # explicit Communities() keep their behavior: order 1 on 4 features keeps
+    # at most 2 columns, and order 2 then raises (K >= 4 needed)
+    x = np.random.default_rng(0).normal(size=(100, 4))
+    with pytest.raises(ValueError, match="needs K >= 4 nodes"):
+        quiet(tc.features, x, order=2, return_delta=True, delta_rfun=tc.Communities())
+    # explicit Communities at order 1, the automatic reducer at order 2: the
+    # error names the communities found at order 1
+    with pytest.raises(ValueError, match="at order 2") as info:
+        quiet(tc.features, x, order=2, return_delta=True,
+              delta_rfun={1: tc.Communities()})
+    _alternatives_named(str(info.value))
+    assert "communities found at order 1" in str(info.value)
+
+
+@pytest.mark.parametrize("shape, match", [((100, 3), "got 3 features"),
+                                          ((39, 6), "T = 39"),
+                                          ((40, 22), "distinct lags")],
+                         ids=["K3", "T39", "lags"])
+def test_original_input_errors_stay(shape, match):
+    # the original input: fewer than 4 features, T < 40, or fewer distinct
+    # shift-null lags than features raise at order 1, before anything is
+    # computed, whenever a feeding step is required
+    x = noise(2, shape, 2)
+    for kw in (dict(order=3), dict(order=2), dict(order=1, return_delta=True)):
+        with pytest.raises(ValueError, match=match) as info:
+            tc.features(x, weights_params={"var": 10}, **kw)
+        assert "at order 1" in str(info.value)
+        _alternatives_named(str(info.value))
+    # without a feeding step, order 1 is unaffected
+    assert tc.features(x, order=1, weights_params={"var": 10})[1][0].shape[0] == shape[0]
+
+
+def test_one_no_exceedance_warning_per_order_not_per_subject():
+    # 4 subjects; the warning is issued once per order whose shift null
+    # found no structure, and never otherwise
+    x = noise(4, (200, 10), 7)
+    (_, info), messages = recorded(tc.features, x, order=3, return_delta=True,
+                                   return_info=True)
+    reasons = [_feeding(info, k)["fallback"] for k in (1, 2, 3)]
+    assert "no_null_exceedance" in reasons
+    assert [len(auto_messages(messages, k)) for k in (1, 2, 3)] == [
+        int(r == "no_null_exceedance") for r in reasons]
+    _, messages = recorded(two_path_step, x)
+    assert len(auto_messages(messages, 1)) == int(reasons[0] == "no_null_exceedance")
+
+
+def test_prefix_consistency_across_requested_orders():
+    # the orders a shorter run computes are the same in a longer run
+    x = noise(2, (120, 6), 3)
+    X2, D2 = quiet(tc.features, x, order=2, return_delta=True)
+    X3, D3 = quiet(tc.features, x, order=3, return_delta=True)
+    X3_only = quiet(tc.features, x, order=3)
+    for k in range(3):
+        assert_identical(X2[k], X3[k])
+        assert_identical(D2[k], D3[k])
+        assert_identical(X2[k], X3_only[k])
+    assert_identical(quiet(tc.features, x, order=2)[2], X2[2])
+
+
+def test_memory_accounting_after_a_fallback():
+    # 6 noise features, order 3: every automatic feeding step keeps 6
+    # columns.  The smallest budget that completes (bisection to 1e-17 GB):
+    # 0.23053376 GB, of which 0.00077 GB are held while the order-3 streamed
+    # analysis step runs on the 6 fallback columns (X_1, X_2 and D_2: 96,000
+    # values, with the fits); just below it, that step raises before it
+    # computes anything (measured: "The streamed analysis step at order 3
+    # needs at least about 0.231 GB"; the match below accepts a MemoryError
+    # at order 2 or 3 on the 6 input features, so it also holds if a change
+    # of accounting moves the refusal one order earlier)
+    x = noise(2, (2000, 6), 4)
+    budget = 0.23053376
+    X = quiet(tc.features, x, order=3, max_memory_gb=budget)
+    assert X[3][0].shape == (2000, 12)
+    with pytest.raises(MemoryError, match=r"at order [23] .*6 input features"):
+        quiet(tc.features, x, order=3, max_memory_gb=budget * (1 - 1e-6))
+
+
+def test_two_nodes_give_identical_weighted_strength_columns():
+    # with 2 features the weighted strength of each node is the same pair's
+    # a_12 r_12(t)**2, so the two columns are identical
+    x = noise(2, (100, 2), 5)
+    _, D = quiet(tc.features, x, order=1, return_delta=True,
+                 delta_rfun="weighted_strength")
+    for d in D[1]:
+        assert d.shape == (100, 2)
+        np.testing.assert_allclose(d[:, 0], d[:, 1], rtol=1e-12, atol=0)
+        assert np.ptp(d[:, 0]) > 0
+
+
+# return_info ------------------------------------------------------------------
+
+ANALYSIS_KEYS = {"order", "path", "requested", "effective", "input_width", "output_width"}
+AUTO_KEYS = ANALYSIS_KEYS | {"n_communities", "n_exceed", "null_threshold", "n_null",
+                             "fallback"}
+
+
+def _no_arrays(info):
+    for entry in info:
+        for key, value in entry.items():
+            assert isinstance(key, str)
+            assert value is None or type(value) in (int, float, str), (key, value)
+
+
+def test_return_info_shapes_of_the_return():
+    x = noise(2, (100, 6), 3)
+    X = quiet(tc.features, x, order=2)
+    X_i, info = quiet(tc.features, x, order=2, return_info=True)
+    for a, b in zip(X, X_i):
+        assert_identical(a, b)
+    (X_d, D), info_d = quiet(tc.features, x, order=2, return_delta=True,
+                             return_info=True)
+    assert len(X_d) == 3 and len(D) == 3
+    # return_delta adds the feeding entry of the last order
+    assert [(e["order"], e["path"]) for e in info] == [
+        (1, "analysis"), (1, "feeding"), (2, "analysis")]
+    assert [(e["order"], e["path"]) for e in info_d] == [
+        (1, "analysis"), (1, "feeding"), (2, "analysis"), (2, "feeding")]
+    X0, info0 = tc.features(x, order=0, return_info=True)
+    assert info0 == [] and len(X0) == 1
+    _no_arrays(info_d)
+
+
+def test_return_info_content():
+    data = nested_modules(2, 2, 6)  # 24 nodes in 4 modules
+    ws = tc.WeightedStrength(signed=True)
+    (X, D), info = quiet(tc.features, data, order=2, return_delta=True,
+                         return_info=True, rfun={2: ws}, **SETTINGS)
+    _no_arrays(info)
+    a1, f1, a2, f2 = info
+    assert set(a1) == ANALYSIS_KEYS and set(a2) == ANALYSIS_KEYS
+    assert set(f1) == AUTO_KEYS and set(f2) == AUTO_KEYS
+    assert a1 == {"order": 1, "path": "analysis", "requested": "auto",
+                  "effective": "PCA", "input_width": 24, "output_width": 24}
+    assert a2["requested"] == repr(ws) and a2["effective"] == repr(ws)
+    assert (a2["input_width"], a2["output_width"]) == (D[1][0].shape[1], X[2][0].shape[1])
+    assert f1["requested"] == "auto" and f1["input_width"] == 24
+    assert f1["output_width"] == D[1][0].shape[1]
+    assert f1["n_null"] == 5 and f1["null_threshold"] > 0
+    assert f2["input_width"] == D[1][0].shape[1] and f2["output_width"] == D[2][0].shape[1]
+    # explicit reducers: no automatic-reducer keys
+    (_, D), info = quiet(tc.features, data, order=1, return_delta=True, return_info=True,
+                         rfun=None, delta_rfun="weighted_strength", **SETTINGS)
+    assert info[0]["requested"] is None and info[0]["effective"] is None
+    assert info[0]["output_width"] == 24 * 25 // 2
+    assert set(info[1]) == ANALYSIS_KEYS
+    assert info[1]["requested"] == "weighted_strength"
+
+
+def test_return_info_records_the_three_fallback_values():
+    found = {}
+    for data in (nested_modules(2, 2, 6), nested_modules(1, 2, 6), noise(2, (200, 10), 7)):
+        (_, D), info = quiet(tc.features, data, order=1, return_delta=True,
+                             return_info=True, **SETTINGS)
+        entry = _feeding(info, 1)
+        found[entry["fallback"]] = entry
+        if entry["fallback"] is None:
+            assert entry["output_width"] == entry["n_communities"] >= 4
+        else:
+            assert entry["output_width"] == entry["input_width"]
+            assert entry["effective"] == repr(tc.WeightedStrength(**FALLBACK))
+    assert set(found) == {None, "too_few_community_columns", "no_null_exceedance"}
+    assert found["no_null_exceedance"]["n_exceed"] == 0
+    assert found["too_few_community_columns"]["n_exceed"] >= 1
+    assert found["too_few_community_columns"]["n_communities"] == 2
+
+
+# wave 4, D6: the MemoryError of a default order-1 step names streaming --------
+
+
+def test_default_order_one_memory_error_names_a_streamed_reducer():
+    # the default order-1 analysis step (PCA) holds its correlations; under a
+    # budget between its estimate and that of a streamed step, the error
+    # names the summary reducers that stream it, and both suggestions run
+    from timecorr.higher_order import estimate_memory_gb
+
+    K, T, S = 60, 400, 2
+    x = noise(S, (T, K), 8)
+    materialized = estimate_memory_gb(K, 1, T, S)[1]
+    streamed = estimate_memory_gb(K, 1, T, S, streamed=True)[1]
+    budget = (materialized + 2 * streamed) / 2
+    assert 2 * streamed < budget < materialized
+    with pytest.raises(MemoryError) as info:
+        tc.features(x, order=1, max_memory_gb=budget)
+    message = str(info.value)
+    assert "rfun=tc.WeightedStrength(signed=True)" in message
+    assert "rfun={1: tc.WeightedStrength(signed=True)}" in message
+    X = tc.features(x, order=1, max_memory_gb=budget,
+                    rfun=tc.WeightedStrength(signed=True))
+    assert X[1][0].shape == (T, 2 * K)
+    X = tc.features(x, order=1, max_memory_gb=budget,
+                    rfun={1: tc.WeightedStrength(signed=True)})
+    assert X[1][0].shape == (T, 2 * K)
+
+
+def test_round_off_constant_feeding_columns_do_not_amplify_noise():
+    # Columns [a, a, b, b] of two independent series (default_rng(10),
+    # T 100): the order-1 feeding step falls back to weighted strength, and
+    # its four columns are nearly identical, so the order-2 feeding columns
+    # differ from constants only by round-off (range about 1e-13 on values
+    # about 3 before the fix, and order 3 then varied by about 1.2).  They
+    # are set to their means and reported by the constant-output warning;
+    # order 3 then meets exact zero variance, whose correlations the
+    # estimator sets to 0, so its weighted strength is exactly 0.
+    rng = np.random.default_rng(10)
+    a, b = rng.standard_normal(100), rng.standard_normal(100)
+    x = np.column_stack([a, a, b, b])
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        _, D = tc.features(x, order=3, rfun=None, return_delta=True)
+    messages = [str(w.message) for w in rec]
+    assert any("constant over time" in m for m in messages), messages
+    assert np.ptp(D[1], axis=0).min() > 1e-3
+    assert np.all(np.ptp(D[2], axis=0) == 0)
+    assert np.all(np.isfinite(D[3]))
+    np.testing.assert_array_equal(D[3], 0)
+
+
+# the streamed-reducer hint of the MemoryError ------------------------------
+
+HINT = "A summary reducer streams the analysis step"
+
+
+def _hint_subjects(K=120, T=600, S=2, seed=0):
+    rng = np.random.default_rng(seed)
+    return [rng.standard_normal((T, K)) for _ in range(S)]
+
+
+@pytest.mark.parametrize("frac", [0.3, 0.5, 0.7])
+def test_original_pipeline_memory_error_has_no_hint(frac):
+    # K 120, T 600, 2 subjects: the order-1 step is estimated at 0.552 GB.
+    # The co-fluctuation feeding step is materialized, so a summary reducer
+    # on the analysis path would not make the call fit: no hint, and the
+    # message is the one of commit ad50637 (before wave 4), verbatim.
+    budget = 0.552 * frac
+    kw = dict(rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
+    with pytest.raises(MemoryError) as err:
+        tc.features(_hint_subjects(), order=2, max_memory_gb=budget, **kw)
+    fits = {0.3: 63, 0.5: 83, 0.7: 98}[frac]
+    assert str(err.value) == (
+        "The correlation step at order 1 needs about 0.552 GB (120 input "
+        f"features, T=600, 2 subjects), more than max_memory_gb={budget}. The "
+        f"largest number of input features that fits one step is K={fits}. "
+        "Reduce to fewer features (ndims, rfun, delta_rfun) or raise "
+        "max_memory_gb."
+    )
+    # following the hint would indeed not have helped
+    with pytest.raises(MemoryError):
+        tc.features(_hint_subjects(), order=2, max_memory_gb=budget,
+                    rfun=tc.WeightedStrength(signed=True), delta_rfun=None,
+                    delta_weights_function=tc.eye_weights)
+
+
+def test_default_call_memory_error_hint_names_order_one_and_works():
+    # default call: the order-1 PCA step does not fit, the feeding step is
+    # streamed; the hint names order 1 and following it completes
+    subjects = _hint_subjects()
+    with pytest.raises(MemoryError, match=HINT) as err:
+        tc.features(subjects, order=1, max_memory_gb=0.3)
+    assert "rfun={1: tc.WeightedStrength(signed=True)} for order 1 only" in str(err.value)
+    X = quiet(tc.features, subjects, order=1, max_memory_gb=0.3,
+              rfun={1: tc.WeightedStrength(signed=True)})
+    assert X[1][0].shape == (600, 240)
+
+
+AD50637_SINGLE = (
+    "The correlation step at order 1 needs about 0.515 GB (120 input "
+    "features, T=600, 1 subject), more than max_memory_gb=0.3. The largest "
+    "number of input features that fits one step is K=89. Reduce to fewer "
+    "features (ndims, rfun, delta_rfun) or raise max_memory_gb."
+)
+
+
+@pytest.mark.parametrize("order, return_delta", [(1, False), (1, True), (2, False), (2, True)])
+def test_original_pipeline_single_subject_memory_error_is_unchanged(order, return_delta):
+    # one (600, 120) subject, max_memory_gb=0.3: the text that commit ad50637
+    # (before wave 4) raised for each of these calls, verbatim; at order=1
+    # without return_delta the step runs without the feeding path
+    x = np.random.default_rng(0).standard_normal((600, 120))
+    with pytest.raises(MemoryError) as err:
+        tc.features(x, order=order, return_delta=return_delta, rfun="PCA",
+                    delta_rfun=None, delta_weights_function=tc.eye_weights,
+                    max_memory_gb=0.3)
+    assert str(err.value) == AD50637_SINGLE
+
+
+@pytest.mark.parametrize("rfun", ["PCA", {1: "PCA"}])
+def test_no_hint_with_an_explicit_rfun(rfun):
+    # the hint is given only for a reducer the caller did not choose
+    with pytest.raises(MemoryError) as err:
+        tc.features(_hint_subjects(), order=1, max_memory_gb=0.3, rfun=rfun)
+    assert HINT not in str(err.value)
+
+
+def test_hint_with_an_order_map_that_leaves_order_one_automatic():
+    # rfun={2: ...} leaves order 1 at "auto" (PCA): the hint names order 1
+    with pytest.raises(MemoryError, match=HINT) as err:
+        tc.features(_hint_subjects(), order=2, max_memory_gb=0.3,
+                    rfun={2: tc.WeightedStrength(signed=True)})
+    assert "at order 1" in str(err.value)
+    assert "rfun={1: tc.WeightedStrength(signed=True)} for order 1 only" in str(err.value)
+
+
+def test_no_hint_when_the_feeding_reducer_inherits_a_non_summary():
+    # delta_rfun=None takes rfun ("PCA"): the hint would change the feeding
+    # reducer too, so none is given
+    with pytest.raises(MemoryError) as err:
+        tc.features(_hint_subjects(), order=2, max_memory_gb=0.3,
+                    rfun="PCA", delta_rfun=None)
+    assert HINT not in str(err.value)

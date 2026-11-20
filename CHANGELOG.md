@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Centering of `WeightedStrength`.** With `center=True` (the default,
+  and the analysis reducer of `features` at orders >= 2), the pair weights
+  are centered on the mean of their lower cluster instead of their median:
+  the sorted pair weights are split into a lower and an upper group with
+  the least total within-group sum of squares, and the lower group's mean
+  is subtracted before clipping at 0. `center="median"` gives the previous
+  rule; `center=False` is unchanged; other values raise `ValueError`.
+  Median centering removed every weight of a smaller, more weakly coupled
+  community when more than half the pairs lie within one larger community.
+  Measured on 16 held-out seeds (planted communities of 18 and 6 nodes,
+  coupling 0.5 and 0.25 varying over time, 2 subjects, T 1000): the small
+  community's columns tracked its coupling at .425 +- .021 (median
+  centering: .000, all of its weights 0), with the large community
+  unchanged (.833 +- .007 versus .834 +- .007). On the six T 1000 order-2
+  recovery cases of `tests/test_nested_recovery.py` the decode scores
+  changed by -.002 to -.006, each below the standard error of its score
+  (.022 to .038). The `WeightedStrength` Notes give the full comparison.
+  `Communities` still centers its matrix `C` on the median.
+
 - **Shift null with more columns than lags.** The shift null of the
   automatic community count (`Communities()` and split `WeightedStrength`
   without `n`, and the default feeding reducer) no longer raises

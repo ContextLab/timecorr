@@ -96,17 +96,58 @@ def _mean_r(sum_r, T):
     return m
 
 
+def _check_center(center):
+    """``center`` of ``WeightedStrength``: True, False or ``"median"``."""
+    if isinstance(center, (bool, np.bool_)):
+        return bool(center)
+    if isinstance(center, str) and center == "median":
+        return center
+    raise ValueError(
+        f"center must be True (the lower cluster of the pair weights), "
+        f"'median' or False; got {center!r}."
+    )
+
+
+def _center_level(w, rule):
+    """
+    Level ``m`` the pair weights ``w_ij`` (i < j) are centered on.
+
+    ``rule="median"``: their median.  ``rule="lower_cluster"``: the mean of
+    the lower group of the exact two-group split of their sorted values that
+    minimizes the total within-group sum of squares (one-dimensional
+    two-means; splits fall between distinct values).  When all values are
+    equal, that value.
+    """
+    x = np.sort(w[np.triu_indices(w.shape[0], 1)].astype(float))
+    if rule == "median":
+        return float(np.median(x))
+    if x[-1] == x[0]:
+        return float(x[0])
+    n = len(x)
+    k = np.arange(1, n)
+    c = np.cumsum(x)
+    low = c[:-1] / k
+    high = (c[-1] - c[:-1]) / (n - k)
+    # the between-group sum of squares; its maximum is the least within-group one
+    between = k * (n - k) / n * (high - low) ** 2
+    between[x[1:] == x[:-1]] = -np.inf
+    cut = int(np.argmax(between)) + 1
+    return float(np.mean(x[:cut]))
+
+
 def _clip_weights(w, center=True):
     """
-    Clipped weights ``a_ij = max(w_ij - m, 0)``, ``m`` = median of ``w_ij``
-    over i < j; for K < 4, or with ``center=False``, the weights are returned
-    unclipped.  Zero diagonal.
+    Clipped weights ``a_ij = max(w_ij - m, 0)``: ``m`` = the mean of the
+    lower cluster of the pair weights (``center=True``) or their median
+    (``center="median"``; see ``_center_level``); for K < 4, or with
+    ``center=False``, the weights are returned unclipped.  Zero diagonal.
     """
     K = w.shape[0]
-    if K < 4 or not center:
+    if K < 4 or center is False:
         a = np.array(w, dtype=float)
     else:
-        a = np.maximum(w - np.median(w[np.triu_indices(K, 1)]), 0)
+        rule = "median" if center == "median" else "lower_cluster"
+        a = np.maximum(w - _center_level(w, rule), 0)
     np.fill_diagonal(a, 0)
     return a
 
@@ -602,7 +643,10 @@ class WeightedStrength(_Summary):
     Weighted strength of each node in squared correlations.
 
     For a unit with off-diagonal correlations ``r_ij(t)``: pair weights
-    ``w_ij = mean_t r_ij(t)**2``; ``m`` = median of ``w_ij`` over i < j;
+    ``w_ij = mean_t r_ij(t)**2``; ``m`` = the mean of the lower cluster of
+    the ``w_ij`` over i < j (split the sorted weights into a lower and an
+    upper group with the least total within-group sum of squares, and take
+    the lower group's mean; with ``center="median"``, their median);
     clipped weights ``a_ij = max(w_ij - m, 0)`` (for K = 2 or 3, or with
     ``center=False``, ``a_ij = w_ij``).  Column i is ``c_i(t) = sum_{j != i}
     a_ij r_ij(t)**2``.
@@ -626,10 +670,12 @@ class WeightedStrength(_Summary):
         Number of shift-null surrogates when ``features`` or
         ``two_path_step`` count the communities of ``split=True`` with
         ``n=None`` (see ``Communities``); a positive integer.  Default: 5.
-    center : bool
-        If True, the pair weights are centered on their median and clipped
-        at 0 (``a_ij = max(w_ij - m, 0)``) for K >= 4; if False, they are
-        used as they are (``a_ij = w_ij``) for any K.  Default: True.
+    center : True, "median" or False
+        True: for K >= 4 the pair weights are centered on the mean ``m`` of
+        their lower cluster and clipped at 0 (``a_ij = max(w_ij - m, 0)``).
+        ``"median"``: the same with ``m`` the median of the pair weights
+        (the default of timecorr 0.3.0).  False: the weights are used as
+        they are (``a_ij = w_ij``) for any K.  Default: True.
 
     Attributes
     ----------
@@ -651,24 +697,51 @@ class WeightedStrength(_Summary):
     -----
     Output columns: K magnitude columns (2K with ``split``: own, then other),
     then, when signed, K signed columns (2K with ``split``: own, then other).
-    With ``center=True``, coupling that is the same for every pair (all pair
-    weights equal) gives magnitude columns that are 0 at every timepoint for
-    K >= 4, while K < 4 is never centered; ``center=False`` keeps such
-    coupling.  The recovery of the order-2 signal with a global signal
-    added (``tests/test_nested_recovery.py``) was measured with centering;
-    it was not measured with ``center=False``.  The median is taken over all
-    pairs, so when more than half the pairs lie within one community the
-    median is a within-community weight of that community, and centering
-    removes most of that community's weights.  Measured on two planted
-    communities of 18 and 6 nodes (153 of the 276 pairs within the larger
-    one; 2 subjects, T 1000, static coupling, ``autofc`` with the default
-    kernel, seeds 0-2): with equal loadings (0.3), 15% to 18% of the
-    larger community's clipped weights are 0 and their mean is 10% to 12%
-    of its mean pair weight (between-community weights are all 0); with
-    loadings 0.4 (larger) and 0.2 (smaller), every clipped weight within
-    the smaller community is 0, so it contributes nothing to the magnitude columns.
-    With two communities of 12 nodes, no within-community weight is 0
-    (``tests/test_summaries.py::test_centering_with_a_large_community``).
+    With ``center=True`` or ``"median"``, coupling that is the same for
+    every pair (all pair weights equal) gives magnitude columns that are 0
+    at every timepoint for K >= 4, while K < 4 is never centered;
+    ``center=False`` keeps such coupling.
+
+    Centering removes the background level of the pair weights (noise and
+    coupling shared by every pair).  The median is taken over all pairs, so
+    when more than half the pairs lie within one community the median is a
+    within-community weight of that community, and median centering
+    removes most of that community's weights and every weight of a more
+    weakly coupled smaller community: with planted communities of 18 and 6
+    nodes (153 of the 276 pairs within the larger one; 2 subjects, T 1000,
+    static coupling, ``autofc`` with the default kernel, seeds 0-2) and
+    loadings 0.4 (larger) and 0.2 (smaller), every median-clipped weight
+    within the smaller community is 0.  The lower cluster lies within the
+    range of the between-community weights in that case (34% of them stay
+    above it in the first row of the table below), so both communities
+    keep their weights.  Benchmark (2 subjects, T 1000,
+    ``autofc`` with variance 25; each community's coupling ``rho_g(t)``
+    varies slowly over time; score = correlation between the mean of a
+    community's magnitude columns and ``rho_g(t)**2``, mean over subjects;
+    16 held-out seeds, mean +- standard error):
+
+    ======================================  ==============  ===============
+    planted communities (coupling)          median          lower cluster
+    ======================================  ==============  ===============
+    18 + 6 (0.5, 0.25): small community     .000 +- .000    .425 +- .021
+    18 + 6 (0.5, 0.25): large community     .834 +- .007    .833 +- .007
+    18 + 6 (0.45, 0.25), global 0.2: small  .000 +- .000    .508 +- .017
+    18 + 6 (0.4, 0.4): small community      .639 +- .015    .664 +- .012
+    18 + 6 (0.25, 0.5): large community     .652 +- .015    .655 +- .015
+    16 + 4 + 4 (0.5, 0.25, 0.25): 3rd       .265 +- .030    .279 +- .027
+    ======================================  ==============  ===============
+
+    On the order-2 recovery cases of ``tests/test_nested_recovery.py``
+    (T 1000; sustained, sign-flip and global 0.5, each with communities
+    and weighted strength on the feeding path; same 16 held-out seeds) the
+    lower cluster changed the decode score by -.002 to -.006 (paired
+    standard errors .001 to .002), below the standard error of each score
+    (.022 to .038).  Other rules measured on the development seeds: the
+    lower quartile of the pair weights (also keeps the small community;
+    order-2 scores lower by up to .026 +- .006), the shift-null mean pair
+    weight (keeps less with a global signal: .398 +- .018 on the held-out
+    seeds), and no centering (order-2 scores lower by up to .346 +- .062
+    with a global signal).
     With K = 2 the two magnitude columns are identical (both are
     ``a_12 r_12(t)**2``), so a following correlation step sees two copies of
     one series; with K = 1 there are no pairs and the column is 0.
@@ -702,7 +775,7 @@ class WeightedStrength(_Summary):
     def __init__(self, split=False, signed=False, n=None, n_null=5, center=True):
         super().__init__(n=n, signed=signed, n_null=n_null)
         self.split = bool(split)
-        self.center = bool(center)
+        self.center = _check_center(center)
 
     @property
     def _needs_communities(self):
@@ -711,7 +784,7 @@ class WeightedStrength(_Summary):
     def __repr__(self):
         return (
             f"WeightedStrength(split={self.split}, signed={self.signed}, n={self.n}, "
-            f"n_null={self.n_null}, center={self.center})"
+            f"n_null={self.n_null}, center={self.center!r})"
         )
 
     def _what(self):
@@ -844,7 +917,8 @@ class Communities(_Summary):
     feeding path.  With events, whole columns
     are shifted across event boundaries while the event masks stay
     fixed.  ``C`` is centered on the median over all pairs, as in
-    ``WeightedStrength``: with communities of 18 and 6 nodes and loadings
+    ``WeightedStrength(center="median")`` (``WeightedStrength`` centers on
+    the lower cluster by default): with communities of 18 and 6 nodes and loadings
     0.4 and 0.2 (see ``WeightedStrength``), the
     automatic count found 6 to 8 communities (adjusted Rand index 0.39 to
     0.90 against the two planted ones) at seeds 0-2, and 2 with equal

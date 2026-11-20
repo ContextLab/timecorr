@@ -124,7 +124,7 @@ communities found at a feeding step would emit fewer than 4 columns (at most
 half its input features; one when the shift null finds no structure), that step
 emits ``WeightedStrength(split=False, signed=False, center=False)`` of the same
 correlations instead (one column per input feature; uncentered pair weights,
-without median clipping), so the feeding width never
+without centering or clipping), so the feeding width never
 drops below 4; a ``UserWarning`` is issued only when the shift null found no
 structure, and ``return_info=True`` records every fallback. The fallback also
 changes calls that completed without it: on 4 independent noise features
@@ -365,12 +365,17 @@ fitted unit instead: an int for every unit, a list with one fitted unit per
 unit, or ``"mean"``), and ``fits_`` records the fits
 (calling an instance keeps only that call's fit; ``fit`` and each step of
 ``features`` and ``two_path_step`` append one). ``WeightedStrength(center=False)``
-uses the pair weights without median centering (with ``center=True``, the
-default, coupling equal for every pair gives zero magnitude columns for
-K >= 4 nodes, and when more than half the pairs lie within one community the
-median is a weight of that community, so centering removes most of its
-weights and zeroes those of a more weakly coupled smaller community; see the
-``WeightedStrength`` Notes); ``n_null`` sets the number of shift-null surrogates of the
+uses the pair weights without centering. With ``center=True``, the default,
+the pair weights are centered on the mean of their lower cluster (the lower
+group of the split of the sorted weights into two groups with the least
+within-group sum of squares) and clipped at 0; with ``center="median"`` (the
+default of timecorr 0.3.0) they are centered on their median. Both give zero
+magnitude columns for K >= 4 nodes when the coupling is equal for every pair.
+When more than half the pairs lie within one community, the median is a
+weight of that community, so median centering removes most of its weights
+and zeroes those of a more weakly coupled smaller community; the lower
+cluster keeps both (see the ``WeightedStrength`` Notes for the measured
+comparison). ``n_null`` sets the number of shift-null surrogates of the
 automatic count of communities (default 5). ``Communities(signed=True)``
 emits a magnitude and a signed column per community, both computed from the
 correlations within that community; on the feeding path of ``features``, the

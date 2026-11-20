@@ -407,7 +407,8 @@ def _ws_ref(v, fit, unit):
 def test_fit_index_reorders_outputs_only_when_it_says_so(nested):
     _, _, A = nested
     swapped = [A[1], A[0]]
-    ws = tc.WeightedStrength(signed=True).fit(A)
+    # center="median": the rule of the reference ref_weighted_strength
+    ws = tc.WeightedStrength(signed=True, center="median").fit(A)
     fit = ws.fits_[0]
     original = ws.transform(A)
     # default: by position, so the swapped batch is not the swapped output
@@ -436,7 +437,8 @@ def test_fit_index_transforms_a_held_out_subject_with_a_chosen_fit(
 ):
     _, _, A = nested
     held_out = nested_other[2]
-    ws = tc.WeightedStrength(signed=True).fit(A)
+    # center="median": the rule of the reference ref_weighted_strength
+    ws = tc.WeightedStrength(signed=True, center="median").fit(A)
     fit = ws.fits_[0]
     for unit in (0, 1):
         # a single array with a chosen fit
@@ -1039,3 +1041,98 @@ def test_centering_with_a_large_community(seed):
     for g in (0, 1):
         sel, iu = _within(labels, g)
         assert np.all(a[iu][sel] > 0)
+
+
+# centering on the lower cluster of the pair weights -----------------------
+
+
+def _two_means_low_reference(x):
+    """Mean of the lower group of the best split of the sorted values into
+    two groups (least total within-group sum of squares), by brute force."""
+    x = np.sort(np.asarray(x, dtype=float))
+    if x[0] == x[-1]:
+        return x[0]
+    best, cut = np.inf, None
+    for k in range(1, len(x)):
+        if x[k - 1] == x[k]:
+            continue
+        sse = ((x[:k] - x[:k].mean()) ** 2).sum() + ((x[k:] - x[k:].mean()) ** 2).sum()
+        if sse < best:
+            best, cut = sse, k
+    return x[:cut].mean()
+
+
+def test_lower_cluster_level_matches_brute_force_two_means():
+    rng = np.random.default_rng(3)
+    for trial in range(40):
+        K = int(rng.integers(4, 30))
+        S = rng.gamma(2.0, 0.01, (K, K))
+        n_hi = int(rng.integers(2, K + 1))
+        S[:n_hi, :n_hi] += rng.gamma(4.0, 0.05, (n_hi, n_hi))
+        w = (S + S.T) / 2
+        if trial % 4 == 0:
+            w = np.round(w, 2)  # ties
+        np.fill_diagonal(w, 0)
+        level = _two_means_low_reference(w[np.triu_indices(K, 1)])
+        np.testing.assert_allclose(sm._center_level(w, "lower_cluster"), level,
+                                   rtol=1e-12, atol=0)
+        a = sm._clip_weights(w)
+        np.testing.assert_allclose(a, np.maximum(w - level, 0) * (1 - np.eye(K)),
+                                   rtol=0, atol=1e-15)
+
+
+def test_center_median_is_the_previous_rule():
+    rng = np.random.default_rng(4)
+    w = rng.gamma(2.0, 0.05, (9, 9))
+    w = (w + w.T) / 2
+    np.fill_diagonal(w, 0)
+    m = np.median(w[np.triu_indices(9, 1)])
+    expected = np.maximum(w - m, 0)
+    np.fill_diagonal(expected, 0)
+    np.testing.assert_array_equal(sm._clip_weights(w, "median"), expected)
+    np.testing.assert_array_equal(sm._clip_weights(w, False), w)
+
+
+@pytest.mark.parametrize("seed", [20, 21, 22])
+def test_default_centering_keeps_a_weaker_small_community(seed):
+    # 18 + 6 columns, loadings 0.4 and 0.2: centering on the median removes
+    # every weight of the small community; the default (lower cluster) keeps
+    # them all, and keeps every weight of the large community too
+    data, labels = _unequal_communities((0.4, 0.2), seed)
+    corrs = tc.timecorr(data, cfun=tc.autofc, rfun=None, weights_params={"var": 25})
+    fits = {}
+    for center in (True, "median"):
+        ws = tc.WeightedStrength(center=center)
+        ws(corrs)
+        fits[center] = sm._clip_weights(np.mean(ws.fits_[-1]["weights"], axis=0),
+                                        center)
+    big, iu = _within(labels, 0)
+    small, _ = _within(labels, 1)
+    assert np.all(fits["median"][iu][small] == 0)
+    assert np.all(fits[True][iu][small] > 0)
+    assert np.all(fits[True][iu][big] > 0)
+
+
+def test_default_centering_columns_of_the_small_community_vary():
+    data, labels = _unequal_communities((0.4, 0.2), 23)
+    corrs = tc.timecorr(data, cfun=tc.autofc, rfun=None, weights_params={"var": 25})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        median = tc.WeightedStrength(center="median")(corrs)
+        default = tc.WeightedStrength()(corrs)
+    for m, d in zip(median, default):
+        assert np.all(np.ptp(m[:, labels == 1], axis=0) == 0)
+        assert np.all(np.ptp(d[:, labels == 1], axis=0) > 0)
+
+
+@pytest.mark.parametrize("center", ["mean", "lower", 0.5, None, 1])
+def test_bad_center_raises(center):
+    with pytest.raises(ValueError, match="center must be"):
+        tc.WeightedStrength(center=center)
+
+
+def test_center_values_are_kept_and_shown():
+    assert tc.WeightedStrength().center is True
+    assert tc.WeightedStrength(center="median").center == "median"
+    assert tc.WeightedStrength(center=False).center is False
+    assert "center='median'" in repr(tc.WeightedStrength(center="median"))

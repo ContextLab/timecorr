@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Shift null with more columns than lags.** The shift null of the
+  automatic community count (`Communities()` and split `WeightedStrength`
+  without `n`, and the default feeding reducer) no longer raises
+  `ValueError` when a step has more columns K than the n distinct lags in
+  `[L, T - L]` (for example 22 or more features at T = 40, or the 150
+  features of a T = 120 recording with the default feeding kernel). Each
+  lag is then used `K // n` or `ceil(K / n)` times within a subject (a
+  random permutation of the lags, repeated, truncated to K and shuffled
+  with the same generator); columns that share a lag keep their dependence
+  in that surrogate, about a fraction `1 / n` of the column pairs. With
+  K <= n the lags are drawn as before (distinct, without replacement), so
+  those results are unchanged. The other requirements (at least 4
+  columns, T >= 40) still raise.
+
 - **Documentation theme.** The Sphinx documentation uses Furo with the
   Contextual Dynamics Lab look of the htfa and hypertools documentation
   (Nunito Sans, lowercase light headings, green brand colors) in place of
@@ -32,10 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the feeding path and PCA on both paths (the defaults of `features` earlier
   in the development of this release, commit d4bb5ba), is
   `tc.features(..., rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)`.
-  The default feeding reducer needs at least 4 features, 40 timepoints and
-  as many distinct shift-null lags in `[L, T - L]` as features (for
-  example at most 21 features at T = 40) at every feeding step that is
-  computed; otherwise `ValueError` names `delta_rfun="weighted_strength"`
+  The default feeding reducer needs at least 4 features and 40 timepoints
+  at every feeding step that is computed; otherwise `ValueError` names `delta_rfun="weighted_strength"`
   (any number of features and timepoints) and the original pipeline's
   settings. At each default feeding step, the communities are fitted to
   that step's correlations; when they would emit fewer than 4 columns (at

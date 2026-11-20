@@ -371,16 +371,56 @@ def test_shift_lags_are_distinct_within_a_subject():
             assert lags.min() >= L and lags.max() <= T - L
 
 
-def test_shift_null_too_short_for_the_columns_raises():
-    # T 40: L 10, so 21 distinct lags in [10, 30]
+def test_shift_null_with_more_columns_than_lags_runs():
+    # T 40: L 10, so 21 distinct lags in [10, 30] for 22 columns: the lags
+    # are reused (balanced), and the threshold is deterministic
     rng = np.random.default_rng(1)
     w = tc.gaussian_weights(40, {"var": 9})
     data = [rng.standard_normal((40, 22)) for _ in range(2)]
-    with pytest.raises(ValueError, match="too short for the shift null"):
-        sm._shift_null_threshold(data, w)
-    with pytest.raises(ValueError, match="number of communities n"):
-        sm._shift_null_threshold(data, w)
+    first = sm._shift_null_threshold(data, w)
+    assert np.isfinite(first)
+    assert sm._shift_null_threshold(data, w) == first
     sm._shift_null_threshold([d[:, :21] for d in data], w)
+
+
+def test_shift_lags_up_to_the_number_of_lags_are_unchanged():
+    # K <= number of distinct lags: the lags drawn without replacement, as
+    # before (bit for bit, same generator state afterwards)
+    for T, K, L in [(40, 21, 10), (40, 5, 10), (600, 108, 50), (300, 201, 50)]:
+        a, b = np.random.default_rng(7), np.random.default_rng(7)
+        for _ in range(5):
+            np.testing.assert_array_equal(
+                sm._shift_lags(a, T, K, L),
+                L + b.choice(T - 2 * L + 1, size=K, replace=False))
+        assert a.integers(1 << 30) == b.integers(1 << 30)
+
+
+@pytest.mark.parametrize("T, K, L", [(40, 22, 10), (40, 63, 10), (40, 64, 10),
+                                     (120, 150, 30), (300, 700, 75)])
+def test_shift_lags_beyond_the_number_of_lags_are_balanced(T, K, L):
+    n = T - 2 * L + 1
+    rng = np.random.default_rng(0)
+    for _ in range(10):
+        lags = sm._shift_lags(rng, T, K, L)
+        assert lags.shape == (K,)
+        assert lags.min() >= L and lags.max() <= T - L
+        counts = np.bincount(lags - L, minlength=n)
+        assert counts.sum() == K
+        assert counts.min() == K // n and counts.max() == -(-K // n)
+        assert np.sum(counts == -(-K // n)) == (K % n or n)
+    # deterministic for a given generator state
+    np.testing.assert_array_equal(
+        sm._shift_lags(np.random.default_rng(3), T, K, L),
+        sm._shift_lags(np.random.default_rng(3), T, K, L))
+    # the order of the columns is shuffled: not the repeated permutation
+    # itself (columns n apart do not always share a lag)
+    lags = sm._shift_lags(np.random.default_rng(3), T, K, L)
+    assert not np.array_equal(lags[:K - n], lags[n:])
+
+
+def test_shift_lags_need_one_lag():
+    with pytest.raises(ValueError, match="no lag"):
+        sm._shift_lags(np.random.default_rng(0), 40, 5, 21)
 
 
 @pytest.mark.parametrize("make", [

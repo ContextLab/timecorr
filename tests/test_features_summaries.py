@@ -722,12 +722,16 @@ def test_n_null_reaches_the_shift_null_of_the_feeding_path(feeding):
     assert thresholds[0] <= thresholds[1]
 
 
-def test_too_few_shift_lags_for_the_features_raises():
-    # T 40 gives 21 distinct lags in [10, 30]; 24 features need 24
+def test_more_features_than_shift_lags_runs():
+    # T 40 gives 21 distinct lags in [10, 30] for 24 features: the shift
+    # null reuses lags (each used once or twice); deterministic
     data, _ = nested(T=40)
-    with pytest.raises(ValueError, match="too short for the shift null"):
-        quiet(tc.features, data, order=1, cfun=tc.autofc, weights_params=WIDE,
-              rfun="PCA", delta_rfun=tc.Communities(), return_delta=True, **FEED)
+    runs = [quiet(tc.features, data, order=1, cfun=tc.autofc, weights_params=WIDE,
+                  rfun="PCA", delta_rfun=tc.Communities(), return_delta=True, **FEED)
+            for _ in range(2)]
+    for a, b in zip(runs[0][1][1], runs[1][1][1]):
+        assert a.shape[0] == 40 and np.all(np.isfinite(a))
+        np.testing.assert_array_equal(a, b)
 
 
 # review item 1: what the pipeline itself holds in a streamed step -----------

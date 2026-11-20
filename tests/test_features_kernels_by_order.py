@@ -223,14 +223,30 @@ def test_events_with_kernels_by_order():
 
 def test_feeding_shift_null_check_uses_each_orders_bandwidth():
     # T 100: L = min(25, max(10, 10 * sd)); the default feeding kernel (sd 5)
-    # gives L 25 and 51 distinct lags, fewer than 60 features; sd 1 gives
-    # L 10 and 81 lags.  The order-1 feeding step reads order 1's kernel
+    # gives L 25 and 51 distinct lags, fewer than 60 features (lags are
+    # reused); sd 1 gives L 10 and 81 lags.  The order-1 feeding step reads
+    # order 1's kernel: its recorded threshold is the shift null with that
+    # order's kernel and bandwidth
+    from timecorr.summaries import _shift_null_threshold
     rng = np.random.default_rng(4)
     x = [rng.normal(size=(100, 60)) for _ in range(2)]
-    with pytest.raises(ValueError, match="L = 25 give 51 distinct lags"):
-        tc.features(x, order=1, return_delta=True, cfun=tc.autofc)
-    with pytest.raises(ValueError, match="L = 25 give 51 distinct lags"):
-        tc.features(x, order=2, cfun=tc.autofc, delta_weights_params={2: {"var": 1}})
+
+    def threshold(var):
+        kernels = ho._step_kernels(100, 2, tc.gaussian_weights, {"var": var})
+        return _shift_null_threshold(x, kernels, bandwidth=float(np.sqrt(var)))
+
+    def recorded(**kw):
+        (_, info) = quiet(tc.features, x, cfun=tc.autofc, return_info=True, **kw)
+        return next(d for d in info if d["order"] == 1 and d["path"] == "feeding")
+
+    default = threshold(25)
+    assert default != threshold(1)
+    first = recorded(order=1, return_delta=True)
+    assert first["null_threshold"] == pytest.approx(default, rel=1e-12)
+    assert recorded(order=2, delta_weights_params={2: {"var": 1}})[
+        "null_threshold"] == pytest.approx(default, rel=1e-12)
+    narrow = recorded(order=1, return_delta=True, delta_weights_params={1: {"var": 1}})
+    assert narrow["null_threshold"] == pytest.approx(threshold(1), rel=1e-12)
     (_, D) = quiet(tc.features, x, order=1, return_delta=True, cfun=tc.autofc,
                    delta_weights_params={1: {"var": 1}})
     assert D[1][0].shape[0] == 100
@@ -262,10 +278,10 @@ def test_two_path_step_is_exported_at_the_top_level():
 
 def test_analysis_communities_use_the_kernel_of_their_order():
     # automatic analysis communities at order 2 (autofc, T 100, 60 feeding
-    # columns): with the default analysis kernel (Gaussian, var 100: sd 10,
-    # L = 25, 51 lags in [25, 75]) the shift null of order 2 had fewer
-    # distinct lags than columns; weights_params={2: {"var": 1}} (sd 1,
-    # L = 10) is used at order 2 only, for the kernel and for the null's L
+    # columns): the default analysis kernel (Gaussian, var 100: sd 10) gives
+    # L = 25 (51 lags in [25, 75], fewer than the columns: lags are reused);
+    # weights_params={2: {"var": 1}} (sd 1, L = 10, 81 lags) is used at
+    # order 2 only, for the kernel and for the null's L
     x = [np.random.RandomState(s).randn(100, 60) for s in range(2)]
     summary = tc.Communities()
     X, D = quiet(
@@ -282,6 +298,11 @@ def test_analysis_communities_use_the_kernel_of_their_order():
         n_null=summary.n_null, bandwidth=1.0,
     )
     assert fit["null_threshold"] == pytest.approx(expected, rel=1e-12)
+    wide = _shift_null_threshold(
+        [np.ascontiguousarray(d, dtype=np.float64) for d in D[1]], kernels,
+        n_null=summary.n_null, bandwidth=10.0,
+    )
+    assert fit["null_threshold"] != pytest.approx(wide, rel=1e-6)
     # order 1 kept the default analysis kernel: its output equals a run
     # without the order map
     X_default, _ = quiet(

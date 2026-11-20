@@ -107,8 +107,13 @@ an order map, so the parameters of a custom kernel that are keyed by integers
 must be wrapped in one (for example ``{1: params, 2: params}``); a dict mixing
 integer and other keys, or with boolean keys, raises ``ValueError``.
 ``two_path_step`` takes the parameters of one order.
-The default feeding reducer needs at least 4 features, 40 timepoints and as
-many distinct shift-null lags in ``[L, T - L]`` as features. When the
+The default feeding reducer needs at least 4 features and 40 timepoints. Its
+shift null circularly shifts each column by a lag from the n integers in
+``[L, T - L]`` (``L = min(T // 4, max(10, 10 * sd))``, sd the kernel's standard
+deviation): with at most n columns, the lags of a subject are distinct; with
+K > n columns, each lag is used ``K // n`` or ``ceil(K / n)`` times within a
+subject, and columns that share a lag (about a fraction ``1 / n`` of the column
+pairs) keep their dependence in that surrogate. When the
 communities found at a feeding step would emit fewer than 4 columns (at most
 half its input features; one when the shift null finds no structure), that step
 emits ``WeightedStrength(split=False, signed=False, center=False)`` of the same

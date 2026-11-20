@@ -923,15 +923,14 @@ _AUTO_FEEDING_MIN_K = 4
 _AUTO_FEEDING_MIN_T = 40
 
 
-def _check_auto_feeding(delta_rfun, d, T, order, bandwidth=_DEFAULT_BANDWIDTH,
-                        previous=None):
+def _check_auto_feeding(delta_rfun, d, T, order, previous=None):
     """
     Raise ``ValueError`` naming the alternatives when the feeding reducer
     resolved from ``delta_rfun="auto"`` (communities) cannot be fitted to
-    (T, d) inputs: fewer than 4 features, fewer than 40 timepoints, or fewer
-    than d distinct shift-null lags in ``[L, T - L]`` (``L = min(T // 4,
-    max(10, 10 * bandwidth))``, ``bandwidth`` the feeding kernel's standard
-    deviation).  ``previous``: the number of communities found at the
+    (T, d) inputs: fewer than 4 features or fewer than 40 timepoints (the
+    shift null then has at least one lag in ``[L, T - L]``, and lags are
+    reused when d exceeds their number; see ``summaries._shift_lags``).
+    ``previous``: the number of communities found at the
     previous order when the d inputs are the community columns of an
     explicit ``Communities`` there (the automatic reducer keeps at least 4
     columns; see ``summaries._auto_emitter``).
@@ -957,15 +956,6 @@ def _check_auto_feeding(delta_rfun, d, T, order, bandwidth=_DEFAULT_BANDWIDTH,
             f"with a shift null){at} needs at least {_AUTO_FEEDING_MIN_K} features "
             f"and {_AUTO_FEEDING_MIN_T} timepoints; got {d} feature"
             f"{'' if d == 1 else 's'}{source} and T = {T}. " + alternatives
-        )
-    L = int(min(T // 4, max(10, 10 * float(bandwidth))))
-    n_lags = T - 2 * L + 1
-    if n_lags < d:
-        raise ValueError(
-            f'The default feeding reducer (delta_rfun="auto": communities, counted '
-            f"with a shift null){at} needs at least as many distinct lags in "
-            f"[L, T - L] as features: T = {T} and L = {L} give {max(n_lags, 0)} "
-            f"distinct lags for {d} features. " + alternatives
         )
 
 
@@ -1342,14 +1332,13 @@ def two_path_step(
         every order: the feeding reducer is ``Communities()`` at order 1 and
         the analysis reducer a summary from order 2); if the default
         feeding reducer
-        (``delta_rfun="auto"``) gets fewer than 4 features, fewer than 40
-        timepoints, or fewer distinct shift-null lags than features (the message names ``delta_rfun="weighted_strength"`` and
+        (``delta_rfun="auto"``) gets fewer than 4 features or fewer than 40
+        timepoints (the message names ``delta_rfun="weighted_strength"`` and
         the original pipeline's settings); for a ``Communities`` (or split
         ``WeightedStrength``) without ``n`` where the number of
         communities cannot be counted automatically (analysis path with a
         ``cfun`` other than ``autofc`` or a ``combine`` other than
-        ``null_combine``; T < 40; fewer distinct shift-null lags than
-        features); and as in ``timecorr`` (subjects of
+        ``null_combine``; T < 40); and as in ``timecorr`` (subjects of
         different shapes, non-numeric columns, an unknown
         ``include_timepoints``, an all-zero kernel, a malformed ``events``
         specification, a dict ``events``, or events that leave no kernel row
@@ -1482,12 +1471,7 @@ def _two_path_step(
         delta_rfun = analysis.get("rfun", "PCA")
     T, d = subjects[0].shape
     if feed:
-        _check_auto_feeding(
-            delta_rfun, d, T, order,
-            _DEFAULT_BANDWIDTH if feeding_function is eye_weights
-            else _bandwidth(feeding_function, feeding_params),
-            previous_communities,
-        )
+        _check_auto_feeding(delta_rfun, d, T, order, previous_communities)
     analysis_streamed = _streams(
         analysis.get("rfun", "PCA"), analysis.get("cfun", isfc),
         analysis.get("combine", null_combine),
@@ -1808,9 +1792,9 @@ def features(
     delta_rfun : None, str, dict, or callable
         Feeding-path reducer, with the same forms as ``rfun``; here
         ``"auto"`` is ``Communities()`` at every order (automatic count; at
-        least 4 features, 40 timepoints, and as many distinct shift-null
-        lags in ``[L, T - L]`` as features, otherwise ``ValueError`` naming
-        the alternatives).  At each feeding step it computes, the candidate
+        least 4 features and 40 timepoints, otherwise ``ValueError`` naming
+        the alternatives; with more features than distinct shift-null lags
+        in ``[L, T - L]``, lags are reused, see Notes).  At each feeding step it computes, the candidate
         communities are fitted to that step's correlations (with the shift
         null) and their emitted columns counted (communities with at least
         2 members; at most half the step's input features).  With 4 or more
@@ -2000,17 +1984,15 @@ def features(
         step (with the defaults, whenever ``order >= 2``, and at
         ``order=1`` with ``return_delta=True``, which computes the order-1
         feeding step and its reducer ``Communities()``); if the default
-        feeding reducer (``delta_rfun="auto"``) gets fewer than 4 features,
-        fewer than 40 timepoints, or fewer distinct shift-null lags than
-        features at a computed feeding step: the input data, or the output
+        feeding reducer (``delta_rfun="auto"``) gets fewer than 4 features
+        or fewer than 40 timepoints at a computed feeding step: the input data, or the output
         of an explicit reducer of the previous order (for example an
         explicit ``Communities()``, whose communities the message then
         names); the message names ``delta_rfun="weighted_strength"`` and
         the original pipeline's settings; for a ``Communities`` (or split ``WeightedStrength``) without
         ``n`` where the number of communities cannot be counted (analysis
         steps with a ``cfun`` other than ``autofc`` or a ``combine`` other
-        than ``null_combine``; T < 40; fewer distinct shift-null lags than
-        features) and for K < 4 nodes; for a malformed
+        than ``null_combine``; T < 40) and for K < 4 nodes; for a malformed
         ``events`` specification or ``events_params`` (including dict keys
         outside ``1..order``), and when the events of an order leave no
         kernel row with 3 or more non-zero weights; and as in ``timecorr``
@@ -2059,10 +2041,12 @@ def features(
     kernel (with its events), and circular shifts of at least
     ``L = min(T // 4, max(10, 10 * sd))`` samples, where sd is the kernel's
     standard deviation (``sqrt(var)`` for kernels with a ``"var"``
-    parameter, otherwise 5), distinct within a subject (drawn without
-    replacement from ``[L, T - L]``; fewer than d such lags for d input
-    features raises ``ValueError`` asking for ``n``), and the summary's
-    ``n_null`` surrogates.
+    parameter, otherwise 5), distinct within a subject when the n integers
+    in ``[L, T - L]`` are at least the d input features (drawn without
+    replacement); with d > n, each lag is used ``d // n`` or
+    ``ceil(d / n)`` times within a subject, and columns that share a lag
+    (about a fraction ``1 / n`` of the column pairs) keep their dependence
+    in that surrogate; and the summary's ``n_null`` surrogates.
 
     Examples
     --------

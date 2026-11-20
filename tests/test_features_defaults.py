@@ -251,16 +251,41 @@ def test_alternatives_complete_after_community_compression():
     assert X[3].shape == (100, 4)
 
 
-def test_default_feeding_needs_k_distinct_shift_lags():
-    # T 40, standard deviation 5: L 10, so 21 distinct lags in [10, 30]; 22
-    # features need 22.  The check runs before anything is computed
+def test_default_feeding_runs_with_more_features_than_shift_lags():
+    # T 40, standard deviation 5: L 10, so 21 distinct lags in [10, 30] for
+    # 22 features: the shift null reuses lags (each used once or twice)
+    # and the result is deterministic
     x = [np.random.default_rng(1).normal(size=(40, 22)) for _ in range(2)]
-    with pytest.raises(ValueError, match="distinct lags") as info:
-        tc.features(x, order=1, return_delta=True, weights_params={"var": 10})
-    _alternatives_named(str(info.value))
+    first = quiet(tc.features, x, order=1, return_delta=True,
+                  weights_params={"var": 10})
+    again = quiet(tc.features, x, order=1, return_delta=True,
+                  weights_params={"var": 10})
+    for part in (0, 1):
+        for a, b in zip(first[part][1], again[part][1]):
+            np.testing.assert_array_equal(a, b)
+    assert [d.shape[0] for d in first[1][1]] == [40, 40]
     X = quiet(tc.features, [a[:, :21] for a in x], order=1, return_delta=True,
               weights_params={"var": 10})
     assert len(X) == 2
+
+
+def test_defaults_run_with_more_features_than_shift_lags():
+    # 2 subjects, T 120, K 150 (default feeding kernel: L 30, 61 distinct
+    # lags in [30, 90]): this raised ValueError before lags could be reused
+    x = [np.random.default_rng(s).standard_normal((120, 150)) for s in range(2)]
+    X, D = quiet(tc.features, x, order=2, return_delta=True)
+    assert len(X) == 3 and len(D) == 3
+    for k in (1, 2):
+        assert len(X[k]) == 2 and len(D[k]) == 2
+        for a in X[k] + D[k]:
+            assert a.shape[0] == 120 and np.all(np.isfinite(a))
+    # order 1: PCA to as many features as the data have
+    assert all(a.shape == (120, 150) for a in X[1])
+    # order 2: WeightedStrength(signed=True), two columns per feeding column
+    assert all(a.shape == (120, 2 * D[1][0].shape[1]) for a in X[2])
+    X_again = quiet(tc.features, x, order=2)
+    for a, b in zip(X[2], X_again[2]):
+        np.testing.assert_array_equal(a, b)
 
 
 # wave 4, D1: the automatic feeding reducer keeps the width -------------------
@@ -434,13 +459,11 @@ def test_explicit_communities_still_raise_after_compression():
 
 
 @pytest.mark.parametrize("shape, match", [((100, 3), "got 3 features"),
-                                          ((39, 6), "T = 39"),
-                                          ((40, 22), "distinct lags")],
-                         ids=["K3", "T39", "lags"])
+                                          ((39, 6), "T = 39")],
+                         ids=["K3", "T39"])
 def test_original_input_errors_stay(shape, match):
-    # the original input: fewer than 4 features, T < 40, or fewer distinct
-    # shift-null lags than features raise at order 1, before anything is
-    # computed, whenever a feeding step is required
+    # the original input: fewer than 4 features or T < 40 raise at order 1,
+    # before anything is computed, whenever a feeding step is required
     x = noise(2, shape, 2)
     for kw in (dict(order=3), dict(order=2), dict(order=1, return_delta=True)):
         with pytest.raises(ValueError, match=match) as info:
@@ -449,6 +472,22 @@ def test_original_input_errors_stay(shape, match):
         _alternatives_named(str(info.value))
     # without a feeding step, order 1 is unaffected
     assert tc.features(x, order=1, weights_params={"var": 10})[1][0].shape[0] == shape[0]
+
+
+def test_original_input_with_more_features_than_shift_lags_runs():
+    # T 40, 22 features (21 distinct shift-null lags in [10, 30]) raised
+    # at order 1 when lags could not be reused; every order now runs, and
+    # the result is deterministic
+    x = noise(2, (40, 22), 2)
+    for kw in (dict(order=3), dict(order=2), dict(order=1, return_delta=True)):
+        first = quiet(tc.features, x, weights_params={"var": 10}, **kw)
+        again = quiet(tc.features, x, weights_params={"var": 10}, **kw)
+        X = first[0] if kw.get("return_delta") else first
+        X_again = again[0] if kw.get("return_delta") else again
+        for k in range(1, kw["order"] + 1):
+            for a, b in zip(X[k], X_again[k]):
+                assert a.shape[0] == 40
+                np.testing.assert_array_equal(a, b)
 
 
 def test_one_no_exceedance_warning_per_order_not_per_subject():

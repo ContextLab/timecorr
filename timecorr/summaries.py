@@ -745,10 +745,12 @@ class Communities(_Summary):
     default 5; ties make it smaller),
     and any exceedance gives at least two communities; the automatic
     count is a heuristic, and ``n`` can be given instead.  The shift null
-    circularly shifts each column of each subject by its own lag (the K
-    lags of a subject are distinct, drawn without replacement from
-    ``[L, T - L]``; a recording with fewer than K such lags raises
-    ``ValueError`` asking for ``n``).  It assumes that dependence between
+    circularly shifts each column of each subject by a lag from the n
+    integers in ``[L, T - L]``: when K <= n, the K lags of a subject are
+    distinct (drawn without replacement); when K > n, each lag is used
+    ``K // n`` or ``ceil(K / n)`` times within a subject, and columns that
+    share a lag (about a fraction ``1 / n`` of the column pairs) keep their
+    dependence in that surrogate.  It assumes that dependence between
     columns does not survive a relative shift of the sizes drawn; strongly
     autocorrelated signals can violate this.  With events, whole columns
     are shifted across event boundaries while the event masks stay
@@ -1084,19 +1086,29 @@ def _accumulate_units(units, K, T_out, signed, b, masks=None):
 
 def _shift_lags(rng, T, K, L):
     """
-    K distinct circular lags drawn without replacement from the integers in
-    ``[L, T - L]`` with the generator ``rng``.  Raise ``ValueError`` when
-    there are fewer than K such integers.
+    K circular lags from the n integers in ``[L, T - L]``, drawn with the
+    generator ``rng``.
+
+    When K <= n: K distinct lags drawn without replacement
+    (``L + rng.choice(n, K, replace=False)``).  When K > n: a random
+    permutation of the n lags is repeated, truncated to K and shuffled with
+    the same generator, so each lag is used ``K // n`` or ``ceil(K / n)``
+    times.  Columns that share a lag keep their dependence under that
+    surrogate: with K > n, about a fraction ``1 / n`` of the column pairs
+    share a lag.  Raise ``ValueError`` when there is no lag (n < 1).
     """
     n_lags = int(T) - 2 * int(L) + 1
-    if n_lags < K:
+    K = int(K)
+    if n_lags < 1:
         raise ValueError(
-            f"the recording is too short for the shift null with this many "
-            f"columns: T = {T} gives {max(n_lags, 0)} distinct lags in "
-            f"[{L}, {T - L}] for K = {K} columns; give the number of "
-            "communities n."
+            f"the recording is too short for the shift null: T = {T} gives "
+            f"no lag in [{L}, {T - L}]; give the number of communities n."
         )
-    return int(L) + rng.choice(n_lags, size=int(K), replace=False)
+    if K <= n_lags:
+        return int(L) + rng.choice(n_lags, size=K, replace=False)
+    lags = np.tile(rng.permutation(n_lags), -(-K // n_lags))[:K]
+    rng.shuffle(lags)
+    return int(L) + lags
 
 
 def _shift_null_threshold(
@@ -1106,10 +1118,13 @@ def _shift_null_threshold(
     Threshold of the automatic number of communities (``autofc`` steps).
 
     Each repetition circularly shifts every column of every subject's data by
-    a lag drawn with ``numpy.random.default_rng(0)`` from the integers in
+    a lag drawn with ``numpy.random.default_rng(0)`` from the n integers in
     ``[L, T - L]``, ``L = min(T // 4, max(10, 10 * bandwidth))``, without
-    replacement within a subject (``_shift_lags``: the K columns of a subject
-    get K distinct lags); computes the subjects' pair weights ``w`` with the given
+    replacement within a subject when K <= n (``_shift_lags``: the K columns
+    of a subject get K distinct lags); when K > n, each lag is used
+    ``K // n`` or ``ceil(K / n)`` times within a subject, and columns that
+    share a lag (about a fraction ``1 / n`` of the column pairs) keep their
+    dependence in that surrogate; computes the subjects' pair weights ``w`` with the given
     kernels and ``autofc`` (streamed, in blocks of at most
     ``max_block_elements`` correlations; None: the estimator's default block
     size, see ``_rows_per_block``); and records the
@@ -1128,9 +1143,7 @@ def _shift_null_threshold(
     Raises
     ------
     ValueError
-        If T < 40, if ``[L, T - L]`` holds fewer than K integers (the
-        recording is too short for the shift null with this many columns),
-        or for inputs ``autofc`` rejects.
+        If T < 40, or for inputs ``autofc`` rejects.
     """
     subjects = _as_subjects(subjects)
     T, K = subjects[0].shape
@@ -1141,8 +1154,6 @@ def _shift_null_threshold(
         )
     L = int(min(T // 4, max(10, 10 * float(bandwidth))))
     n_null = _check_n_null(n_null)
-    if T - 2 * L + 1 < K:
-        _shift_lags(None, T, K, L)  # raises the ValueError that asks for n
     rng = np.random.default_rng(0)
     probe = _Units(subjects, kernels, autofc)
     T_out = probe.kernels[0].shape[0]

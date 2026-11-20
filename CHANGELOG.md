@@ -61,8 +61,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/test_docs_tutorials.py` checks this, that the gallery and the
   notebooks match, and that each notebook has one thumbnail cell with an
   image, a Colab badge naming its own file and no error outputs.
-- `tutorials` extra (`pip install "timecorr[tutorials]"`): what running the
-  notebooks needs (jupyter, ipykernel, nbconvert, polars, hmmlearn,
+- `tutorials` extra: everything the notebooks need; the first code cell of
+  each notebook installs `timecorr[tutorials]` when it runs in Google Colab (jupyter, ipykernel, nbconvert, polars, hmmlearn,
   `htfa[plot,brain3d]`, imageio-ffmpeg).
 
 ### Removed

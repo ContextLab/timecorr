@@ -8,7 +8,8 @@ docs/tutorials.rst (nothing is mocked) and check that:
   docs/tutorials.rst) and every gallery entry is a notebook;
 - each notebook has exactly one code cell tagged ``nbsphinx-thumbnail``, and
   that cell has an image output (the gallery card's figure);
-- each notebook has an "Open in Colab" badge whose URL names its own file;
+- each notebook has an "Open in Colab" badge whose URL names its own file,
+  and its first code cell installs ``timecorr[tutorials]`` on Google Colab;
 - no notebook has an error output;
 - every public name of the package (listed as in tests/test_api_docs.py)
   appears in a code cell of at least one tutorial.
@@ -100,6 +101,18 @@ def test_colab_badge_names_its_own_file(name):
     urls = re.findall(r"https://colab\.research\.google\.com/github/[^\s)\"']+", markdown)
     assert urls, f"{name}: no Open in Colab badge"
     assert COLAB.format(name=name) in urls, f"{name}: badge URLs {urls}"
+
+
+@pytest.mark.parametrize("name", _notebook_names())
+def test_first_code_cell_is_the_colab_install_cell(name):
+    code_cells = [c for c in _load(name)["cells"] if c["cell_type"] == "code"]
+    assert code_cells, f"{name}: no code cells"
+    first = _source(code_cells[0])
+    assert 'if "google.colab" in sys.modules:' in first, f"{name}: {first!r}"
+    installs = re.findall(r"pip install[^\n|]*", first)
+    assert any('"timecorr[tutorials]' in line for line in installs), (
+        f"{name}: the first code cell does not install timecorr[tutorials]: {first!r}"
+    )
 
 
 @pytest.mark.parametrize("name", _notebook_names())

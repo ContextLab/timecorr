@@ -173,7 +173,7 @@ A model name, a dict such as `{"model": "PCA", "params": {"whiten": True}}`, a g
 
 # Tutorials
 
-The tutorials are Jupyter notebooks in `docs/tutorial/`. On [Read the Docs](https://timecorr.readthedocs.io/en/latest/tutorials.html) they form a gallery, shown with the output of a full run. Each link below opens the notebook in Google Colab, where its first code cell installs timecorr.
+The tutorials are Jupyter notebooks in `docs/tutorial/`; [Read the Docs](https://timecorr.readthedocs.io/en/latest/tutorials.html) shows them as a gallery with the output of a full run. Each link below opens the notebook in Google Colab.
 
 - [**Quickstart**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/quickstart.ipynb) (`quickstart.ipynb`): up and running in four calls: one dataset, several subjects, higher orders.
 - [**Kernels**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/kernels.ipynb) (`kernels.ipynb`): the kernels and their parameters, kernel shape and width, one-sided kernels, the delta kernel (co-fluctuations), the output format, and smoothing.
@@ -184,8 +184,6 @@ The tutorials are Jupyter notebooks in `docs/tutorial/`. On [Read the Docs](http
 - [**Event-restricted kernels**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/events.ipynb) (`events.ipynb`): passing event boundaries, finding them with `tc.segment`, several subjects, and events by order.
 - [**Decoding timepoints**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/decoding.ipynb) (`decoding.ipynb`): one decoding step by hand and the four decoders.
 - [**Brain-network animations with HTFA**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/htfa_network_animations.ipynb) (`htfa_network_animations.ipynb`): features of orders 1 to 4 of the story-listening fMRI data analyzed by Owen, Chang & Manning (2021), drawn on the brain with the [htfa](https://htfa.readthedocs.io/en/latest/) toolbox.
-
-To run them locally: `pip install -e ".[tutorials]"`, then `jupyter notebook docs/tutorial/`.
 
 # Installation
 

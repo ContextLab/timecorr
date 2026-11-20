@@ -879,17 +879,13 @@ class Communities(_Summary):
         it, ``max(2, c)`` communities, capped at K // 2 (``c = 0``: one
         community); direct calls with ``n=None`` raise ``ValueError``.
         Default: None.
-    signed : bool or "only"
+    signed : bool
         If True, as many more columns: ``mean over i != j in g of
         sign(mean_t r_ij) r_ij(t)``.  Both columns of a community are
         computed from the same correlations ``r_ij(t)`` within it; on the
         feeding path of ``features``, the next order's correlations
         therefore include the correlation between each community's
-        magnitude column and its own signed column.  ``"only"``: the signed
-        columns alone (one per community; the automatic feeding reducer of
-        ``features`` at orders 2 and above).  A pair whose correlation
-        changes sign over time with a mean near 0 cancels in a signed
-        column and not in a magnitude column.  Default: False.
+        magnitude column and its own signed column.  Default: False.
     n_null : int
         Number of surrogates of the shift null that sets ``null_threshold``
         when ``features`` or ``two_path_step`` count the communities
@@ -982,24 +978,17 @@ class Communities(_Summary):
     _needs_communities = True
 
     def __init__(self, n=None, signed=False, n_null=5):
-        if isinstance(signed, str) and signed != "only":
-            raise ValueError(
-                f'signed must be True, False or "only"; got {signed!r}.'
-            )
         super().__init__(n=n, signed=signed, n_null=n_null)
-        # False with signed="only": the magnitude columns are not emitted
-        self.magnitude = not isinstance(signed, str)
 
     def __repr__(self):
-        signed = self.signed if self.magnitude else "only"
-        return f"Communities(n={self.n}, signed={signed!r}, n_null={self.n_null})"
+        return f"Communities(n={self.n}, signed={self.signed}, n_null={self.n_null})"
 
     def _what(self):
         return "Communities"
 
     def _n_columns(self, fit, K):
         n_kept = int(np.sum(np.bincount(fit["labels"]) >= 2))
-        return n_kept * (int(self.magnitude) + int(self.signed))
+        return n_kept * (2 if self.signed else 1)
 
     def _unit_params(self, fit, unit):
         p = super()._unit_params(fit, unit)
@@ -1016,24 +1005,18 @@ class Communities(_Summary):
         Each row adds its pairs to its community's column.
         """
         column = unit["column"][i0:i1]
-        mag = (
-            np.einsum("ij,ijt->it", unit["coef"][i0:i1], R * R)
-            if self.magnitude
-            else None
-        )
+        mag = np.einsum("ij,ijt->it", unit["coef"][i0:i1], R * R)
         sgn = (
             np.einsum("ij,ijt->it", unit["signed_coef"][i0:i1], R)
             if self.signed
             else None
         )
-        first_signed = unit["n_kept"] if self.magnitude else 0
         for b, col in enumerate(column):
             if col < 0:
                 continue
-            if self.magnitude:
-                out[:, col] += mag[b]
+            out[:, col] += mag[b]
             if self.signed:
-                out[:, first_signed + col] += sgn[b]
+                out[:, unit["n_kept"] + col] += sgn[b]
 
 
 # the summary each name in helpers._SUMMARY_NAMES stands for

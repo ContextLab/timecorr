@@ -1,20 +1,19 @@
 """
-Automatic kernels of ``features`` and ``two_path_step`` (``weights_params="auto"``,
-``delta_weights_params="auto"``, the defaults), the lower rate at which
-``features`` passes feeding features on, and the signed feeding reducer of
-orders 2 and above.
+Automatic kernels of ``features`` and ``two_path_step`` (``weights_params=None``
+and ``delta_weights_params=None``, the defaults, with Gaussian kernels on both
+paths) and the lower rate at which ``features`` passes feeding features on.
 
 The rule: the feeding kernel of a step is a Gaussian whose standard deviation
-is 5 autocorrelation widths of the step's input (at most T / 8); the analysis
-kernel's is that or 10 samples, whichever is larger.  With both automatic and
-no events, ``features`` passes each order's feeding features on at every
-``floor(sd / 2)``-th timepoint (keeping at least 100 timepoints) and returns
-every output at all T timepoints by linear interpolation.
+is 5 autocorrelation widths of the step's input, at most a hundredth of its
+rows and at least 5; the analysis kernel's is that or 10, whichever is larger.
+When no kernel parameters and no events are given, ``features`` passes each
+order's feeding features on at every ``floor(sd / 2)``-th row while at least
+1000 rows remain, and returns every output at all T timepoints by linear
+interpolation.
 
 Everything is computed for real on simulated data; nothing is mocked.
 """
 
-import inspect
 import warnings
 
 import numpy as np
@@ -29,7 +28,8 @@ from timecorr.higher_order import (
 )
 
 LEGACY = dict(rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
-OLD_KERNELS = dict(weights_params=None, delta_weights_params=None)
+# the fixed kernels that were the defaults before the automatic ones
+FIXED = dict(weights_params={"var": 100}, delta_weights_params={"var": 25})
 
 
 def quiet(f, *args, **kwargs):
@@ -63,14 +63,11 @@ def assert_same(a, b):
         np.testing.assert_array_equal(x, y)
 
 
+def gaussian(sd):
+    return {"var": float(sd) ** 2}
+
+
 # the autocorrelation width and the kernel rule --------------------------------
-
-
-@pytest.mark.parametrize("function", [tc.features, tc.two_path_step])
-def test_signature_defaults_are_automatic(function):
-    params = inspect.signature(function).parameters
-    assert params["weights_params"].default == "auto"
-    assert params["delta_weights_params"].default == "auto"
 
 
 def test_width_of_white_noise_is_one():
@@ -84,13 +81,13 @@ def test_width_of_white_noise_is_one():
 def test_width_of_smoothed_noise(sd):
     # white noise smoothed with a Gaussian of standard deviation sd has a
     # Gaussian autocorrelation of standard deviation sqrt(2) sd
-    x = [smooth_noise(s, 6000, 6, sd) for s in range(2)]
+    x = [smooth_noise(s, 20000, 6, sd) for s in range(2)]
     assert _autocorrelation_width(x) == pytest.approx(np.sqrt(2) * sd, rel=0.1)
     assert _auto_sd(x) == pytest.approx(5 * np.sqrt(2) * sd, rel=0.1)
 
 
 def test_width_ignores_constant_columns_and_nan_samples():
-    x = smooth_noise(1, 3000, 4, 6)
+    x = smooth_noise(1, 6000, 4, 6)
     w = _autocorrelation_width([x])
     with_constant = np.column_stack([x, np.full(len(x), 3.0)])
     assert _autocorrelation_width([with_constant]) == w
@@ -100,68 +97,185 @@ def test_width_ignores_constant_columns_and_nan_samples():
     assert _autocorrelation_width([np.ones((50, 3))]) == 1.0
 
 
-def test_kernel_is_at_most_an_eighth_of_the_recording():
-    x = [smooth_noise(2, 400, 5, 30)]
-    assert _auto_sd(x) == 400 / 8
+@pytest.mark.parametrize("T, expected", [(400, 5.0), (800, 8.0), (3000, 30.0)])
+def test_kernel_is_at_most_a_hundredth_of_the_recording_and_at_least_5(T, expected):
+    # smooth input (5 widths would be about 210 rows): the kernel is T / 100
+    # rows, and 5 rows in recordings of fewer than 500 rows
+    x = [smooth_noise(2, T, 5, 30)]
+    assert _auto_sd(x) == expected
 
 
-def test_step_on_white_data_uses_the_old_default_kernels():
+@pytest.mark.parametrize("T", [20, 39, 40, 300])
+def test_white_data_get_the_fixed_kernels_at_every_length(T):
+    # also below 40 timepoints, where only a given feeding reducer runs
+    rng = np.random.default_rng(T)
+    x = [rng.standard_normal((T, 6)) for _ in range(2)]
+    common = dict(order=1, cfun=tc.autofc, rfun="weighted_strength",
+                  delta_rfun="weighted_strength", return_delta=True)
+    X, D = quiet(tc.features, x, **common)
+    Xe, De = quiet(tc.features, x, **common, **FIXED)
+    assert_same(X[1], Xe[1])
+    assert_same(D[1], De[1])
+
+
+def test_step_on_white_data_uses_the_fixed_kernels():
     data, _ = hierarchy()
     X, D = quiet(tc.two_path_step, data, cfun=tc.autofc)
-    Xo, Do = quiet(tc.two_path_step, data, cfun=tc.autofc, **OLD_KERNELS)
-    Xe, De = quiet(tc.two_path_step, data, cfun=tc.autofc,
-                   weights_params={"var": 100}, delta_weights_params={"var": 25})
-    assert_same(X, Xo)
-    assert_same(D, Do)
+    Xn, Dn = quiet(tc.two_path_step, data, cfun=tc.autofc, weights_params=None,
+                   delta_weights_params=None)
+    Xe, De = quiet(tc.two_path_step, data, cfun=tc.autofc, **FIXED)
+    assert_same(X, Xn)
+    assert_same(D, Dn)
     assert_same(X, Xe)
     assert_same(D, De)
 
 
 def test_step_on_smooth_input_follows_the_rule():
-    data, _ = hierarchy()
+    data, _ = hierarchy(T=6000)
     _, D1 = quiet(tc.two_path_step, data, cfun=tc.autofc)
     sd = _auto_sd(D1)
-    assert sd > 25  # D1 was smoothed by a kernel of sd 5: width above 5 sqrt(2)
+    # D1 was smoothed by a kernel of sd 5 (width above 5 sqrt(2)); 5 widths
+    # are below the cap of 6000 / 100 rows
+    assert 35 < sd < 60
     X, D = quiet(tc.two_path_step, D1, cfun=tc.autofc, order=2)
     Xe, De = quiet(tc.two_path_step, D1, cfun=tc.autofc, order=2,
-                   weights_params={"var": sd ** 2},
-                   delta_weights_params={"var": sd ** 2})
+                   weights_params=gaussian(sd), delta_weights_params=gaussian(sd))
     assert_same(X, Xe)
     assert_same(D, De)
-    # and the old kernels (sd 10 and 5) give something else
-    Xo, _ = quiet(tc.two_path_step, D1, cfun=tc.autofc, order=2, **OLD_KERNELS)
+    # and the fixed kernels (sd 10 and 5) give something else
+    Xo, Do = quiet(tc.two_path_step, D1, cfun=tc.autofc, order=2, **FIXED)
     assert not np.allclose(X[0], Xo[0])
+    assert not np.allclose(D[0], Do[0])
 
 
 def test_one_path_automatic_the_other_given():
-    data, _ = hierarchy()
+    data, _ = hierarchy(T=6000)
     _, D1 = quiet(tc.two_path_step, data, cfun=tc.autofc)
     sd = _auto_sd(D1)
     X, D = quiet(tc.two_path_step, D1, cfun=tc.autofc, order=2,
                  weights_params={"var": 64})
     Xe, De = quiet(tc.two_path_step, D1, cfun=tc.autofc, order=2,
-                   weights_params={"var": 64}, delta_weights_params={"var": sd ** 2})
+                   weights_params={"var": 64}, delta_weights_params=gaussian(sd))
+    assert_same(X, Xe)
+    assert_same(D, De)
+    X, D = quiet(tc.two_path_step, D1, cfun=tc.autofc, order=2,
+                 delta_weights_params={"var": 64})
+    Xe, De = quiet(tc.two_path_step, D1, cfun=tc.autofc, order=2,
+                   weights_params=gaussian(sd), delta_weights_params={"var": 64})
     assert_same(X, Xe)
     assert_same(D, De)
 
 
-def test_auto_with_another_analysis_kernel_is_that_kernels_defaults():
-    data, _ = hierarchy(T=300)
-    X = quiet(tc.features, data, order=1, cfun=tc.autofc,
-              weights_function=tc.laplace_weights)
-    Xn = quiet(tc.features, data, order=1, cfun=tc.autofc,
-               weights_function=tc.laplace_weights, weights_params=None)
-    assert_same(X[1], Xn[1])
+def test_autocorrelated_raw_data_get_wider_order_one_kernels():
+    x = [smooth_noise(s, 3000, 8, 3) for s in range(2)]
+    sd = _auto_sd(x)
+    assert sd == pytest.approx(5 * np.sqrt(2) * 3, rel=0.1)  # about 21 samples
+    common = dict(order=1, cfun=tc.autofc, rfun="weighted_strength",
+                  delta_rfun="weighted_strength", return_delta=True)
+    X, D = quiet(tc.features, x, **common)
+    Xe, De = quiet(tc.features, x, **common, weights_params=gaussian(sd),
+                   delta_weights_params=gaussian(sd))
+    assert_same(X[1], Xe[1])
+    assert_same(D[1], De[1])
+    Xo, Do = quiet(tc.features, x, **common, **FIXED)
+    assert not np.allclose(D[1][0], Do[1][0])
+
+
+def test_nan_samples_under_the_defaults():
+    data, _ = hierarchy(T=600)
+    holes = [x.copy() for x in data]
+    holes[0][50:60, 3] = np.nan
+    holes[1][::41, 10] = np.nan
+    assert _auto_sd(holes) == 5.0
+    X, D = quiet(tc.features, holes, order=2, cfun=tc.autofc, return_delta=True)
+    Xe, De = quiet(tc.features, holes, order=2, cfun=tc.autofc, return_delta=True,
+                   **FIXED)
+    for k in (1, 2):
+        for x in X[k] + D[k]:
+            assert x.shape[0] == 600 and np.isfinite(x).all()
+    # T 600: both orders use the fixed kernels' analysis width (see
+    # test_short_recordings_keep_the_fixed_analysis_kernel)
+    assert_same(X[1], Xe[1])
+    assert_same(D[1], De[1])
+    assert_same(X[2], Xe[2])
+
+
+def smooth_data():
+    # not white: 5 autocorrelation widths are about 28 samples, so automatic
+    # kernels would be 15 samples wide (T / 100)
+    x = [smooth_noise(s, 1500, 6, 4) for s in range(2)]
+    assert _auto_sd(x) == 15.0
+    return x
+
+
+def test_another_analysis_kernel_keeps_its_own_defaults():
+    x = smooth_data()
+    X = quiet(tc.features, x, order=1, cfun=tc.autofc, weights_function=tc.laplace_weights)
+    Xe = quiet(tc.features, x, order=1, cfun=tc.autofc, weights_function=tc.laplace_weights,
+               weights_params=dict(tc.helpers.laplace_params))
+    assert_same(X[1], Xe[1])
+
+
+def test_another_feeding_kernel_keeps_its_own_defaults():
+    x = smooth_data()
+    common = dict(order=1, cfun=tc.autofc, weights_params={"var": 100},
+                  delta_rfun="weighted_strength", return_delta=True)
+    _, D = quiet(tc.features, x, delta_weights_function=tc.laplace_weights, **common)
+    _, De = quiet(tc.features, x, delta_weights_function=tc.laplace_weights,
+                  delta_weights_params=dict(tc.helpers.laplace_params), **common)
+    assert_same(D[1], De[1])
 
 
 def test_original_pipeline_keeps_the_kernel_defaults():
-    x = [smooth_noise(s, 300, 6, 4) for s in range(2)]  # not white: width > 1
-    assert _autocorrelation_width(x) > 1
+    x = smooth_data()
     X, D = tc.features(x, order=2, return_delta=True, **LEGACY)
-    Xn, Dn = tc.features(x, order=2, return_delta=True, weights_params=None, **LEGACY)
+    Xe, De = tc.features(x, order=2, return_delta=True, weights_params={"var": 100},
+                         **LEGACY)
     for k in range(3):
+        assert_same(X[k], Xe[k])
+        assert_same(D[k], De[k])
+
+
+def test_orders_missing_from_a_map_are_automatic():
+    data, _ = hierarchy(T=6000)
+    common = dict(order=2, cfun=tc.autofc, return_delta=True)
+    X, D = quiet(tc.features, data, weights_params={1: {"var": 100}},
+                 delta_weights_params={1: {"var": 25}}, **common)
+    sd = _auto_sd(D[1])
+    assert 35 < sd < 60
+    Xe, De = quiet(tc.features, data,
+                   weights_params={1: {"var": 100}, 2: gaussian(sd)},
+                   delta_weights_params={1: {"var": 25}, 2: gaussian(sd)}, **common)
+    Xn, Dn = quiet(tc.features, data, weights_params={1: {"var": 100}, 2: None},
+                   delta_weights_params={1: {"var": 25}, 2: None}, **common)
+    for k in (1, 2):
+        assert_same(X[k], Xe[k])
+        assert_same(D[k], De[k])
         assert_same(X[k], Xn[k])
         assert_same(D[k], Dn[k])
+
+
+# short recordings ------------------------------------------------------------
+
+
+@pytest.mark.parametrize("cfun", [tc.autofc, tc.isfc])
+def test_short_recordings_keep_the_fixed_analysis_kernel(cfun):
+    # up to 1000 timepoints the automatic kernels are at most 10 samples wide
+    # and every order is computed at every timepoint, so X at every order is
+    # what the fixed analysis kernel (variance 100) gives on white data
+    data, _ = hierarchy(T=1000, S=3)
+    (X, D), info = quiet(tc.features, data, order=2, cfun=cfun, return_delta=True,
+                         return_info=True)
+    assert all(e["sampling"] == 1 for e in info)
+    sd = {(e["order"], e["path"]): e["kernel_sd"] for e in info}
+    assert sd[(1, "analysis")] == 10.0 and sd[(1, "feeding")] == 5.0
+    assert sd[(2, "analysis")] == 10.0 and sd[(2, "feeding")] == 10.0
+    Xe, De = quiet(tc.features, data, order=2, cfun=cfun, return_delta=True,
+                   weights_params={"var": 100},
+                   delta_weights_params={1: {"var": 25}, 2: {"var": 100}})
+    for k in (1, 2):
+        assert_same(X[k], Xe[k])
+        assert_same(D[k], De[k])
 
 
 # features: lower rate between orders ---------------------------------------
@@ -180,12 +294,13 @@ def test_interpolation_to_every_timepoint():
 
 
 def test_features_equal_a_chain_of_steps_at_lower_rates():
-    data, _ = hierarchy(T=3000)
-    T = 3000
+    T = 6000
+    data, _ = hierarchy(T=T)
     (X, D), info = quiet(tc.features, data, order=3, cfun=tc.autofc,
                          return_delta=True, return_info=True)
     rows = np.arange(T)
     fed = data
+    sampling = []
     for k in (1, 2, 3):
         sd = _auto_sd(fed)
         x, d = quiet(tc.two_path_step, fed, cfun=tc.autofc, order=k)
@@ -200,39 +315,70 @@ def test_features_equal_a_chain_of_steps_at_lower_rates():
         assert entries[1]["kernel_sd"] == pytest.approx(sd)
         assert entries[0]["kernel_sd"] == pytest.approx(max(sd, 10.0))
         assert entries[0]["sampling"] == entries[1]["sampling"] == rows[1] - rows[0]
-        stride = max(1, min(int(sd // 2), len(rows) // 100))
+        sampling.append(int(rows[1] - rows[0]))
+        stride = max(1, min(int(sd // 2), len(rows) // 1000))
         fed = [u[::stride] for u in d]
         rows = rows[::stride]
-    # order 1 on white data: sd 5, passed on at every 2nd timepoint
-    assert [e["sampling"] for e in info if e["path"] == "analysis"][:2] == [1, 2]
-    assert len(rows) >= 100
+    # order 1 on white data: sd 5, passed on at every 2nd timepoint (3000
+    # rows); order 2: at every 3rd of those (1000 rows)
+    assert sampling == [1, 2, 6]
+    assert len(rows) == 1000
 
 
-def test_short_recordings_are_not_thinned_below_100_timepoints():
-    data, _ = hierarchy(T=300)
+def test_recordings_are_not_thinned_below_1000_rows():
+    data, _ = hierarchy(T=1999)
     (X, D), info = quiet(tc.features, data, order=3, cfun=tc.autofc,
                          return_delta=True, return_info=True)
-    assert all(x.shape[0] == 300 for k in (1, 2, 3) for x in X[k] + D[k])
-    sampling = {e["order"]: e["sampling"] for e in info}
-    # 300 -> 150 timepoints after order 1; never below 100
-    assert sampling == {1: 1, 2: 2, 3: 2}
+    assert all(x.shape[0] == 1999 for k in (1, 2, 3) for x in X[k] + D[k])
+    assert all(e["sampling"] == 1 for e in info)
+    # the chain of steps at the full rate
+    fed = data
+    for k in (1, 2, 3):
+        x, fed = quiet(tc.two_path_step, fed, cfun=tc.autofc, order=k)
+        assert_same(X[k], x)
+        assert_same(D[k], fed)
 
 
-def test_given_kernels_or_events_keep_every_timepoint():
-    data, _ = hierarchy(T=600)
-    for kwargs in (dict(weights_params={"var": 100}),
-                   dict(delta_weights_params={"var": 25}),
-                   dict(events=[300])):
-        (X, D), info = quiet(tc.features, data, order=2, cfun=tc.autofc,
-                             return_delta=True, return_info=True, **kwargs)
-        assert all(e.get("sampling", 1) == 1 for e in info), kwargs
-        # the chain of steps at the full rate
-        x1, d1 = quiet(tc.two_path_step, data, cfun=tc.autofc, **kwargs)
-        x2, d2 = quiet(tc.two_path_step, d1, cfun=tc.autofc, order=2, **kwargs)
-        assert_same(X[1], x1)
-        assert_same(D[1], d1)
-        assert_same(X[2], x2)
-        assert_same(D[2], d2)
+@pytest.mark.parametrize("kwargs", [
+    dict(weights_params={"var": 100}),
+    dict(delta_weights_params={"var": 25}),
+    dict(weights_params={1: {"var": 100}}),
+    dict(events=[1500]),
+    dict(events={2: [1500]}),
+])
+def test_given_kernels_or_events_keep_every_timepoint(kwargs):
+    data, _ = hierarchy(T=3000)
+    (X, D), info = quiet(tc.features, data, order=2, cfun=tc.autofc,
+                         return_delta=True, return_info=True, **kwargs)
+    assert all(e.get("sampling", 1) == 1 for e in info)
+    # the chain of steps at the full rate
+    def at(k):
+        out = {}
+        for name, value in kwargs.items():
+            is_map = isinstance(value, dict) and all(isinstance(key, int) for key in value)
+            out[name] = value.get(k) if is_map else value
+        return out
+    x1, d1 = quiet(tc.two_path_step, data, cfun=tc.autofc, **at(1))
+    x2, d2 = quiet(tc.two_path_step, d1, cfun=tc.autofc, order=2, **at(2))
+    assert_same(X[1], x1)
+    assert_same(D[1], d1)
+    assert_same(X[2], x2)
+    assert_same(D[2], d2)
+
+
+def test_an_empty_events_map_restricts_nothing():
+    # events={} restricts no order: the call is the default call, lower rate
+    # between orders included
+    data, _ = hierarchy(T=3000)
+    (X, D), info = quiet(tc.features, data, order=2, cfun=tc.autofc,
+                         return_delta=True, return_info=True)
+    (Xe, De), info_e = quiet(tc.features, data, order=2, cfun=tc.autofc,
+                             return_delta=True, return_info=True, events={})
+    assert [e["sampling"] for e in info] == [1, 1, 2, 2]
+    assert info_e == info
+    for k in range(3):
+        assert_same(X[k], Xe[k])
+        assert_same(D[k], De[k])
 
 
 def test_info_has_kernel_keys_only_for_automatic_kernels():
@@ -243,71 +389,29 @@ def test_info_has_kernel_keys_only_for_automatic_kernels():
         assert ("kernel_sd" in entry) == (entry["path"] == "feeding")
         assert ("sampling" in entry) == (entry["path"] == "feeding")
     _, info = quiet(tc.features, data, order=2, cfun=tc.autofc, return_info=True,
-                    **OLD_KERNELS)
+                    weights_params={1: {"var": 100}}, delta_weights_params={2: {"var": 25}})
+    keyed = {(e["order"], e["path"]) for e in info if "kernel_sd" in e}
+    assert keyed == {(1, "feeding"), (2, "analysis")}
+    _, info = quiet(tc.features, data, order=2, cfun=tc.autofc, return_info=True,
+                    **FIXED)
+    assert not any("kernel_sd" in e or "sampling" in e for e in info)
+    _, info = tc.features(data, order=2, return_info=True, **LEGACY)
     assert not any("kernel_sd" in e or "sampling" in e for e in info)
 
 
-def test_old_kernels_requested_explicitly():
-    # weights_params=None and delta_weights_params=None are the kernels'
-    # defaults at every order (variance 100 and 25), at every timepoint
-    data, _ = hierarchy(T=600)
-    X, D = quiet(tc.features, data, order=2, cfun=tc.autofc, return_delta=True,
-                 **OLD_KERNELS)
-    Xe, De = quiet(tc.features, data, order=2, cfun=tc.autofc, return_delta=True,
-                   weights_params={"var": 100},
-                   delta_weights_function=tc.gaussian_weights,
-                   delta_weights_params={"var": 25})
-    for k in range(3):
-        assert_same(X[k], Xe[k])
-        assert_same(D[k], De[k])
+# the feeding reducer ---------------------------------------------------------
 
 
-# the signed feeding reducer -------------------------------------------------
-
-
-def test_signed_only_communities_are_the_signed_columns():
-    data, _ = hierarchy(T=400)
-    corrs = tc.timecorr(data, cfun=tc.autofc, rfun=None, weights_params={"var": 25})
-    both = tc.Communities(n=12, signed=True)(corrs)
-    only = tc.Communities(n=12, signed="only")(corrs)
-    for b, o in zip(both, only):
-        assert o.shape == (400, 12)
-        np.testing.assert_array_equal(o, b[:, 12:])
-    assert repr(tc.Communities(signed="only")) == "Communities(n=None, signed='only', n_null=5)"
-    assert repr(tc.Communities()) == "Communities(n=None, signed=False, n_null=5)"
-    with pytest.raises(ValueError, match='signed must be True, False or "only"'):
-        tc.Communities(signed="yes")
-
-
-def test_automatic_feeding_reducer_is_signed_from_order_two():
-    data, _ = hierarchy(T=1500)
-    (X, D), info = quiet(tc.features, data, order=2, cfun=tc.autofc,
-                         return_delta=True, return_info=True, **OLD_KERNELS)
-    feeding = {e["order"]: e for e in info if e["path"] == "feeding"}
-    assert feeding[1]["effective"] == repr(tc.Communities())
-    assert feeding[1]["fallback"] is None and feeding[1]["n_communities"] == 12
-    assert (D[1][0] >= 0).all()  # mean squared correlations
-    # order 2: 12 module columns in 3 top groups give 3 community columns,
-    # fewer than 4, so the step falls back to weighted strength
-    assert feeding[2]["fallback"] == "too_few_community_columns"
-    # with the reducer given, the columns are signed means (some negative)
-    signed = tc.Communities(n=3, signed="only")
-    _, d2 = quiet(tc.two_path_step, D[1], cfun=tc.autofc, order=2,
-                  delta_rfun=signed, **OLD_KERNELS)
-    assert d2[0].shape == (1500, 3)
-    assert (d2[0] < 0).any()
-    expected = tc.Communities(n=3, signed=True)(
-        tc.timecorr(D[1], cfun=tc.autofc, rfun=None, weights_params={"var": 25}))
-    np.testing.assert_allclose(d2[0], expected[0][:, 3:], rtol=1e-9, atol=1e-12)
-
-
-def test_automatic_feeding_reducer_at_order_two_emits_signed_columns():
+def test_automatic_feeding_reducer_is_communities_at_every_order():
     # 4 top groups: 4 community columns at order 2, so no fallback
     data, _ = tc.simulate_hierarchy(S=2, T=3000, nodes_per_module=6, branching=(4,),
                                     n_top=4, taus=(5, 100), set_random_seed=1)
     (X, D), info = quiet(tc.features, data, order=2, cfun=tc.autofc,
                          return_delta=True, return_info=True)
-    entry = [e for e in info if e["order"] == 2 and e["path"] == "feeding"][0]
-    assert entry["effective"] == repr(tc.Communities(signed="only"))
-    assert entry["fallback"] is None
-    assert D[2][0].shape == (3000, entry["n_communities"])
+    for k in (1, 2):
+        entry = [e for e in info if e["order"] == k and e["path"] == "feeding"][0]
+        assert entry["effective"] == repr(tc.Communities())
+        assert entry["fallback"] is None
+        assert D[k][0].shape == (3000, entry["n_communities"])
+        assert (D[k][0] >= 0).all()  # mean squared correlations
+    assert D[1][0].shape[1] == 16 and D[2][0].shape[1] == 4

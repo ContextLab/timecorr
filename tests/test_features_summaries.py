@@ -75,14 +75,10 @@ def test_feeding_kernel_gives_summarized_kernel_correlations():
 
 
 def test_gaussian_feeding_kernel_is_the_default():
-    # delta_weights_params=None gives the Gaussian feeding kernel of variance
-    # 25 at every order, which was the default; the default is now "auto"
-    # (the same kernel function with a width set from each step's input:
-    # tests/test_features_auto_kernels.py), so this pins what None gives
     data = noise()
     common = dict(order=2, cfun=tc.autofc, weights_params={"var": 10},
                   delta_rfun="weighted_strength", return_delta=True)
-    X0, D0 = quiet(tc.features, data, **common, delta_weights_params=None)
+    X0, D0 = quiet(tc.features, data, **common)
     X1, D1 = quiet(tc.features, data, **common, **FEED)
     for k in range(3):
         assert_lists_close(X0[k], X1[k], rtol=0, atol=0)

@@ -55,16 +55,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1080 H.264 videos at 30 frames per second, with linearly interpolated
   frames between timepoints, in `docs/_static/tutorial_media/`). The
   `tutorials` extra includes `htfa[plot,brain3d]>=0.1.0`.
-- Tutorials `quickstart` (four calls, one plot each), `kernels`, `subjects`,
-  `reduce`, `simulate` and `decoding` in `docs/tutorial/`. Every public name
-  of the package appears in a code cell of a tutorial;
+- Tutorials `quickstart` (one dataset, several subjects, higher orders),
+  `kernels`, `subjects`, `reduce`, `simulate` and `decoding` in
+  `docs/tutorial/`. Every public name of the package is used (as
+  `tc.<name>`, imported or called) in a code cell of at least one tutorial;
   `tests/test_docs_tutorials.py` checks this, that the gallery and the
   notebooks match, and that each notebook has one thumbnail cell with an
   image, a Colab badge naming its own file and no error outputs.
-- `tutorials` extra: everything the real-data notebooks need; their first
-  code cell installs `timecorr[tutorials]` when it runs in Google Colab (the
-  other notebooks install only `timecorr`, or `timecorr[segment]`) (jupyter, ipykernel, nbconvert, polars, hmmlearn,
-  `htfa[plot,brain3d]`, imageio-ffmpeg).
+- `tutorials` extra (jupyter, ipykernel, nbconvert, polars, hmmlearn,
+  `htfa[plot,brain3d]`, imageio-ffmpeg): the packages that
+  `htfa_network_animations.ipynb` uses. In Google Colab, that notebook's
+  first code cell installs `timecorr[tutorials]`; the other notebooks install
+  `timecorr` (with `polars` for `subjects`, and `timecorr[segment]` for
+  `events`).
 
 ### Removed
 

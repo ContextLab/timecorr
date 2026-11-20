@@ -12,12 +12,15 @@ docs/tutorials.rst (nothing is mocked) and check that:
   and its first code cell installs timecorr when it runs on Google Colab;
 - no notebook has an error output;
 - every public name of the package (listed as in tests/test_api_docs.py)
-  appears in a code cell of at least one tutorial.
+  is used in a code cell of at least one tutorial: as ``tc.<name>``, imported
+  or called (comments and string literals do not count).
 """
 
+import io
 import json
 import os
 import re
+import tokenize
 
 import pytest
 
@@ -138,12 +141,74 @@ def _public_names():
     return sorted(names)
 
 
-def test_every_public_name_is_in_a_tutorial():
-    code = "\n".join(
-        _source(c)
-        for name in _notebook_names()
-        for c in _load(name)["cells"]
-        if c["cell_type"] == "code"
+def _used_names(cell_source):
+    """
+    Names a code cell uses: ``tc.<name>``, imported, or called.
+
+    Comments and string literals are skipped (tokenize drops them), and
+    IPython magics (lines starting with ``%`` or ``!``) are replaced by
+    ``pass``, so a name only printed or mentioned in a comment does not count.
+    """
+    lines = []
+    for line in cell_source.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith(("%", "!")):
+            line = line[: len(line) - len(stripped)] + "pass"
+        lines.append(line)
+    # Python >= 3.12 tokenizes the inside of f-strings; skip it like other strings
+    fstring_start = getattr(tokenize, "FSTRING_START", None)
+    fstring_end = getattr(tokenize, "FSTRING_END", None)
+    tokens = []
+    depth = 0
+    for t in tokenize.generate_tokens(io.StringIO("\n".join(lines) + "\n").readline):
+        if fstring_start is not None and t.type == fstring_start:
+            depth += 1
+        elif fstring_end is not None and t.type == fstring_end:
+            depth -= 1
+        elif depth == 0 and t.type in (tokenize.NAME, tokenize.OP, tokenize.NEWLINE):
+            tokens.append(t)
+    used = set()
+    statement = []
+    for i, t in enumerate(tokens):
+        if t.type == tokenize.NEWLINE:
+            if statement and statement[0] in ("import", "from"):
+                used.update(statement)
+            statement = []
+            continue
+        statement.append(t.string)
+        if t.type != tokenize.NAME:
+            continue
+        follows_tc = i >= 2 and tokens[i - 1].string == "." and tokens[i - 2].string == "tc"
+        called = i + 1 < len(tokens) and tokens[i + 1].string == "("
+        if follows_tc or called:
+            used.add(t.string)
+    return used
+
+
+def test_used_names_ignores_strings_and_comments():
+    src = (
+        "import sys\n"
+        "from timecorr.decoding import decoder\n"
+        "if 'x' in sys.modules:\n"
+        "    !pip install timecorr\n"
+        "print('null_combine:')  # mat2vec\n"
+        "y = tc.vec2mat(x)\n"
+        "z = smooth(y)\n"
+        "w = f'{tc.isfc}'\n"
     )
-    missing = [n for n in _public_names() if not re.search(r"\b%s\b" % re.escape(n), code)]
-    assert not missing, f"public names in no tutorial code cell: {missing}"
+    used = _used_names(src)
+    assert {"decoder", "vec2mat", "smooth"} <= used
+    assert not {"null_combine", "mat2vec", "isfc"} & used
+
+
+def test_every_public_name_is_in_a_tutorial():
+    used = set()
+    for name in _notebook_names():
+        for c in _load(name)["cells"]:
+            if c["cell_type"] == "code":
+                used |= _used_names(_source(c))
+    missing = [n for n in _public_names() if n not in used]
+    assert not missing, (
+        "public names not used (as tc.<name>, imported or called) in any tutorial "
+        f"code cell: {missing}"
+    )

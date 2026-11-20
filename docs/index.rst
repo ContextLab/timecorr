@@ -39,9 +39,9 @@ Features
 Quick start
 -----------
 
-New to timecorr? The :doc:`quickstart tutorial <tutorial/quickstart>` gets you
-running in four calls, and the :doc:`tutorial gallery <tutorials>` shows every
-part of the toolbox.
+New to timecorr? The :doc:`quickstart tutorial <tutorial/quickstart>` computes
+dynamic correlations, combines subjects and computes higher-order features, and
+the :doc:`tutorial gallery <tutorials>` shows every part of the toolbox.
 
 .. code-block:: python
 

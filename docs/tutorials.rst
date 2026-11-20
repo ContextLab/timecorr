@@ -3,9 +3,8 @@
 Tutorials
 =========
 
-Each card opens a tutorial, shown with the output of a full run. The "Open in
-Colab" badge at the top of a tutorial runs it in Google Colab. Start with the
-quickstart.
+Each card opens a tutorial, shown with the output of a full run. Start with
+the quickstart.
 
 .. nbgallery::
 

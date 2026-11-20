@@ -175,7 +175,7 @@ A model name, a dict such as `{"model": "PCA", "params": {"whiten": True}}`, a g
 
 The tutorials are Jupyter notebooks in `docs/tutorial/`; [Read the Docs](https://timecorr.readthedocs.io/en/latest/tutorials.html) shows them as a gallery with the output of a full run. Each link below opens the notebook in Google Colab.
 
-- [**Quickstart**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/quickstart.ipynb) (`quickstart.ipynb`): up and running in four calls: one dataset, several subjects, higher orders.
+- [**Quickstart**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/quickstart.ipynb) (`quickstart.ipynb`): one dataset, several subjects, higher orders.
 - [**Kernels**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/kernels.ipynb) (`kernels.ipynb`): the kernels and their parameters, kernel shape and width, one-sided kernels, the delta kernel (co-fluctuations), the output format, and smoothing.
 - [**Several subjects**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/subjects.ipynb) (`subjects.ipynb`): data formats (NumPy, pandas, polars), `autofc`, `isfc` and `wisfc`, the combine functions, and a test at each timepoint.
 - [**Reducing correlations**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/reduce.ipynb) (`reduce.ipynb`): models by name, graph measures, `WeightedStrength` and `Communities`.

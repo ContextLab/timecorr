@@ -152,10 +152,23 @@ analysis kernel's default variance 100 (standard deviation 10),
 ``rfun="auto"``, ``delta_rfun="auto"``; 108 nodes, T 1000, A, B and 4
 control subjects in one call).  Development seeds 20000-20011: ``X[2]``
 score -.035 +- .029, control .055 +- .019 (``h`` is not recovered from
-``X[2]``; no assertion); ``D[2]`` (the order-2 feeding features, 3 to 5
-community columns) score .201 +- .020, control .006 +- .017.  Asserted on
-30000-30003 for ``D[2]`` (slow; measured score .249 +- .049, control .051
-+- .009; ``X[2]`` there: -.038 +- .038, control .018 +- .050).  Recovery of
+``X[2]``; no assertion; ``isfc`` correlates each subject's features with
+the other subjects', and under ``shared="order2"``, the generator's default,
+the order-1 couplings are private to each subject); ``D[2]`` (the order-2
+feeding features: 4 or 5 community columns, or 18 columns on the 2 seeds
+where the feeding step fell back to weighted strength) score .199 +- .021,
+control .013 +- .015 (with the uncentered fallback; .201 +- .020, control
+.006 +- .017 with the earlier centered one).  Asserted on 30000-30003 for
+``D[2]`` (slow; measured score .249 +- .049, control .051 +- .009;
+``X[2]`` there: -.038 +- .038, control .018 +- .050).  Same call with
+``cfun=tc.autofc``: development ``X[2]`` .559 +- .022, control -.008 +-
+.025 (``D[2]`` as above: the feeding path does not use ``cfun``); asserted
+on 30000-30003 for both (measured ``X[2]`` .559 +- .026, control .069 +-
+.025).  Literal defaults on ``shared="order1"`` data (order-1 couplings
+shared across subjects): development ``X[2]`` .638 +- .028, control .074
++- .009; ``D[2]`` .293 +- .027, control .012 +- .014; asserted on
+30000-30003 for both (measured ``X[2]`` .659 +- .029, control .067 +-
+.030; ``D[2]`` .250 +- .044, control .007 +- .022).  Recovery of
 structure above order 2 was not measured with the default reducers.
 
 Separate validation of the per-target magnitude bound (slow,
@@ -677,25 +690,30 @@ def test_k702_streamed(seed):
     assert res["growth_gb"] < 6, res
 
 
-def literal_default_scores(seed, T=1000):
+def literal_default_scores(seed, T=1000, shared="order2", **kwargs):
     """
     Decode of ``h`` from the literal default call
     ``tc.features(units, order=2, return_delta=True)`` (no other arguments:
     analysis kernel ``gaussian_weights`` with its default variance 100,
     ``cfun=tc.isfc``, ``rfun="auto"``, ``delta_rfun="auto"``, Gaussian
     feeding kernel with variance 25) on ``simulate_nested`` data with the
-    generator's defaults (108 nodes) and the units of ``case_scores`` (A, B
-    and 4 independent-h control subjects in one call); scores and controls
-    for ``X[2]`` and ``D[2]``.
+    generator's defaults (108 nodes; ``shared`` is passed to the generator)
+    and the units of ``case_scores`` (A, B and 4 independent-h control
+    subjects in one call); scores and controls for ``X[2]`` and ``D[2]``.
+    ``kwargs`` (default none) are passed to ``tc.features``.
     """
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        data, truth = tc.simulate_nested(S=2, T=T, set_random_seed=seed)
+        data, truth = tc.simulate_nested(S=2, T=T, shared=shared, set_random_seed=seed)
         others = [
-            tc.simulate_nested(S=1, T=T, set_random_seed=seed + CONTROL_OFFSET + j)[0][0]
+            tc.simulate_nested(
+                S=1, T=T, shared=shared, set_random_seed=seed + CONTROL_OFFSET + j
+            )[0][0]
             for j in range(N_CONTROLS)
         ]
-        X, D = tc.features([data[0], data[1]] + others, order=2, return_delta=True)
+        X, D = tc.features(
+            [data[0], data[1]] + others, order=2, return_delta=True, **kwargs
+        )
     h = truth["h"]
     res = {}
     for name, F in (("X2", X[2]), ("D2", D[2])):
@@ -708,13 +726,49 @@ def literal_default_scores(seed, T=1000):
 def test_literal_defaults_recover_h_in_the_order2_feeding_features():
     # Literal defaults (literal_default_scores), development seeds
     # 20000-20011: X[2] score -.035 +- .029, control .055 +- .019 (no
-    # recovery: no assertion on X[2]); D[2] score .201 +- .020, control
-    # .006 +- .017.  Asserted for D[2] with the file's rule.
+    # recovery: no assertion on X[2]; isfc correlates each subject's
+    # features with the other subjects', and under shared="order2" the
+    # order-1 couplings are private to each subject, so the order-2 analysis
+    # features carry no structure shared across subjects); D[2] score
+    # .199 +- .021, control .013 +- .015 (measured with the uncentered
+    # feeding fallback; .201 +- .020, control .006 +- .017 before it).
+    # Asserted for D[2] with the file's rule.
     rows = [literal_default_scores(s) for s in TEST_SEEDS]
     score = np.mean([r["D2_score"] for r in rows])
     control = np.mean([r["D2_control"] for r in rows])
-    assert score > 0.201 / 2, (score, control, rows)
+    assert score > 0.199 / 2, (score, control, rows)
     assert abs(control) < 0.15, (score, control, rows)
+
+
+def _assert_recovered(rows, name, dev_mean):
+    score = np.mean([r[name + "_score"] for r in rows])
+    control = np.mean([r[name + "_control"] for r in rows])
+    assert score > dev_mean / 2, (name, score, control, rows)
+    assert abs(control) < 0.15, (name, score, control, rows)
+
+
+@pytest.mark.slow
+def test_autofc_defaults_recover_h_in_order2_features():
+    # cfun=tc.autofc, every other argument default, shared="order2"
+    # (literal_default_scores(seed, cfun=tc.autofc)), development seeds
+    # 20000-20011: X[2] score .559 +- .022, control -.008 +- .025; D[2]
+    # score .199 +- .021, control .013 +- .015 (the feeding path does not
+    # depend on cfun).  Asserted with the file's rule.
+    rows = [literal_default_scores(s, cfun=tc.autofc) for s in TEST_SEEDS]
+    _assert_recovered(rows, "X2", 0.559)
+    _assert_recovered(rows, "D2", 0.199)
+
+
+@pytest.mark.slow
+def test_literal_defaults_recover_h_on_shared_order1_data():
+    # Literal defaults on shared="order1" data (the module couplings g are
+    # shared across subjects, so isfc at order 2 sees them), development
+    # seeds 20000-20011: X[2] score .638 +- .028, control .074 +- .009;
+    # D[2] score .293 +- .027, control .012 +- .014.  Asserted with the
+    # file's rule.
+    rows = [literal_default_scores(s, shared="order1") for s in TEST_SEEDS]
+    _assert_recovered(rows, "X2", 0.638)
+    _assert_recovered(rows, "D2", 0.293)
 
 
 # development table ---------------------------------------------------------

@@ -484,7 +484,10 @@ def test_memory_accounting_after_a_fallback():
     # 0.23053376 GB, of which 0.00077 GB are held while the order-3 streamed
     # analysis step runs on the 6 fallback columns (X_1, X_2 and D_2: 96,000
     # values, with the fits); just below it, that step raises before it
-    # computes anything
+    # computes anything (measured: "The streamed analysis step at order 3
+    # needs at least about 0.231 GB"; the match below accepts a MemoryError
+    # at order 2 or 3 on the 6 input features, so it also holds if a change
+    # of accounting moves the refusal one order earlier)
     x = noise(2, (2000, 6), 4)
     budget = 0.23053376
     X = quiet(tc.features, x, order=3, max_memory_gb=budget)

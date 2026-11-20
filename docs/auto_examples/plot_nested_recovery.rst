@@ -30,7 +30,11 @@ correlations among the modules' time-varying couplings: an order-2 signal.
 The two subjects share only ``h``; their modules' couplings, signs and noise
 are private.
 
-``tc.features(order=2)`` is called with its defaults: a Gaussian kernel with
+``tc.features(order=2)`` is called with its default reducers and feeding
+kernel and two arguments changed: ``cfun=tc.autofc`` (the default is
+``tc.isfc``) and an analysis kernel with a standard deviation of 33
+timepoints (``weights_params={"var": 33 ** 2}``; the default Gaussian has a
+standard deviation of 10).  The defaults kept are a Gaussian kernel with
 a standard deviation of 5 timepoints on the path that feeds order 2 (the
 delta path, also called the feeding path) and the squared-correlation
 summaries: at order 1 the delta path is summarized by ``Communities()``
@@ -49,7 +53,7 @@ scores for one seed (seed 0), without a control; the development values over
 seeds, with controls from subjects with an independent ``h``, are in the
 docstring of ``tests/test_nested_recovery.py``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 35-96
+.. GENERATED FROM PYTHON SOURCE LINES 39-100
 
 
 

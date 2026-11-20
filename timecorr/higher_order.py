@@ -2078,13 +2078,15 @@ def features(
         ``autofc`` computes within-subject correlations.  On
         ``simulate_nested`` data (108 nodes, T 1000, 6 subjects in one call,
         12 seeds, other arguments default), ``h`` was decoded from ``X[2]``
-        with ``autofc`` (score .559 +- .022, control -.008 +- .025) but not
-        with ``isfc`` (-.035 +- .029, control .055 +- .019) when the order-1
+        with ``autofc`` (score .552 +- .023, control -.008 +- .025) but not
+        with ``isfc`` (-.031 +- .033, control .059 +- .020) when the order-1
         couplings are drawn per subject (``shared="order2"``), and with both
-        when they are shared (``shared="order1"``: ``isfc`` .638 +- .028,
-        control .074 +- .009; ``autofc`` .702 +- .012, control -.008 +-
+        when they are shared (``shared="order1"``: ``isfc`` .652 +- .026,
+        control .078 +- .010; ``autofc`` .700 +- .012, control -.008 +-
         .025); see ``tests/test_nested_recovery.py``.  The feeding path
-        does not use ``cfun``.
+        does not use ``cfun``: ``D[2]`` gave .560 +- .020 (control .002 +-
+        .025) and, with shared order-1 couplings, .596 +- .018 (control
+        .010 +- .025).
     rfun : None, str, dict, or callable
         Analysis-path reducer: anything ``helpers.reduce`` accepts (None, a
         model name, a model dict with a ``'model'`` key, a graph measure, a

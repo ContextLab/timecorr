@@ -26,8 +26,10 @@ Including the control subjects in the call changes the fitted communities
 and therefore the score: with global signal 0.5 and communities, the score
 was .617 +- .023 (adjusted Rand index .887) with one control subject in the
 call (3 subjects) and .677 +- .021 (index .956) with four (6 subjects), on
-the same 24 development seeds (both measured with the median centering of
-``WeightedStrength`` of timecorr 0.3.0).  The first design used one control subject
+the same 24 development seeds (both measured with median centering of
+``WeightedStrength`` and before the shift null drew distinct lags per
+subject; with the current code the 6-subject values are .668 +- .022 and
+index .942 +- .005).  The first design used one control subject
 per seed; its control bound failed on asserted seeds (3 of 6 T 1000 cases
 on 30000-30003), as its development standard deviation predicts (about .2
 per seed at T 1000 and .3 at T 3000, so a 4-seed mean has a standard error
@@ -101,9 +103,12 @@ independent-h controls under this protocol (cross-subject ridge map,
 order-1 PCA features of one 6-subject call), not that the order-1
 features hold no information about h.
 Adjusted Rand index of the order-1 communities against the modules: 1.000
-on all seeds (sustained, sign-flip, T 3000), .956 +- .005 with global
-signal 0.5 (not asserted; .942 +- .005 when
-re-measured on the same seeds with the current code).  Automatic count on independent autocorrelated
+on all seeds (sustained, sign-flip, T 3000), .942 +- .005 with global
+signal 0.5 (not asserted).  It was .956 +- .005 while the shift null drew
+the lags of a subject's columns with replacement; columns that share a
+lag keep their dependence in that surrogate, which raised the null
+threshold (.085-.097 on seeds 20000-20007, versus .068-.074 with distinct
+lags) and found 0 to 3 fewer communities per seed.  Automatic count on independent autocorrelated
 noise (K 108, T 1000, two subjects, Gaussian smoothing sd 5, 8 seeds): one
 community (no eigenvalue above the null) on 7 of 8.  The T 3000 and isfc
 rows used 12 seeds to keep the development run near 15 minutes (6

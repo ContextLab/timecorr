@@ -40,7 +40,7 @@ setup(
         ],
         "docs": [
             "sphinx>=4.0.0",
-            "sphinx-book-theme",
+            "furo",
             "sphinx-gallery",
             "numpydoc",
             "nbsphinx",

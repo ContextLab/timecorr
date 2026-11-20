@@ -1193,3 +1193,192 @@ def simulate_nested(
         )
         gs.append(g)
     return data, {"module": module, "supergroup": supergroup, "h": h, "g": gs}
+
+
+def _check_int_sequence(name, value):
+    """A tuple of positive integers from a sequence (ValueError otherwise)."""
+    if isinstance(value, (str, bytes, dict)) or not hasattr(value, "__len__"):
+        raise ValueError(f"{name} must be a sequence of positive integers; got {value!r}.")
+    return tuple(_check_positive_int(f"{name}[{i}]", v) for i, v in enumerate(value))
+
+
+def _hierarchy_signals(rng, T, counts, branching, taus, top=None):
+    """
+    ``[s_1, ..., s_n]`` of one subject (see ``simulate_hierarchy``):
+    ``counts[l-1]`` level-l groups, ``top`` the level-n signals when given.
+    """
+    n = len(taus)
+    s = [None] * n
+    if top is None:
+        top = 0.05 + 0.9 * norm.cdf(1.5 * _smooth(rng, T, counts[n - 1], taus[n - 1]))
+    s[n - 1] = top
+    for l in range(n - 1, 0, -1):  # s_l from s_{l+1}
+        parent = np.repeat(np.arange(counts[l]), branching[l - 1])
+        sp = s[l][:, parent]
+        u = _smooth(rng, T, counts[l], taus[l - 1])[:, parent]
+        v = _smooth(rng, T, counts[l - 1], taus[l - 1])
+        a = np.sqrt(sp) * u + np.sqrt(1 - sp) * v
+        s[l - 1] = norm.cdf(a) if l == 1 else 0.05 + 0.9 * norm.cdf(1.5 * a)
+    return s
+
+
+def simulate_hierarchy(
+    S=2,
+    T=6000,
+    nodes_per_module=6,
+    branching=(4, 4),
+    n_top=4,
+    taus=(5, 50, 500),
+    shared="top",
+    set_random_seed=None,
+):
+    """
+    Simulate nodes in nested groups of any depth with time-varying coupling.
+
+    A level-1 group is a module of ``nodes_per_module`` nodes; a
+    level-``(l+1)`` group holds ``branching[l-1]`` level-``l`` groups; there
+    are ``n_top`` level-``n`` groups, with ``n = len(taus)``.  Each level-``l``
+    group has a signal ``s_l(t)`` that sets how strongly its children are
+    coupled.  With ``smooth(tau)`` a unit-variance Gaussian white noise series
+    smoothed with a Gaussian of standard deviation ``tau`` and standardized,
+    and ``Phi`` the standard normal CDF, for each subject:
+
+    - ``s_n(t) = 0.05 + 0.9 Phi(1.5 smooth(taus[n-1]))``, one per top group.
+    - For ``l < n``, group ``m`` at level ``l`` with parent ``p`` (at level
+      ``l + 1``): ``a_m(t) = sqrt(s_{l+1,p}) u_p(t) + sqrt(1 - s_{l+1,p})
+      v_m(t)``, where ``u`` (one per parent) and ``v`` (one per level-``l``
+      group) are ``smooth(taus[l-1])`` series; ``s_1 = Phi(a)`` and, for
+      ``1 < l < n``, ``s_l = 0.05 + 0.9 Phi(1.5 a)``.
+    - ``x_i(t) = sqrt(g) e_i f_m(t) + sqrt(1 - g) z_i(t)`` for node ``i`` in
+      module ``m``, with ``g = s_{1,m}(t)``, ``f`` and ``z`` white standard
+      normal noise and ``e_i`` a fixed random sign per node.
+
+    Siblings at level ``l`` share ``u`` of their parent with weight
+    ``sqrt(s_{l+1})``, so their latent series ``a`` are correlated by about
+    ``s_{l+1}`` over windows short compared with ``s_{l+1}``'s timescale;
+    each node has variance 1 whatever the signals.  With ``n = 2`` this is the
+    sustained coupling of ``simulate_nested`` (``s_2`` is ``h``, ``s_1`` is
+    ``g``).  The model assumes that higher levels vary more slowly
+    (increasing ``taus``); this is not checked.
+
+    Parameters
+    ----------
+    S : int
+        Number of subjects.  Default: 2.
+    T : int
+        Number of timepoints; at least ``8 * max(taus)`` for the smoothing.
+        Default: 6000.
+    nodes_per_module : int
+        Number of nodes in each module (level-1 group).  Default: 6.
+    branching : sequence of int
+        ``branching[l-1]`` is the number of level-``l`` groups in each
+        level-``(l+1)`` group; ``len(branching) == len(taus) - 1`` (empty for
+        one level).  Default: (4, 4).
+    n_top : int
+        Number of level-``n`` groups.  Default: 4.
+    taus : sequence of int
+        ``taus[l-1]`` is the standard deviation, in samples, of the smoothing
+        of the level-``l`` series (``u`` and ``v`` for ``l < n``, ``s_n`` for
+        ``l = n``); its length is the depth ``n >= 1``.  Default:
+        (5, 50, 500).
+    shared : {"top", "all", "none"}
+        ``"top"``: subjects share ``s_n`` only (every ``u`` and ``v`` is
+        drawn per subject).  ``"all"``: subjects share every ``s_l`` (all
+        ``u`` and ``v``).  ``"none"``: nothing is shared.  ``f``, ``z`` and
+        ``e`` are always private to each subject.  Default: ``"top"``.
+    set_random_seed : bool, int or None
+        ``None`` or ``False``: a fresh random seed.  ``True``: seed 123.  An
+        integer: that seed.  NumPy's global random state is not used.
+
+    Returns
+    -------
+    data : list of numpy.ndarray
+        ``S`` arrays of shape ``(T, K)``, with ``K = n_top * prod(branching) *
+        nodes_per_module``.
+    truth : dict
+        ``"groups"``: ``(n, K)`` integer array; row ``l-1`` is the level-``l``
+        group of each node.  ``"signals"``: a list over subjects of lists
+        ``[s_1, ..., s_n]``, ``s_l`` of shape ``(T, number of level-l
+        groups)``.  ``"top"``: ``s_n`` of subject 0 (shared by every subject
+        unless ``shared="none"``).  ``"taus"`` and ``"branching"``: tuples.
+
+    Raises
+    ------
+    ValueError
+        For a size that is not a positive integer, ``taus`` or
+        ``branching`` that is not a sequence of positive integers, an empty
+        ``taus``, ``len(branching) != len(taus) - 1``, ``T < 8 * max(taus)``,
+        or an unknown ``shared``.
+    TypeError
+        For a ``set_random_seed`` that is not None, a bool or an integer.
+
+    Examples
+    --------
+    >>> import timecorr as tc
+    >>> data, truth = tc.simulate_hierarchy(S=2, T=400, nodes_per_module=3,
+    ...                                     branching=(2, 3), n_top=2,
+    ...                                     taus=(2, 5, 20), set_random_seed=0)
+    >>> len(data), data[0].shape, truth["groups"].shape
+    (2, (400, 36), (3, 36))
+    >>> [s.shape for s in truth["signals"][0]]
+    [(400, 12), (400, 6), (400, 2)]
+    """
+    S = _check_positive_int("S", S)
+    T = _check_positive_int("T", T)
+    per_mod = _check_positive_int("nodes_per_module", nodes_per_module)
+    n_top = _check_positive_int("n_top", n_top)
+    if isinstance(taus, (str, bytes, dict)) or not hasattr(taus, "__len__") or not len(taus):
+        raise ValueError(f"taus must be a non-empty sequence of positive integers; got {taus!r}.")
+    taus = _check_int_sequence("taus", taus)
+    branching = _check_int_sequence("branching", branching)
+    n = len(taus)
+    if len(branching) != n - 1:
+        raise ValueError(
+            f"len(branching) must be len(taus) - 1 = {n - 1}; got {len(branching)}."
+        )
+    if T < 8 * max(taus):
+        raise ValueError(
+            f"T must be at least 8 * max(taus) = {8 * max(taus)} for the smoothing; "
+            f"got T={T}."
+        )
+    if shared not in ("top", "all", "none"):
+        raise ValueError(f"shared must be 'top', 'all' or 'none'; got {shared!r}.")
+    rng = _make_rng(set_random_seed)
+
+    counts = [n_top]  # counts[l-1]: number of level-l groups
+    for b in reversed(branching):
+        counts.insert(0, counts[0] * b)
+    module = np.repeat(np.arange(counts[0]), per_mod)
+    K = len(module)
+    groups = [module]
+    for b in branching:
+        groups.append(groups[-1] // b)
+    groups = np.vstack(groups).astype(int)
+
+    if shared == "all":
+        common = _hierarchy_signals(rng, T, counts, branching, taus)
+    elif shared == "top":
+        top = _hierarchy_signals(rng, T, counts[n - 1:], (), taus[n - 1:])[0]
+
+    data, signals = [], []
+    for _ in range(S):
+        if shared == "all":
+            s = [x.copy() for x in common]
+        else:
+            s = _hierarchy_signals(
+                rng, T, counts, branching, taus, top if shared == "top" else None
+            )
+        g = s[0][:, module]
+        e = rng.choice([-1.0, 1.0], K)
+        f = rng.standard_normal((T, counts[0]))[:, module]
+        z = rng.standard_normal((T, K))
+        data.append(np.sqrt(g) * e * f + np.sqrt(1 - g) * z)
+        signals.append(s)
+    truth = {
+        "groups": groups,
+        "signals": signals,
+        "top": signals[0][n - 1],
+        "taus": taus,
+        "branching": branching,
+    }
+    return data, truth

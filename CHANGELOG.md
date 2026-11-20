@@ -360,6 +360,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   coupling; returns `(data, truth)` with the modules, supergroups, `h` and
   the couplings `g`. Options for sign-flipping and transient coupling, a
   global signal, and coupling shared across subjects (`shared="order1"`).
+- `tc.simulate_hierarchy`: nodes in nested groups of any depth `n =
+  len(taus)` (modules of `nodes_per_module` nodes; `branching[l-1]`
+  level-`l` groups per level-`(l+1)` group; `n_top` top groups), with one
+  signal per group at every level. Each level's signal sets how strongly its
+  children are coupled, on the timescale `taus[l-1]`; with two levels it has
+  the form of the sustained coupling of `simulate_nested`. Subjects share
+  the top signals (`shared="top"`), every signal (`"all"`) or nothing
+  (`"none"`); returns `(data, truth)` with the group of each node at each
+  level and the signals.
 - `tests/test_nested_recovery.py`: decoding of `h` from order-2 features
   across subjects on `simulate_nested` data, with controls from an
   independent `h`, the raw data and the order-1 features; recovery of the

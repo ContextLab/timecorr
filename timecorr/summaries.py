@@ -595,7 +595,19 @@ class WeightedStrength(_Summary):
     K >= 4, while K < 4 is never centered; ``center=False`` keeps such
     coupling.  The recovery of the order-2 signal with a global signal
     added (``tests/test_nested_recovery.py``) was measured with centering;
-    it was not measured with ``center=False``.
+    it was not measured with ``center=False``.  The median is taken over all
+    pairs, so when more than half the pairs lie within one community the
+    median is a within-community weight of that community, and centering
+    removes most of that community's weights.  Measured on two planted
+    communities of 18 and 6 nodes (153 of the 276 pairs within the larger
+    one; 2 subjects, T 1000, static coupling, ``autofc`` with the default
+    kernel, seeds 0-2): with equal loadings, about 18% of the larger
+    community's clipped weights are 0 and their mean is about 11% of its
+    mean pair weight (between-community weights are all 0); when the
+    smaller community is the more weakly coupled one, every clipped weight
+    within it is 0, so it contributes nothing to the magnitude columns.
+    With two communities of 12 nodes, no within-community weight is 0
+    (``tests/test_summaries.py::test_centering_with_a_large_community``).
     With K = 2 the two magnitude columns are identical (both are
     ``a_12 r_12(t)**2``), so a following correlation step sees two copies of
     one series; with K = 1 there are no pairs and the column is 0.
@@ -754,8 +766,13 @@ class Communities(_Summary):
     columns does not survive a relative shift of the sizes drawn; strongly
     autocorrelated signals can violate this.  With events, whole columns
     are shifted across event boundaries while the event masks stay
-    fixed.  ``fits_[-1]["n"]`` is the number of communities the
-    clustering found.  Calling the instance fits to the given units and
+    fixed.  ``C`` is centered on the median over all pairs, as in
+    ``WeightedStrength``: with communities of 18 and 6 nodes where the
+    smaller one is the more weakly coupled (see ``WeightedStrength``), the
+    automatic count found 6 to 8 communities (adjusted Rand index 0.39 to
+    0.90 against the two planted ones) at seeds 0-2, and 2 with equal
+    loadings at seeds 0, 1 and 3 (3 at seed 2).  ``fits_[-1]["n"]`` is the
+    number of communities the clustering found.  Calling the instance fits to the given units and
     transforms the same units; the communities come from the data being
     summarized.  ``fit`` and ``transform`` separate the two; with
     ``signed=True``, ``transform`` matches units to the fitted units by

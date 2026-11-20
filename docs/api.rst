@@ -350,7 +350,10 @@ the mean over the fitted units), and ``fits_`` records the fits
 ``features`` and ``two_path_step`` append one). ``WeightedStrength(center=False)``
 uses the pair weights without median centering (with ``center=True``, the
 default, coupling equal for every pair gives zero magnitude columns for
-K >= 4 nodes); ``n_null`` sets the number of shift-null surrogates of the
+K >= 4 nodes, and when more than half the pairs lie within one community the
+median is a weight of that community, so centering removes most of its
+weights and zeroes those of a more weakly coupled smaller community; see the
+``WeightedStrength`` Notes); ``n_null`` sets the number of shift-null surrogates of the
 automatic count of communities (default 5).
 
 .. code-block:: python

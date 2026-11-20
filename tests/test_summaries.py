@@ -868,3 +868,71 @@ def test_round_off_snapping_agrees_streamed_and_materialized():
         mat = tc.WeightedStrength(split=False, signed=False, center=False)(corrs)
     assert np.all(np.ptp(D[2], axis=0) == 0)
     np.testing.assert_allclose(D[2], mat, rtol=1e-12)
+
+
+# two planted communities of unequal size: centering on the median ---------
+
+
+def _unequal_communities(rhos, seed, sizes=(18, 6), T=1000):
+    """Two subjects; community g (sizes[g] columns) shares a factor with
+    loading sqrt(rhos[g]); static coupling."""
+    labels = np.repeat(np.arange(len(sizes)), sizes)
+    r = np.array(rhos)[labels]
+    rng = np.random.default_rng(seed)
+    data = []
+    for _ in range(2):
+        f = rng.standard_normal((T, len(sizes)))
+        noise = rng.standard_normal((T, len(labels)))
+        data.append(np.sqrt(r) * f[:, labels] + np.sqrt(1 - r) * noise)
+    return data, labels
+
+
+def _within(labels, g):
+    iu = np.triu_indices(len(labels), 1)
+    return (labels[iu[0]] == g) & (labels[iu[1]] == g), iu
+
+
+@pytest.mark.parametrize("seed", [0, 1])
+def test_centering_with_a_large_community(seed):
+    # 18 + 6 columns: 153 of the 276 pairs are within the large community,
+    # so the median pair weight m is a within-community weight of the large
+    # community.  Measured (seeds 0-2): with equal loadings (0.3) about 18%
+    # of the large community's clipped weights are 0 and their mean is about
+    # 11% of its mean pair weight; when the small community is weaker
+    # (loadings 0.4 and 0.2) every clipped weight of the small community is
+    # 0 and the automatic Communities count splits the large community
+    # (6 to 8 communities); with 12 + 12 columns no within weight is 0
+    for rhos in ((0.3, 0.3), (0.4, 0.2)):
+        data, labels = _unequal_communities(rhos, seed)
+        ws, comm = tc.WeightedStrength(), tc.Communities()
+        quiet_features = dict(order=1, cfun=tc.autofc, rfun=ws, delta_rfun=comm,
+                              return_delta=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            tc.features(data, **quiet_features)
+        wbar = np.mean(ws.fits_[-1]["weights"], axis=0)
+        a = sm._clip_weights(wbar)
+        big, iu = _within(labels, 0)
+        small, _ = _within(labels, 1)
+        w, a = wbar[iu], a[iu]
+        m = np.median(w)
+        assert w[big].min() - 0.05 < m < w[big].max()
+        assert np.all(a[~(big | small)] == 0)
+        if rhos == (0.3, 0.3):
+            assert 0 < np.mean(a[big] == 0) < 0.5
+            assert a[big].mean() < 0.25 * w[big].mean()
+        else:
+            assert np.all(a[small] == 0)
+            assert a[big].mean() < 0.25 * w[big].mean()
+            assert comm.fits_[-1]["n"] > 2
+    data, labels = _unequal_communities((0.3, 0.3), seed, sizes=(12, 12))
+    ws = tc.WeightedStrength()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        tc.features(data, order=1, cfun=tc.autofc, rfun=ws,
+                    delta_rfun="weighted_strength")
+    wbar = np.mean(ws.fits_[-1]["weights"], axis=0)
+    a = sm._clip_weights(wbar)
+    for g in (0, 1):
+        sel, iu = _within(labels, g)
+        assert np.all(a[iu][sel] > 0)

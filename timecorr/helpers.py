@@ -717,6 +717,18 @@ _WCORR_BLOCK_ELEMENTS = 2**23
 # block-sized products per row in the estimator's NaN path (one without NaN)
 _WCORR_NAN_PRODUCTS = 10
 
+# Time slicing of the estimator's kernel products (see ``_time_slices``): the
+# output timepoints are processed in chunks of this many kernel rows, each
+# against the span of kernel columns where the chunk has non-zero weight.
+_TIME_CHUNK = 128
+# Slicing is used only when the spans cover at most this fraction of the
+# kernel's entries; otherwise the full products are computed.
+_TIME_SLICE_MAX_FRACTION = 0.5
+# Private switch: False always computes the full products.
+_TIME_SLICING = True
+# Private hook for tests: when a list, ``_time_slices`` appends its result.
+_time_slice_log = None
+
 # Relative round-off of removing a column's mean (a few float64 spacings).
 _ROUND_OFF = 64 * np.finfo(np.float64).eps
 
@@ -811,18 +823,70 @@ def _wcorr_inputs(a, b, weights):
     return a, b, weights, support
 
 
+def _time_slices(weights):
+    """
+    Chunks of a kernel's rows and the span of columns where each has weight,
+    or None when slicing would not save work.
+
+    ``weights`` is a (T', T) kernel without NaN weights.  The rows are split
+    into consecutive chunks of ``_TIME_CHUNK`` rows; for each chunk
+    ``(t0, t1, c0, c1)``, every non-zero weight of rows ``t0:t1`` lies in
+    columns ``c0:c1`` (``c0 == c1`` when the chunk has no weight).  Returns
+    None when ``_TIME_SLICING`` is False or when the spans cover more than
+    ``_TIME_SLICE_MAX_FRACTION`` of the kernel's entries.
+    """
+    if not _TIME_SLICING:
+        slices = None
+    else:
+        nonzero = weights != 0
+        T_out, T = nonzero.shape
+        has = nonzero.any(axis=1)
+        first = np.where(has, nonzero.argmax(axis=1), T)
+        end = np.where(has, T - nonzero[:, ::-1].argmax(axis=1), 0)
+        slices = []
+        covered = 0
+        for t0 in range(0, T_out, _TIME_CHUNK):
+            t1 = min(T_out, t0 + _TIME_CHUNK)
+            c0, c1 = int(first[t0:t1].min()), int(end[t0:t1].max())
+            if c1 <= c0:
+                c0 = c1 = 0
+            slices.append((t0, t1, c0, c1))
+            covered += (t1 - t0) * (c1 - c0)
+        if covered > _TIME_SLICE_MAX_FRACTION * T_out * T:
+            slices = None
+    if _time_slice_log is not None:
+        _time_slice_log.append(slices)
+    return slices
+
+
+def _kernel_product(W, x, slices):
+    """
+    ``W @ x`` for a (T', T) kernel and a (T, n) matrix; with ``slices`` from
+    ``_time_slices``, each chunk of rows is multiplied with its span of
+    columns only (equal up to the order of summation).
+    """
+    if slices is None:
+        return W @ x
+    out = np.zeros((W.shape[0], x.shape[1]))
+    for t0, t1, c0, c1 in slices:
+        if c1 > c0:
+            out[t0:t1] = W[t0:t1, c0:c1] @ x[c0:c1]
+    return out
+
+
 def _wcorr_setup(a, b, weights, autocorrelation):
     """
-    The terms shared by every block of ``_wcorr_block``: the kernel, the
-    centered data and, without NaN samples, each feature's kernel-weighted
-    moments (computed once; with ``autocorrelation`` those of ``a`` serve for
-    ``b`` too).  Returns a dict.
+    The terms shared by every block of ``_wcorr_block``: the kernel, its time
+    slices (``_time_slices``), the centered data and, without NaN samples,
+    each feature's kernel-weighted moments (computed once; with
+    ``autocorrelation`` those of ``a`` serve for ``b`` too).  Returns a dict.
     """
     W = weights
     A = np.abs(W)
     a = _nan_center(a)
     b = _nan_center(b)
-    state = {"T": a.shape[0], "W": W, "A": A, "a": a, "b": b}
+    slices = _time_slices(W)
+    state = {"T": a.shape[0], "W": W, "A": A, "a": a, "b": b, "slices": slices}
     state["active"] = A.sum(axis=1) > 0
     state["has_nan"] = bool(np.isnan(a).any() or np.isnan(b).any())
 
@@ -831,11 +895,11 @@ def _wcorr_setup(a, b, weights, autocorrelation):
         state["sw"] = W.sum(axis=1)[:, np.newaxis]
 
         def moments(x):
-            mean = _safe_divide(A @ x, s)
-            msq = A @ (x**2)
+            mean = _safe_divide(_kernel_product(A, x, slices), s)
+            msq = _kernel_product(A, x**2, slices)
             var = msq - s * mean**2
             zero = var <= _ZERO_VARIANCE_TOL * msq
-            return mean, W @ x, np.where(zero, 0.0, var), zero
+            return mean, _kernel_product(W, x, slices), np.where(zero, 0.0, var), zero
 
         state["ma"], state["wa"], state["va"], state["za"] = moments(a)
         if autocorrelation:
@@ -875,6 +939,7 @@ def _wcorr_block(state, i0, i1, j0):
     T = state["T"]
     W = state["W"]
     A = state["A"]
+    slices = state["slices"]
     Kb = state["b"].shape[1]
     shape = (W.shape[0], i1 - i0, Kb - j0)
 
@@ -882,7 +947,7 @@ def _wcorr_block(state, i0, i1, j0):
         a, b = state["a"], state["b"]
         ma, mb, wa, wb = state["ma"], state["mb"], state["wa"], state["wb"]
         prod = (a[:, i0:i1, np.newaxis] * b[:, np.newaxis, j0:]).reshape(T, -1)
-        cross = (W @ prod).reshape(shape)
+        cross = _kernel_product(W, prod, slices).reshape(shape)
         ma_i = ma[:, i0:i1, np.newaxis]
         mb_j = mb[:, np.newaxis, j0:]
         num = (
@@ -906,9 +971,9 @@ def _wcorr_block(state, i0, i1, j0):
             [t.reshape(T, -1) for t in (pair_ok.astype(float), x, y, x**2, y**2)],
             axis=1,
         )
-        s0, sx, sy, sxx, syy = np.split(A @ terms, 5, axis=1)
-        w0, wx, wy = np.split(W @ terms[:, : 3 * n], 3, axis=1)
-        wxy = W @ (x * y).reshape(T, -1)
+        s0, sx, sy, sxx, syy = np.split(_kernel_product(A, terms, slices), 5, axis=1)
+        w0, wx, wy = np.split(_kernel_product(W, terms[:, : 3 * n], slices), 3, axis=1)
+        wxy = _kernel_product(W, (x * y).reshape(T, -1), slices)
         mx = _safe_divide(sx, s0)
         my = _safe_divide(sy, s0)
         num = (wxy - mx * wy - my * wx + mx * my * w0).reshape(shape)
@@ -917,7 +982,7 @@ def _wcorr_block(state, i0, i1, j0):
         zero = (var_a <= _ZERO_VARIANCE_TOL * sxx) | (var_b <= _ZERO_VARIANCE_TOL * syy)
         var_a, var_b, zero = (v.reshape(shape) for v in (var_a, var_b, zero))
         # two samples always give r = +-1: fewer than 3 is undefined
-        few = (state["support"] @ terms[:, :n]).reshape(shape) < 3
+        few = _kernel_product(state["support"], terms[:, :n], slices).reshape(shape) < 3
         few_any = few.reshape(shape[0], -1).any(axis=1)
         undefined = zero | few
 

@@ -210,6 +210,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `set_random_seed=0` is a real seed.
 - `plot_weights` draws on a given axis, returns it, and does not call
   `plt.show()`.
+- **Time-sliced estimation.** The estimator (`wcorr`, and through it
+  `isfc`, `wisfc`, `autofc`, `timecorr` and the streamed steps of
+  `features`) processes the output timepoints in chunks of 128 kernel rows
+  and multiplies each chunk only with the samples in the span of columns
+  where its rows have non-zero weight (NaN weights count as 0). Kernels with
+  zero bands benefit: a Gaussian underflows to exactly 0 beyond a finite
+  distance (beyond 192 samples for variance 25), one-sided kernels are zero
+  on one side, and event-restricted kernels are block diagonal. When the
+  spans cover more than half of the kernel's entries the full products are
+  computed as before. Results equal the full computation up to the order of
+  floating-point summation, and the warnings are unchanged. Measured:
+  `features(order=1, cfun=autofc, rfun=WeightedStrength(signed=True))` on 2
+  subjects of T 6000, K 96 (random data, default kernel, Apple Accelerate
+  BLAS with default threads) took 38.6 s before and 12.3 s after. The
+  memory estimate (`estimate_memory_gb`) is unchanged.
 
 ### Added
 

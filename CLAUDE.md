@@ -73,7 +73,7 @@ The `timecorr` function accepts:
 - `combine`: how per-subject results are combined (`null_combine` keeps them separate)
 - `rfun`: dimensionality reduction applied to the vectorized correlations (a model name, a graph measure, a summary such as `tc.WeightedStrength(signed=True)` or `"communities"`, or a callable); in `features` also `"auto"` (the default) and dicts keyed by order, with `delta_rfun` for the feeding path
 
-The estimator (`wcorr`) is a kernel-weighted Pearson correlation; a true delta kernel (`eye_weights`) gives co-fluctuations (products of z-scored series).
+The estimator (`wcorr`) is a kernel-weighted Pearson correlation; a true delta kernel (`eye_weights`) gives co-fluctuations (products of z-scored series). Its kernel products are time sliced: chunks of 128 kernel rows are multiplied only with the span of columns where they have non-zero weight, unless the spans cover more than half the kernel (`helpers._TIME_SLICING = False` forces the full products; `tests/test_time_sliced_estimation.py` compares both).
 
 ### Data Flow
 
@@ -85,7 +85,7 @@ The estimator (`wcorr`) is a kernel-weighted Pearson correlation; a true delta k
 
 ## Testing Framework
 
-- Uses `pytest`; tests are in `tests/` (one file per area: estimator, kernels, formatting, reduce, features, decoders, simulate, higher-order recovery, events (`test_events.py`), segmentation and on-demand installation (`test_segment.py`), recovery with event-restricted kernels (`test_events_recovery.py`), summaries and their streaming (`test_summaries.py`, `test_summaries_streaming.py`), the feeding path and reducer grammar in `features` (`test_features_summaries.py`), the defaults of `features` and `two_path_step` (`test_features_defaults.py`), outputs and warnings of the original pipeline frozen at commit d4bb5ba (`test_legacy_pipeline.py`, `test_legacy_timecorr.py`), order-2 recovery on `simulate_nested` data (`test_nested_recovery.py`; its T 3000, isfc and K 702 cases are slow), kernels by order in `features` (`test_features_kernels_by_order.py`), `simulate_hierarchy` (`test_simulate_hierarchy.py`), plus coverage files)
+- Uses `pytest`; tests are in `tests/` (one file per area: estimator, kernels, formatting, reduce, features, decoders, simulate, higher-order recovery, events (`test_events.py`), segmentation and on-demand installation (`test_segment.py`), recovery with event-restricted kernels (`test_events_recovery.py`), summaries and their streaming (`test_summaries.py`, `test_summaries_streaming.py`), the feeding path and reducer grammar in `features` (`test_features_summaries.py`), the defaults of `features` and `two_path_step` (`test_features_defaults.py`), outputs and warnings of the original pipeline frozen at commit d4bb5ba (`test_legacy_pipeline.py`, `test_legacy_timecorr.py`), time-sliced versus full estimator products (`test_time_sliced_estimation.py`), order-2 recovery on `simulate_nested` data (`test_nested_recovery.py`; its T 3000, isfc and K 702 cases are slow), kernels by order in `features` (`test_features_kernels_by_order.py`), `simulate_hierarchy` (`test_simulate_hierarchy.py`), plus coverage files)
 - Tests run real computations on simulated data; no mocks
 - `pytest.ini` registers the `slow` marker for long-running integration tests (continuous integration runs them in a separate job on Python 3.12)
 - Docstring examples are tested with `pytest --doctest-modules timecorr/`

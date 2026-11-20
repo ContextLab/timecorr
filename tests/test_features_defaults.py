@@ -185,8 +185,11 @@ def test_memory_estimate_counts_the_kernel_feeding_path(cfun):
     finally:
         tracemalloc.stop()
     assert est / 1.25 <= peak <= 1.25 * est, (peak, est)
-    # the guard uses the same estimate
-    with pytest.raises(MemoryError, match="Unreduced features at order 1 need about 0.163 GB"):
+    # the guard uses the same estimate: 0.1795 GB (estimate_memory_gb's
+    # formula: 7 block temporaries of 100 x 200 x 100 elements, plus the
+    # Gaussian feeding path's results and the (S + 1) T d stacked subjects),
+    # printed to 3 significant digits
+    with pytest.raises(MemoryError, match="Unreduced features at order 1 need about 0.18 GB"):
         tc.features(data, order=1, rfun=None, delta_rfun=None, cfun=cfun,
                     weights_params={"var": 100}, return_delta=True,
                     max_memory_gb=(est + eye) / 2)

@@ -52,13 +52,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   that holds its correlations now counts 7 block temporaries of the
   estimator instead of 6 (measured with `tracemalloc`: 7.3 to 8 blocks,
   the kernel's blocks included), the temporaries of the Fisher z
-  symmetrization of `isfc` and `wisfc` (the default `cfun`) when they are
-  larger, and the stacked subjects and one subject's reference that
-  `isfc` and `wisfc` hold. Before, the estimate could be below the peak
-  traced with `tracemalloc` (K = 60, T = 5,000, 6 subjects, `isfc`:
-  1.069 GB estimated, 1.130 GB traced; now 1.151 GB estimated; on 11
-  sizes from K = 10 to 300 and T = 200 to 10,000 the traced peak was 0.35
-  to 0.99 of the new estimate). For example,
+  symmetrization of `isfc` and `wisfc` (the default `cfun`) with several
+  subjects when they are larger, and the stacked subjects and one
+  subject's reference that the estimator holds. Before, the estimate could
+  be below the peak traced with `tracemalloc`, by up to 10.4% for every
+  `cfun` and number of subjects measured (K = 60, T = 5,000, 6 subjects,
+  `isfc`: 1.069 GB estimated, 1.130 GB traced, now 1.151 GB estimated;
+  K = 100, T = 200, one subject, `autofc`: 0.1215 GB estimated, 0.1338 GB
+  traced, now 0.1378 GB; on 11 sizes from K = 10 to 300 and T = 200 to
+  10,000 the traced peak was 0.35 to 0.99 of the new estimate). For
+  example,
   `estimate_memory_gb(100, 2, 200, n_subjects=3)` is now
   `[0.0, 0.18, 104.372]` (it was `[0.0, 0.163, 102.484]`).
 - **`exclude_timepoints` with a non-integer value.** It is rounded to the

@@ -140,12 +140,13 @@ def _step_gb(d, T, n_subjects=1, n_outputs=1, kernel_feeding=False, dense=False)
         + S * T * v  # the analysis path's vectorized results, every subject
         + 3 * S * T * d  # the inputs (and the copies made while formatting)
         + kernel
-        # isfc and wisfc (the default cfun): the stacked subjects and one
-        # subject's reference
+        # the stacked subjects and one subject's reference (wisfc, which
+        # also computes isfc and autofc, stacks the subjects)
         + (S + 1) * T * d
         # the estimator's blocks, or the Fisher z symmetrization of isfc and
-        # wisfc, which runs after them
-        + _workspace(max(_WORKSPACE_BLOCKS * block, _fisher_workspace(d, T)),
+        # wisfc with several subjects, which runs after them (one subject is
+        # its own reference and is not symmetrized)
+        + _workspace(max(_WORKSPACE_BLOCKS * block, _fisher_workspace(d, T) if S > 1 else 0),
                      (n_outputs - 1) * S * T * v, kernel_feeding)
     )
     return elements * 8 / _BYTES_PER_GB
@@ -183,9 +184,9 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
     grows linearly in T (at most 32 MB plus 4 blocks of 128 rows by T
     columns); a kernel function of your own gives T x T arrays (``3 T**2``).
     It counts 7 block temporaries of the estimator (or the temporaries of
-    the Fisher z symmetrization of ``isfc`` and ``wisfc``, when larger) and
-    what ``isfc`` and ``wisfc`` hold besides the correlations (the stacked
-    subjects and one subject's reference).
+    the Fisher z symmetrization of ``isfc`` and ``wisfc`` with several
+    subjects, when larger) and what the estimator holds besides the
+    correlations (the stacked subjects and one subject's reference).
     With per-subject events, the kernels of the distinct event sets (one
     T x T array each for a kernel function of your own) are not included in
     the estimate.

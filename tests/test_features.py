@@ -292,24 +292,29 @@ def test_estimate_memory_gb_values():
     assert est[0] == 0.0
     # order 1: 4 -> 10 columns; order 2: 10 -> 55 columns.  Terms (float64
     # elements): the (d, d, T) array, the results of every subject, 3 copies of
-    # the inputs, 3 T x T kernels, and the larger of 6 block temporaries (one
-    # block is all d x d pairs at these sizes) and the delta-path results
-    # (order 1 computes both paths; order 2 is the last and only analyzed).
+    # the inputs, 3 T x T kernels, the S stacked subjects and one reference
+    # ((S + 1) T d), and the larger of 7 block temporaries (one block is all
+    # d x d pairs at these sizes) and the delta-path results (order 1
+    # computes both paths; order 2 is the last and only analyzed).  One
+    # subject is not Fisher z symmetrized.
     assert est[1] == pytest.approx(
-        (100 * 4**2 + 100 * 10 + 3 * 100 * 4 + 3 * 100**2
-         + max(6 * 4 * 100 * 4, 100 * 10)) * 8 / 1e9
+        (100 * 4**2 + 100 * 10 + 3 * 100 * 4 + 3 * 100**2 + 2 * 100 * 4
+         + max(7 * 4 * 100 * 4, 100 * 10)) * 8 / 1e9
     )
     assert est[2] == pytest.approx(
-        (100 * 10**2 + 100 * 55 + 3 * 100 * 10 + 3 * 100**2
-         + max(6 * 10 * 100 * 10, 0)) * 8 / 1e9
+        (100 * 10**2 + 100 * 55 + 3 * 100 * 10 + 3 * 100**2 + 2 * 100 * 10
+         + max(7 * 10 * 100 * 10, 0)) * 8 / 1e9
     )
     assert estimate_memory_gb(4, 0, 100, **eye) == [0.0]
     # more subjects hold more results; the delta path of the last order counts
-    # only when it is returned
+    # only when it is returned; with several subjects the workspace is the
+    # larger of the 7 blocks and the Fisher z temporaries (11 blocks of
+    # d x d x min(T, 2**23 // (16 d**2)) elements)
     three = estimate_memory_gb(4, 2, 100, n_subjects=3, **eye)
     assert three[2] == pytest.approx(
         (100 * 10**2 + 3 * 100 * 55 + 3 * 3 * 100 * 10 + 3 * 100**2
-         + 6 * 10 * 100 * 10) * 8 / 1e9
+         + 4 * 100 * 10
+         + max(7 * 10 * 100 * 10, 11 * 10 * 10 * min(100, 2**23 // (16 * 10**2)))) * 8 / 1e9
     )
     assert estimate_memory_gb(4, 2, 100, return_delta=True, **eye)[2] >= est[2]
 
@@ -395,16 +400,21 @@ def test_memory_estimate_matches_traced_peak_for_three_subjects(cfun_name, K, T)
 
 
 def test_memory_guard_counts_subjects():
-    # order 2 of K=20, T=300: about 0.56 GB for one subject, 0.67 GB for three
+    # order 2 of K=20, T=300 (210 inputs): about 0.633 GB for one subject,
+    # 0.743 GB for three.  The terms (elements) that depend on the number of
+    # subjects S are S T v (v = 210 * 211 / 2 = 22,155), 3 S T d and
+    # (S + 1) T d (d = 210): 0.633 GB at S = 1 plus
+    # 2 * 300 * (22,155 + 3 * 210 + 210) * 8 / 1e9 = 0.110 GB at S = 3, so a
+    # bound of 0.7 GB lies between the two
     one = estimate_memory_gb(20, 2, 300)[2]
     three = estimate_memory_gb(20, 2, 300, n_subjects=3)[2]
-    assert one < 0.6 < three
+    assert one < 0.7 < three
     data = make_data(K=20, T=300, n_subjects=3)
     with pytest.raises(MemoryError) as info:
-        legacy_features(data, order=2, rfun=None, max_memory_gb=0.6)
+        legacy_features(data, order=2, rfun=None, max_memory_gb=0.7)
     assert f"{three:.3g} GB" in str(info.value)
     assert "3 subjects" in str(info.value)
-    X = legacy_features(data[0], order=2, rfun=None, max_memory_gb=0.6)
+    X = legacy_features(data[0], order=2, rfun=None, max_memory_gb=0.7)
     assert X[2].shape == (300, 210 * 211 // 2)
 
 

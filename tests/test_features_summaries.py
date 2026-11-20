@@ -560,9 +560,10 @@ def test_shift_null_on_the_eye_path_is_checked_before_computing():
     # is the user's (T x T arrays, estimate_memory_gb(..., weights_function=)),
     # run and leaves too little for the shift null (one streamed row per
     # block on the eye kernel, read in chunks, while the co-fluctuations are
-    # held).  T is 1,000: at T 2,000 the analysis step alone is estimated at
-    # 0.118 GB and the shift null at 0.095 GB, so no budget lets the first
-    # run and stops the second there.
+    # held).  T is 1,000 (the controller accepted the change from T 2,000):
+    # at T 2,000 the analysis step alone is estimated at 0.118 GB, more than
+    # the shift null's 0.095 GB, so no budget lets the first run and stops
+    # the second there.
     T = 1000
     data = noise(S=2, T=T, K=10)
     need, held = _held_sizes(T=T)
@@ -983,8 +984,11 @@ def test_retained_fits_are_enforced_by_the_budget():
 
 def test_materialized_step_input_is_not_counted_twice():
     # order 2 of the original pipeline on 2 x (80, 10): the step estimate
-    # (0.0007104 GB) already counts its input D_1; with X_1 retained
-    # (1.28e-5 GB) the run needs 0.0007232 GB
+    # (0.0010496 GB) already counts its input D_1; with X_1 retained
+    # (1.28e-5 GB) the run needs 0.0010624 GB.  The step estimate is
+    # (80 * 10**2 + 2 * 80 * 55 + 3 * 2 * 80 * 10 + 3 * 80**2 + 3 * 80 * 10
+    #  + max(7 * 10 * 80 * 10, 11 * 10**2 * 80)) * 8 / 1e9: the Fisher z
+    # temporaries of two subjects are larger than the 7 estimator blocks
     rng = np.random.default_rng(0)
     data = [rng.normal(size=(80, 10)) for _ in range(2)]
     common = dict(order=2, rfun="PCA", delta_rfun=None,
@@ -992,8 +996,8 @@ def test_materialized_step_input_is_not_counted_twice():
     # PCA keeps 10 columns, so step 2 is a one-output step on 10 inputs
     step = estimate_memory_gb(10, 1, 80, 2, delta_weights_function=tc.eye_weights)[1]
     x1 = 2 * 80 * 10 * 8 / 1e9
-    assert step == pytest.approx(0.0007104) and x1 == pytest.approx(1.28e-5)
-    X = quiet(tc.features, data, max_memory_gb=0.0007296, **common)
+    assert step == pytest.approx(0.0010496) and x1 == pytest.approx(1.28e-5)
+    X = quiet(tc.features, data, max_memory_gb=0.0010688, **common)
     assert len(X) == 3
     with pytest.raises(MemoryError, match="retained by the run"):
         quiet(tc.features, data, max_memory_gb=step + x1 - 1e-7, **common)

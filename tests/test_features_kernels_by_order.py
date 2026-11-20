@@ -258,3 +258,35 @@ def test_streamed_memory_check_does_not_depend_on_kernel_parameters():
 def test_two_path_step_is_exported_at_the_top_level():
     assert tc.two_path_step is ho.two_path_step
     assert "two_path_step" in dir(tc)
+
+
+def test_analysis_communities_use_the_kernel_of_their_order():
+    # automatic analysis communities at order 2 (autofc, T 100, 60 feeding
+    # columns): with the default analysis kernel (Gaussian, var 100: sd 10,
+    # L = 25, 51 lags in [25, 75]) the shift null of order 2 had fewer
+    # distinct lags than columns; weights_params={2: {"var": 1}} (sd 1,
+    # L = 10) is used at order 2 only, for the kernel and for the null's L
+    x = [np.random.RandomState(s).randn(100, 60) for s in range(2)]
+    summary = tc.Communities()
+    X, D = quiet(
+        tc.features, x, order=2, cfun=tc.autofc, rfun={2: summary},
+        delta_rfun="weighted_strength", weights_params={2: {"var": 1}},
+        return_delta=True,
+    )
+    assert [a.shape[0] for a in X[2]] == [100, 100]
+    fit = summary.fits_[-1]
+    kernels = ho._step_kernels(100, 2, tc.gaussian_weights, {"var": 1})
+    from timecorr.summaries import _shift_null_threshold
+    expected = _shift_null_threshold(
+        [np.ascontiguousarray(d, dtype=np.float64) for d in D[1]], kernels,
+        n_null=summary.n_null, bandwidth=1.0,
+    )
+    assert fit["null_threshold"] == pytest.approx(expected, rel=1e-12)
+    # order 1 kept the default analysis kernel: its output equals a run
+    # without the order map
+    X_default, _ = quiet(
+        tc.features, x, order=1, cfun=tc.autofc,
+        delta_rfun="weighted_strength", return_delta=True,
+    )
+    for a, b in zip(X[1], X_default[1]):
+        assert_identical(a, b)

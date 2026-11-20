@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **Documentation theme.** The Sphinx documentation uses Furo with the
+  Contextual Dynamics Lab look of the htfa and hypertools documentation
+  (Nunito Sans, lowercase light headings, green brand colors) in place of
+  `sphinx-book-theme`; the `docs` extra installs `furo`.
+
 ## [0.3.0] - 2026-11-17
 
 ### Changed

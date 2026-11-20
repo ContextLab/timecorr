@@ -93,7 +93,7 @@ The estimator (`wcorr`) is a kernel-weighted Pearson correlation; a true delta k
 
 ## Documentation
 
-- Sphinx with numpydoc, autosummary, sphinx-gallery and nbsphinx; source in `docs/`
+- Sphinx with numpydoc, autosummary, sphinx-gallery and nbsphinx; source in `docs/`; theme: Furo with the Contextual Dynamics Lab look shared with the htfa and hypertools documentation (Nunito Sans, lowercase light headings, green brand colors set in `html_theme_options` in `docs/conf.py`, rules in `docs/_static/custom.css`)
 - API pages: `docs/api.rst` (autosummary stubs in `docs/generated/`)
 - Gallery examples: `examples/` (rendered into `docs/auto_examples/`; only `plot_*` scripts are executed)
 - Tutorial notebooks: `docs/tutorial/` (rendered without execution; execute them with nbconvert before committing)
@@ -108,4 +108,4 @@ Runtime (`setup.py` `install_requires`, Python >= 3.10):
 Extras:
 - `segment`: hmmlearn (used only by `segment`, and installed on demand if missing)
 - `test`: pytest, polars, hmmlearn
-- `docs`: sphinx, sphinx-book-theme, sphinx-gallery, numpydoc, nbsphinx, seaborn, ipykernel, nbconvert, hmmlearn
+- `docs`: sphinx, furo, sphinx-gallery, numpydoc, nbsphinx, seaborn, ipykernel, nbconvert, hmmlearn

@@ -210,3 +210,49 @@ def test_segment_round_off_constant_column():
     a = tc.segment(noisy, n=4, random_state=0)
     b = tc.segment(exact, n=4, random_state=0)
     assert np.array_equal(np.asarray(a), np.asarray(b))
+
+
+# --- Fisher averaging: a correlation within 1e-12 of +-1 is +-1 -------------
+
+ONE_ULP_BELOW = np.nextafter(1.0, 0.0)  # 1 - 1.1e-16
+
+
+@pytest.mark.parametrize("near", [ONE_ULP_BELOW, 1 - 1e-13, 1 + 1e-13])
+def test_fisher_symmetrize_treats_near_unit_correlations_as_unit(near):
+    # {+1, -1} averages to 0; one ulp (or 1e-13) away from -1 must not turn
+    # that into +1 (z of 1 is infinite, z of 1 - 1e-16 is finite)
+    from timecorr.helpers import _fisher_symmetrize
+
+    c = np.zeros((2, 2, 1))
+    c[0, 1, 0] = 1.0
+    c[1, 0, 0] = -near
+    out = _fisher_symmetrize(c.copy())
+    exact = np.zeros((2, 2, 1))
+    exact[0, 1, 0], exact[1, 0, 0] = 1.0, -1.0
+    assert np.array_equal(out, _fisher_symmetrize(exact))
+    assert out[0, 1, 0] == 0
+
+
+@pytest.mark.parametrize("near", [ONE_ULP_BELOW, 1 - 1e-13])
+def test_corrmean_combine_treats_near_unit_correlations_as_unit(near):
+    a = [np.array([[1.0, near]]), np.array([[-near, 0.5]])]
+    b = [np.array([[1.0, 1.0]]), np.array([[-1.0, 0.5]])]
+    assert np.array_equal(tc.corrmean_combine(a), tc.corrmean_combine(b))
+    assert tc.corrmean_combine(a)[0, 1] == 1.0
+
+
+@pytest.mark.parametrize("near", [ONE_ULP_BELOW, 1 - 1e-13])
+def test_tstat_combine_treats_near_unit_correlations_as_unit(near):
+    a = [np.array([[1.0]]), np.array([[near]]), np.array([[1.0]])]
+    b = [np.array([[1.0]]), np.array([[1.0]]), np.array([[1.0]])]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        ta = tc.tstat_combine(a)
+    assert ta[0, 0] == tc.tstat_combine(b)[0, 0] == np.inf
+
+
+def test_correlations_clearly_below_one_keep_their_z():
+    # 1 - 1e-9 is not round-off: it keeps its finite z (about 10.7)
+    out = tc.corrmean_combine([np.array([[1 - 1e-9]]), np.array([[0.0]])])
+    z = np.arctanh(1 - 1e-9) / 2
+    assert np.isclose(out[0, 0], np.tanh(z), rtol=1e-12, atol=0)

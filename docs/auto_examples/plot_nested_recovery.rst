@@ -42,7 +42,8 @@ summaries: at order 1 the delta path is summarized by ``Communities()``
 number set by a shift null), and at order 2 the analysis path by
 ``WeightedStrength(signed=True)``.  A ``Communities`` object is passed as
 ``delta_rfun`` only to read its fit; the default ``delta_rfun="auto"``
-creates the same summary.
+creates the same summary when its communities give at least 4 columns, as
+here.
 
 A ridge map from subject A's order-2 features to ``h`` (every 10th timepoint,
 z-scored columns, penalty equal to the mean eigenvalue of the Gram matrix) is
@@ -53,7 +54,7 @@ scores for one seed (seed 0), without a control; the development values over
 seeds, with controls from subjects with an independent ``h``, are in the
 docstring of ``tests/test_nested_recovery.py``.
 
-.. GENERATED FROM PYTHON SOURCE LINES 39-100
+.. GENERATED FROM PYTHON SOURCE LINES 40-101
 
 
 

@@ -896,9 +896,9 @@ def _within(labels, g):
 def test_centering_with_a_large_community(seed):
     # 18 + 6 columns: 153 of the 276 pairs are within the large community,
     # so the median pair weight m is a within-community weight of the large
-    # community.  Measured (seeds 0-2): with equal loadings (0.3) about 18%
-    # of the large community's clipped weights are 0 and their mean is about
-    # 11% of its mean pair weight; when the small community is weaker
+    # community.  Measured (seeds 0-2): with equal loadings (0.3) 15-18%
+    # of the large community's clipped weights are 0 and their mean is
+    # 10-12% of its mean pair weight; when the small community is weaker
     # (loadings 0.4 and 0.2) every clipped weight of the small community is
     # 0 and the automatic Communities count splits the large community
     # (6 to 8 communities); with 12 + 12 columns no within weight is 0

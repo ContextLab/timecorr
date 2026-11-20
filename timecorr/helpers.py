@@ -922,7 +922,11 @@ def _wcorr_block(state, i0, i1, j0):
         undefined = zero | few
 
     zero_all = zero.reshape(shape[0], -1).all(axis=1)
-    den = np.sqrt(np.where(undefined, 1.0, var_a * var_b))
+    # sqrt(var_a) * sqrt(var_b), not sqrt(var_a * var_b): the product of two
+    # variances below about 1e-162 underflows to 0 in float64
+    den = np.sqrt(np.where(undefined, 1.0, var_a)) * np.sqrt(
+        np.where(undefined, 1.0, var_b)
+    )
     r = np.where(undefined, 0.0, np.clip(num / den, -1.0, 1.0))
     return r, undefined, zero_all, few_any
 

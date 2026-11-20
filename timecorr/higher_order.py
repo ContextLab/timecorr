@@ -18,10 +18,20 @@ once, at the order being analyzed.
 
 Defaults: ``rfun="auto"`` (``"PCA"`` at order 1,
 ``WeightedStrength(signed=True)`` at orders 2 and above),
-``delta_rfun="auto"`` (``Communities()``, with the number of communities
-counted with a shift null) and a Gaussian feeding kernel with variance 25
-(standard deviation 5 samples), so the feeding features are kernel-weighted
-correlations summarized by community.  The feeding kernel is shaped by
+``delta_rfun="auto"`` (``Communities()`` at order 1 and
+``Communities(signed="only")`` at orders 2 and above, with the number of
+communities counted with a shift null) and Gaussian kernels on both paths
+whose widths are set from each step's input (``weights_params="auto"``,
+``delta_weights_params="auto"``: the feeding kernel's standard deviation is
+5 autocorrelation widths of the input, at most an eighth of its rows, and
+the analysis kernel's is that or 10 rows, whichever is larger; see the
+Notes of ``features``), so the feeding features are kernel-weighted
+correlations summarized by community.  With both kernels automatic and no
+events, ``features`` passes each order's feeding features on at a lower
+rate and returns every output at all timepoints by linear interpolation.
+``weights_params=None`` and ``delta_weights_params=None`` give the kernels'
+fixed defaults (variance 100 and 25) at every order and every timepoint.
+The feeding kernel is shaped by
 ``include_timepoints``, ``include_zero`` and the events of each order, as
 the analysis kernel is.  The default feeding reducer needs at least 4
 features and 40 timepoints (``ValueError`` otherwise);
@@ -1342,13 +1352,17 @@ def two_path_step(
         Analysis kernel, called as ``weights_function(T, weights_params)``; row
         ``t`` of the kernel (``weights[t, :]``) is the kernel used at timepoint
         ``t``.  Default: ``gaussian_weights``.
-    weights_params : dict or None
-        Parameters of the analysis kernel.  A dict with integer keys
-        raises ``ValueError`` (an order map, a dict mixing integer and
-        other keys, or a dict with Python or NumPy boolean keys; the message
-        says which): order maps of kernel parameters are accepted by
-        ``features``.  Default: None (the kernel's
-        defaults, for example ``gaussian_params``).
+    weights_params : "auto", dict or None
+        Parameters of the analysis kernel.  ``"auto"`` with
+        ``gaussian_weights``: the variance is set from ``data`` (standard
+        deviation ``max(sd, 10)`` rows, with ``sd`` as for
+        ``delta_weights_params``); with another ``weights_function``, or
+        with ``delta_weights_function=eye_weights``, ``"auto"`` means None.
+        None: the kernel's defaults (for example ``gaussian_params``).  A
+        dict with integer keys raises ``ValueError`` (an order map, a dict
+        mixing integer and other keys, or a dict with Python or NumPy
+        boolean keys; the message says which): order maps of kernel
+        parameters are accepted by ``features``.  Default: ``"auto"``.
     cfun : function
         Analysis-path correlation function (``isfc``, ``wisfc``, ``autofc``).
         Default: ``isfc``.
@@ -1407,15 +1421,22 @@ def two_path_step(
     delta_weights_function : function or None
         Feeding kernel (keyword-only; see ``features``).  Default: None
         (``gaussian_weights``).
-    delta_weights_params : dict or None
-        Parameters of the feeding kernel (keyword-only).  With
-        ``delta_weights_function=None`` they are the parameters of
+    delta_weights_params : "auto", dict or None
+        Parameters of the feeding kernel (keyword-only).  ``"auto"`` with a
+        Gaussian feeding kernel (``delta_weights_function`` None or
+        ``gaussian_weights``): standard deviation ``sd = min(5 w, T / 8)``
+        rows, with ``w`` the autocorrelation width of ``data`` (see
+        "Automatic kernels" in the Notes of ``features``); with any other
+        feeding kernel ``"auto"`` means None.  With
+        ``delta_weights_function=None`` a dict holds the parameters of
         ``gaussian_weights`` (None: ``{"var": 25}``; a dict without
         ``"var"`` raises ``ValueError``); with a given function,
         None means that function's own defaults; with ``eye_weights``, which
-        takes no parameters, they must be None (``ValueError`` otherwise).
-        A dict with integer keys raises ``ValueError``, as for
-        ``weights_params``.  Default: None.
+        takes no parameters, they must be ``"auto"`` or None (``ValueError``
+        otherwise).  A dict with integer keys raises ``ValueError``, as for
+        ``weights_params``.  This function computes one order at every row
+        of ``data``; passing feeding features on at a lower rate is done by
+        ``features``.  Default: ``"auto"``.
     order : int
         The order this step computes (keyword-only), used to resolve
         ``"auto"`` and order maps (whose keys may be any positive integers
@@ -1834,21 +1855,29 @@ def features(
     arguments are named ``delta_*`` for historical reasons.  Reductions of
     lists are fit jointly across subjects, so all subjects share one space.
 
-    With the defaults, the feeding kernel is a Gaussian with variance 25
-    (standard deviation 5 samples), each ``D_k`` holds one column per
-    community of features (``Communities()``: the mean squared correlation
-    within the community over time, with the number of communities counted
-    with a shift null), ``X_1`` is reduced with PCA and ``X_k`` for ``k >=
-    2`` with ``WeightedStrength(signed=True)`` (two columns per input
-    feature).  The default feeding reducer needs at least 4 features and 40
-    timepoints at every order whose feeding step is computed (orders below
+    With the defaults, both kernels are Gaussians whose widths are set at
+    each order from that order's input (see "Automatic kernels" in the
+    Notes), each ``D_k`` holds one column per community of features, with
+    the number of communities counted with a shift null (``D_1``:
+    ``Communities()``, the mean squared correlation within the community;
+    ``D_k`` for ``k >= 2``: ``Communities(signed="only")``, the mean within
+    the community of each pair's correlation times the sign of its mean
+    over time), ``X_1`` is reduced with PCA and ``X_k`` for ``k >= 2`` with
+    ``WeightedStrength(signed=True)`` (two columns per input feature).  The
+    default feeding reducer needs at least 4 features and 40 rows (the
+    timepoints of the data at order 1; fewer rows than timepoints at later
+    orders when the feeding features are passed on at a lower rate, but
+    never fewer than ``min(T, 100)``) at every order whose feeding step is
+    computed (orders below
     ``order``, and ``order`` itself with ``return_delta=True``); otherwise
     ``ValueError`` names the alternatives: ``delta_rfun="weighted_strength"``
     (one column per feature, any number of features and timepoints) or the
     original pipeline.  At a default feeding step whose communities would
     emit fewer than 4 columns, the step emits weighted strength of the same
-    correlations instead (one column per input feature; see
-    ``delta_rfun``), so the feeding width never drops below 4.  This also
+    correlations instead (one column per input feature, from squared
+    correlations at every order, also where the communities would have
+    given signed columns; see ``delta_rfun``), so the feeding width never
+    drops below 4.  This also
     changes calls that completed before the fallback was added: on 4
     independent noise features (T 100), ``features(x, order=1,
     return_delta=True)`` returned 1 community column in ``D[1]`` and now
@@ -1914,9 +1943,14 @@ def features(
         of a custom kernel that are keyed by integers must be wrapped in one
         (for example ``{1: params, 2: params}``).  Only the outer dict is
         examined: each value is passed to the kernel unchanged, whatever its
-        keys.  Default:
-        ``gaussian_weights`` with ``weights_params=None`` (its defaults,
-        ``gaussian_params``).
+        keys.  ``weights_params="auto"`` with ``gaussian_weights`` sets the
+        variance at each order from that order's input (see "Automatic
+        kernels" in the Notes); with another ``weights_function``, or with
+        ``delta_weights_function=tc.eye_weights`` (the original pipeline),
+        ``"auto"`` means None.  ``weights_params=None`` is the kernel's
+        default parameters at every order (``gaussian_params``, variance
+        100, for ``gaussian_weights``).  Default: ``gaussian_weights`` with
+        ``weights_params="auto"``.
     cfun : function
         Analysis-path correlation function (``isfc``, ``wisfc``, ``autofc``).
         Default: ``isfc``, which correlates each subject's features with the
@@ -2054,20 +2088,24 @@ def features(
         co-fluctuation code path of the original pipeline (NaN handling and
         message as described under ``data``).  Default: None
         (``gaussian_weights``).
-    delta_weights_params : dict or None
-        Parameters of the feeding kernel (keyword-only).  With
-        ``delta_weights_function=None`` they are the parameters of
+    delta_weights_params : "auto", dict or None
+        Parameters of the feeding kernel (keyword-only).  ``"auto"`` with a
+        Gaussian feeding kernel (``delta_weights_function`` None or
+        ``gaussian_weights``): at each order the variance is set from that
+        order's input, as described under "Automatic kernels" in the Notes;
+        with any other feeding kernel ``"auto"`` means None.  With
+        ``delta_weights_function=None`` a dict holds the parameters of
         ``gaussian_weights`` (None: ``{"var": 25}``, standard deviation 5
-        samples; a dict without ``"var"`` raises ``ValueError``); with a
-        given function, None means that function's own
-        defaults; with ``eye_weights``, which takes no parameters, they must
-        be None (``ValueError`` otherwise).  An order map, as for
-        ``weights_params``, sets the feeding kernel's parameters order by
-        order; orders missing from it (or mapped to None) use what
+        samples, at every order; a dict without ``"var"`` raises
+        ``ValueError``); with a given function, None means that function's
+        own defaults; with ``eye_weights``, which takes no parameters, they
+        must be ``"auto"`` or None (``ValueError`` otherwise).  An order
+        map, as for ``weights_params``, sets the feeding kernel's parameters
+        order by order; orders missing from it (or mapped to None) use what
         ``delta_weights_params=None`` gives (``{"var": 25}`` for the default
-        Gaussian; with ``eye_weights`` every value must be None).  The
-        shift null of a feeding step reads that order's standard deviation.
-        Default: None.
+        Gaussian, not the automatic variance; with ``eye_weights`` every
+        value must be None).  The shift null of a feeding step reads that
+        order's standard deviation.  Default: ``"auto"``.
     return_info : bool
         If True (keyword-only), return ``(result, info)``, where ``result``
         is what the call returns otherwise (``X``, or ``(X, D)`` with
@@ -2188,6 +2226,32 @@ def features(
 
     Notes
     -----
+    Automatic kernels.  With ``delta_weights_params="auto"`` and a Gaussian
+    feeding kernel, the feeding kernel of each order has standard deviation
+    ``sd = min(5 w, T' / 8)`` rows, where ``T'`` is the number of rows of
+    that order's input and ``w`` is its autocorrelation width: the lag at
+    which the autocorrelation, averaged over all columns of all subjects,
+    first falls below ``exp(-1/2)``, linearly interpolated between lags and
+    at least 1 (lags beyond ``T' / 40 + 1`` are not examined; constant
+    columns are left out and NaN samples count as the column's mean).  With
+    ``weights_params="auto"`` and ``gaussian_weights``, the analysis kernel
+    has standard deviation ``max(sd, 10)`` rows.  When the mean lag-1
+    autocorrelation of the data is below ``exp(-1/2)`` (about 0.61), ``w``
+    is 1, so the order-1 kernels have standard deviations 10 and, for
+    ``T >= 40``, 5 samples: those of ``weights_params=None`` and
+    ``delta_weights_params=None``.  When both kernels are automatic and
+    ``events`` is None, the feeding features of each order are passed on at
+    every ``s``-th row, ``s = max(1, min(floor(sd / 2), T' // 100))``, so
+    later orders are computed at fewer timepoints; ``X[k]`` and ``D[k]``
+    are then returned at all T timepoints by linear interpolation between
+    the timepoints they were computed at (after the last of these, its
+    value is held), and ``X[1]`` and ``D[1]`` are computed at every
+    timepoint.  With ``return_info=True``, the entries of automatic kernels
+    have ``"kernel_sd"`` (in rows of that order's input) and ``"sampling"``
+    (timepoints of the data per row of that order's input).  With a given
+    kernel on either path, or with events, every order is computed at every
+    timepoint.
+
     The ``WeightedStrength`` and ``Communities`` objects passed in ``rfun``
     or ``delta_rfun`` (also as order map values) have their ``fits_`` cleared
     at the start of the call; each step they reduce appends one entry, with

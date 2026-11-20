@@ -857,6 +857,26 @@ def _nan_mean(x):
     return _safe_divide(total, valid.sum(axis=0))
 
 
+def _reference_center(x, forward=False):
+    """
+    Each column's first observed, finite sample (the last one when
+    ``forward``), 0 for a column without one: the value the estimator
+    subtracts from the column before its moment sums.  A backward kernel's
+    row t weights no sample after t, and the first sample is at or before
+    t; a forward kernel's row weights none before t, and the last sample is
+    at or after t.  So, unlike the overall mean, the reference does not
+    bring samples a kernel row does not weight into its estimate (through
+    the round-off of the sums and the zero-variance rule).
+    """
+    ok = np.isfinite(x)
+    if forward:
+        idx = x.shape[0] - 1 - np.argmax(ok[::-1], axis=0)
+    else:
+        idx = np.argmax(ok, axis=0)
+    ref = x[idx, np.arange(x.shape[1])] if x.shape[0] else np.zeros(x.shape[1])
+    return np.where(ok.any(axis=0), ref, 0.0)
+
+
 def _nan_center(x):
     """Subtract each column's mean over its non-NaN samples (0 for all-NaN columns)."""
     return x - _nan_mean(x)
@@ -989,6 +1009,17 @@ class _KernelRows:
         self.spans = None
         self._cache = {}
         self._cached = 0
+
+    def forward(self):
+        """
+        True for a forward (one-sided) kernel: square, and every row's first
+        non-zero weight lies at or after the row's own timepoint.
+        """
+        T_out = self.shape[0]
+        if len(self.shape) != 2 or T_out != self.shape[1] or not T_out:
+            return False
+        rows = self.support > 0
+        return bool(rows.any() and np.all(self._first[rows] >= np.flatnonzero(rows)))
 
     def first_nonzero(self):
         """The column of each row's first non-zero weight (0 for an empty row)."""
@@ -1222,10 +1253,14 @@ def _wcorr_setup(a, b, rows, autocorrelation):
     ``b`` too).  Returns a dict.
     """
     finite = _products_finite(a, b)  # an infinite sample makes its column NaN
-    # the overall means are kept: with the kernel-weighted means of the
-    # centered columns they give the raw ones, which the round-off rule needs
-    ca = _nan_mean(a)
-    cb = _nan_mean(b)
+    # each column is centered on a reference sample that a one-sided kernel's
+    # rows do not look past (_reference_center), so no estimate depends on
+    # samples its kernel row does not weight; the references are kept, since
+    # with the kernel-weighted means of the centered columns they give the
+    # raw ones, which the round-off rule needs
+    forward = rows.forward()
+    ca = _reference_center(a, forward)
+    cb = _reference_center(b, forward)
     a = a - ca
     b = b - cb
     rows.prepare(finite and _products_finite(a, b))

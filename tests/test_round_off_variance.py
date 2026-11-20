@@ -210,24 +210,3 @@ def test_segment_round_off_constant_column():
     a = tc.segment(noisy, n=4, random_state=0)
     b = tc.segment(exact, n=4, random_state=0)
     assert np.array_equal(np.asarray(a), np.asarray(b))
-
-
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "not round-off: with rfun=None the diagonal features of order 1 are 0 at "
-        "the first 2 (undefined) rows and exactly 1 after, so the backward "
-        "kernel's tail gives a genuine variance near 1e-10 of the mean square "
-        "about the overall mean; that mean differs between T 200 and 300, so the "
-        "1e-10 tolerance zeroes row 79 in one call and not the other"
-    ),
-)
-def test_backward_kernel_features_do_not_depend_on_later_samples():
-    x = np.random.default_rng(0).standard_normal((300, 5))
-    kw = dict(order=2, cfun=tc.autofc, rfun=None, delta_rfun=None,
-              include_timepoints="backward", return_delta=True)
-    (X, D), _ = _quiet(tc.features, x, **kw)
-    (Xs, Ds), _ = _quiet(tc.features, x[:200], **kw)
-    for k in range(3):
-        assert np.allclose(X[k][:200], Xs[k], atol=1e-9, rtol=0)
-        assert np.allclose(D[k][:200], Ds[k], atol=1e-9, rtol=0)

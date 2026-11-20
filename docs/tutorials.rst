@@ -17,3 +17,5 @@ the quickstart.
    tutorial/events
    tutorial/decoding
    tutorial/htfa_network_animations
+   tutorial/stocks
+   tutorial/trajectories

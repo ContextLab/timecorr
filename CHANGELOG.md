@@ -52,9 +52,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Chang & Manning (2021), downloaded from the data archive of the paper's
   repository; which nodes each order's features belong to; and one
   animation per order on the brain, drawn with the htfa toolbox (1920 x
-  1080 H.264 videos at 30 frames per second, with linearly interpolated
-  frames between timepoints, in `docs/_static/tutorial_media/`). The
-  `tutorials` extra includes `htfa[plot,brain3d]>=0.1.0`.
+  1080 H.264 videos at 30 frames per second, one frame per timepoint
+  (300 frames, 10 s), with edges at every order (order-k correlations
+  between order-(k-1) features), in `docs/_static/tutorial_media/`).
 - Tutorials `quickstart` (one dataset, several subjects, higher orders),
   `kernels`, `subjects`, `reduce`, `simulate` and `decoding` in
   `docs/tutorial/`. Every public name of the package is used (as
@@ -62,12 +62,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/test_docs_tutorials.py` checks this, that the gallery and the
   notebooks match, and that each notebook has one thumbnail cell with an
   image, a Colab badge naming its own file and no error outputs.
-- `tutorials` extra (jupyter, ipykernel, nbconvert, polars, hmmlearn,
-  `htfa[plot,brain3d]`, imageio-ffmpeg): the packages that
-  `htfa_network_animations.ipynb` uses. In Google Colab, that notebook's
-  first code cell installs `timecorr[tutorials]`; the other notebooks install
-  `timecorr` (with `polars` for `subjects`, and `timecorr[segment]` for
-  `events`).
+- Tutorial `docs/tutorial/stocks.ipynb`: 20 years (2005-2024) of daily
+  returns of the 49 US industry portfolios of the Kenneth R. French Data
+  Library (downloaded at run time): correlations between industries and
+  around market crises, `tc.features` at orders 1 to 3, and a video of the
+  market as a network (`docs/_static/tutorial_media/stocks_network.mp4`).
+- Tutorial `docs/tutorial/trajectories.ipynb`: features of orders 1 to 4
+  of three real datasets (story-listening brain data, the stock market,
+  human movement from the CMU Motion Capture Database), reduced to three
+  dimensions and animated as trajectories with hypertools (three videos in
+  `docs/_static/tutorial_media/`).
+- `tutorials` extra (`htfa[plot,brain3d]>=0.1.0`, `hypertools>=1.1`,
+  `pyvista>=0.43`, imageio-ffmpeg, pillow, joblib, ipython): what the
+  real-data notebooks (`htfa_network_animations`, `stocks`,
+  `trajectories`) import beyond the runtime dependencies. In Google Colab,
+  their first code cell installs `timecorr[tutorials]`; the other notebooks
+  install `timecorr` (with `polars` for `subjects`, and
+  `timecorr[segment]` for `events`).
 
 ### Removed
 

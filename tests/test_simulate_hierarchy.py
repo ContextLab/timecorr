@@ -120,6 +120,25 @@ def test_sharing_modes():
     assert not np.array_equal(data[0], data[1])
 
 
+@pytest.mark.parametrize("shared", ["top", "all", "none"])
+def test_returned_signals_are_not_shared_objects(shared):
+    # mutating one subject's signals (or truth["top"]) leaves the others
+    # unchanged
+    _, truth = small(S=3, shared=shared)
+    before = [[a.copy() for a in s] for s in truth["signals"]]
+    top_before = truth["top"].copy()
+    for a in truth["signals"][1]:
+        a += 1.0
+    for subject in (0, 2):
+        for a, b in zip(truth["signals"][subject], before[subject]):
+            np.testing.assert_array_equal(a, b)
+    np.testing.assert_array_equal(truth["top"], top_before)
+    truth["top"][:] = -1.0
+    for subject in (0, 2):
+        np.testing.assert_array_equal(truth["signals"][subject][-1],
+                                      before[subject][-1])
+
+
 @pytest.mark.parametrize(
     "kwargs, match",
     [

@@ -1300,7 +1300,9 @@ def simulate_hierarchy(
         group of each node.  ``"signals"``: a list over subjects of lists
         ``[s_1, ..., s_n]``, ``s_l`` of shape ``(T, number of level-l
         groups)``.  ``"top"``: ``s_n`` of subject 0 (shared by every subject
-        unless ``shared="none"``).  ``"taus"`` and ``"branching"``: tuples.
+        unless ``shared="none"``).  Every array is a separate copy, so
+        changing one subject's signals (or ``"top"``) leaves the others
+        unchanged.  ``"taus"`` and ``"branching"``: tuples.
 
     Raises
     ------
@@ -1366,7 +1368,8 @@ def simulate_hierarchy(
             s = [x.copy() for x in common]
         else:
             s = _hierarchy_signals(
-                rng, T, counts, branching, taus, top if shared == "top" else None
+                rng, T, counts, branching, taus,
+                top.copy() if shared == "top" else None,
             )
         g = s[0][:, module]
         e = rng.choice([-1.0, 1.0], K)
@@ -1377,7 +1380,7 @@ def simulate_hierarchy(
     truth = {
         "groups": groups,
         "signals": signals,
-        "top": signals[0][n - 1],
+        "top": signals[0][n - 1].copy(),
         "taus": taus,
         "branching": branching,
     }

@@ -395,7 +395,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the form of the sustained coupling of `simulate_nested`. Subjects share
   the top signals (`shared="top"`), every signal (`"all"`) or nothing
   (`"none"`); returns `(data, truth)` with the group of each node at each
-  level and the signals.
+  level and the signals (separate arrays per subject, also when shared).
 - `tests/test_nested_recovery.py`: decoding of `h` from order-2 features
   across subjects on `simulate_nested` data, with controls from an
   independent `h`, the raw data and the order-1 features; recovery of the

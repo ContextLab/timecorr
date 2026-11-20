@@ -54,6 +54,7 @@ from .helpers import (
     _check_rfun,
     _LAG_PROFILES,
     _is_model,
+    _FISHER_WORKSPACE_ELEMENTS,
     _kernel_work_elements,
     _lag_kernel,
     _wcorr_block_rows,
@@ -138,6 +139,10 @@ def _step_gb(d, T, n_subjects=1, n_outputs=1, kernel_feeding=False, dense=False)
         + S * T * v  # the analysis path's vectorized results, every subject
         + 3 * S * T * d  # the inputs (and the copies made while formatting)
         + kernel
+        # isfc and wisfc (the default cfun): the stacked subjects, one
+        # subject's reference and the temporaries of the Fisher z
+        # symmetrization, held with the correlation array
+        + (S + 1) * T * d + _FISHER_WORKSPACE_ELEMENTS
         + _workspace(_WORKSPACE_BLOCKS * block, (n_outputs - 1) * S * T * v,
                      kernel_feeding)
     )
@@ -175,6 +180,10 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
     their kernel term is ``3 T**2`` elements up to T = 1,270 and then
     grows linearly in T (at most 32 MB plus 4 blocks of 128 rows by T
     columns); a kernel function of your own gives T x T arrays (``3 T**2``).
+    It also counts what ``isfc`` and ``wisfc`` hold besides the
+    correlations (the stacked subjects, one subject's reference and the
+    temporaries of the Fisher z symmetrization), so for ``autofc`` it is
+    larger than the peak.
     With per-subject events, the kernels of the distinct event sets (one
     T x T array each for a kernel function of your own) are not included in
     the estimate.
@@ -226,11 +235,11 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
     --------
     >>> from timecorr.higher_order import estimate_memory_gb
     >>> [round(x, 3) for x in estimate_memory_gb(100, 2, 200, n_subjects=3)]
-    [0.0, 0.163, 102.484]
+    [0.0, 0.214, 102.566]
     >>> import timecorr as tc
     >>> [round(x, 3) for x in estimate_memory_gb(100, 2, 200, n_subjects=3,
     ...                                          delta_weights_function=tc.eye_weights)]
-    [0.0, 0.139, 102.484]
+    [0.0, 0.19, 102.566]
     >>> [round(x, 3) for x in estimate_memory_gb(100, 2, 200, 3, streamed=True)]
     [0.0, 0.014, 0.014]
     """

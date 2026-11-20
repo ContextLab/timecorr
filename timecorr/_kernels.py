@@ -22,7 +22,8 @@ import math
 import numpy as np
 from scipy.special import gamma
 
-# Rows per chunk (the estimator's ``helpers._TIME_CHUNK``).
+# Rows per chunk: the estimator, the smoothing of ``timecorr`` and the
+# row statistics read every kernel in chunks of this many rows.
 CHUNK = 128
 
 # ----------------------------------------------------------------------------
@@ -155,7 +156,16 @@ class LagKernel:
         return self.lo > self.hi
 
     def with_events(self, labels):
-        """A copy confined to the blocks of ``labels`` (None: no restriction)."""
+        """
+        A copy confined to the blocks of ``labels`` (None: no restriction)
+        and of the events it already has: two timepoints keep their weight
+        only when they share a block of both, as ``events.mask_kernel``
+        applied twice to the T x T matrix.
+        """
+        if labels is not None and self.labels is not None:
+            labels = np.asarray(labels, dtype=np.int64)
+            change = (np.diff(labels) != 0) | (np.diff(self.labels) != 0)
+            labels = np.concatenate([[0], np.cumsum(change)])
         return LagKernel(self.profile, self.include, self.include_zero, self.exclude,
                          labels)
 
@@ -211,40 +221,15 @@ class LagKernel:
         return ("interior", t1 - t0)
 
     def block(self, t0, t1, c0, c1):
-        """Rows ``t0:t1``, columns ``c0:c1`` of the kernel (a new float array)."""
-        if self.exclude is None and self._finite:
-            return self._toeplitz_block(t0, t1, c0, c1)
-        # in place where possible: about two blocks of 8-byte temporaries
-        d = np.subtract.outer(np.arange(t0, t1), np.arange(c0, c1))  # t - tau
-        drop = None  # weights set to 0 by the direction or the diagonal
-        if self.include == "all":
-            if not self.include_zero:
-                drop = d == 0
-        elif self.include == "backward":
-            drop = d < (0 if self.include_zero else 1)
-        else:
-            drop = d > (0 if self.include_zero else -1)
-        np.abs(d, out=d)
-        w = self.profile[d]
-        if drop is not None:
-            w[drop] = 0
-            del drop
-        if self.exclude is not None:
-            band = d <= min(abs(self.exclude), self.T - 1)
-            if self.exclude < 0:
-                np.logical_not(band, out=band)
-            # as the 0/1 matrix of timecorr's exclude_timepoints multiplies it
-            np.multiply(w, band, out=w)
-            del band
-        del d
-        if self.labels is not None:
-            other = self.labels[t0:t1, np.newaxis] != self.labels[np.newaxis, c0:c1]
-            w[other] = 0
-        return w
+        """
+        Rows ``t0:t1``, columns ``c0:c1`` of the kernel (a new float array).
 
-    def _toeplitz_block(self, t0, t1, c0, c1):
-        """``block`` without ``exclude`` and with a finite profile: each row
-        is a slice of the symmetric profile, copied from a strided view."""
+        Row t is a slice of the weights at the signed lags, copied from a
+        strided view; then the direction and the diagonal are set to 0, the
+        ``exclude`` band multiplies the weights (as the 0/1 matrix of
+        ``timecorr``'s ``exclude_timepoints`` does: ``0 * inf`` is NaN), and
+        weights between event blocks are set to 0.
+        """
         n, m = t1 - t0, c1 - c0
         if n <= 0 or m <= 0:
             return np.zeros((max(n, 0), max(m, 0)))
@@ -266,6 +251,15 @@ class LagKernel:
         else:
             # keep t - tau <= 0 (< 0 without the diagonal): j >= r + k (+ 1)
             w[np.tri(n, m, k - (1 if self.include_zero else 0), dtype=bool)] = 0
+        if self.exclude is not None:
+            x = int(min(abs(self.exclude), T - 1))
+            # |t - tau| <= x: r + k - x <= j <= r + k + x
+            band = np.tri(n, m, k + x, dtype=bool)
+            band &= ~np.tri(n, m, k - x - 1, dtype=bool)
+            if self.exclude < 0:
+                np.logical_not(band, out=band)
+            np.multiply(w, band, out=w)
+            del band
         if self.labels is not None and (
             self.labels[min(t0, c0)] != self.labels[max(t1, c1) - 1]
         ):
@@ -286,12 +280,68 @@ class LagKernel:
 
     def max_row_support(self, size):
         """The largest number of non-zero weights (NaN included) in a row."""
-        best, seen = 0, {}
-        for t0, t1, c0, c1, key in self.chunks(size):
-            if key is not None and key in seen:
-                continue
-            n = int(np.count_nonzero(self.block(t0, t1, c0, c1), axis=1).max(initial=0))
-            if key is not None:
-                seen[key] = n
-            best = max(best, n)
+        best = 0
+        for _, _, _, _, _, w in blocks(self, size):
+            best = max(best, int(np.count_nonzero(w, axis=1).max(initial=0)))
         return best
+
+
+class ArrayKernel:
+    """
+    A kernel given as an array (a kernel function of the user's, or a
+    precomputed matrix), with the interface of :class:`LagKernel` that the
+    estimator reads: ``shape``, ``chunks`` (every chunk spans all columns)
+    and ``block`` (a read-only view; copy it before writing).
+    """
+
+    def __init__(self, weights):
+        self.W = np.asarray(weights, dtype=np.float64)
+        self.shape = self.W.shape
+
+    def chunks(self, size):
+        """``(t0, t1, 0, T, None)`` for consecutive chunks of ``size`` rows."""
+        if self.W.ndim != 2:
+            return
+        T_out, T = self.shape
+        for t0 in range(0, T_out, size):
+            yield t0, min(T_out, t0 + size), 0, T, None
+
+    def block(self, t0, t1, c0, c1):
+        """Rows ``t0:t1``, columns ``c0:c1`` (a read-only view)."""
+        view = self.W[t0:t1, c0:c1].view()
+        view.flags.writeable = False
+        return view
+
+
+def as_kernel(weights):
+    """
+    ``weights`` with the kernel interface (``shape``, ``chunks``, ``block``):
+    itself when it has it (a ``LagKernel``, an ``ArrayKernel``), otherwise
+    the array in an ``ArrayKernel``.
+    """
+    if hasattr(weights, "chunks") and hasattr(weights, "block"):
+        return weights
+    return ArrayKernel(weights)
+
+
+def blocks(kernel, size=CHUNK, transform=None, full=False):
+    """
+    ``(t0, t1, c0, c1, key, w)`` for consecutive chunks of ``size`` rows of
+    ``kernel`` (a ``LagKernel`` or an ``ArrayKernel``): ``w`` is
+    ``transform(kernel.block(t0, t1, c0, c1))`` (the block itself without
+    ``transform``; do not modify it), computed once for the chunks that
+    share a ``key``.  ``full=True`` spans every column of every chunk.
+    """
+    seen = {}
+    T = kernel.shape[1] if len(kernel.shape) == 2 else 0
+    for t0, t1, c0, c1, key in kernel.chunks(size):
+        if full:
+            c0, c1, key = 0, T, None
+        w = seen.get(key) if key is not None else None
+        if w is None:
+            w = kernel.block(t0, t1, c0, c1)
+            if transform is not None:
+                w = transform(w)
+            if key is not None:
+                seen[key] = w
+        yield t0, t1, c0, c1, key, w

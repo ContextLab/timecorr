@@ -16,6 +16,8 @@ from scipy.stats import ttest_1samp as ttest
 from ._kernels import (
     CHUNK,
     LagKernel,
+    as_kernel,
+    blocks,
     boxcar_profile,
     eye_profile,
     gaussian_profile,
@@ -537,8 +539,12 @@ def _kernel_row_problems(weights):
     for t0, t1, w in _abs_row_chunks(weights):
         support[t0:t1] = np.count_nonzero(w, axis=1)
         # scaled by each row's largest weight, so tiny weights do not underflow
-        w = _safe_divide(w, w.max(axis=1, keepdims=True, initial=0.0))
-        ess[t0:t1] = _safe_divide(w.sum(axis=1) ** 2, (w**2).sum(axis=1))
+        # (rows whose largest weight is 0 are all 0 and stay so)
+        peak = w.max(axis=1, keepdims=True, initial=0.0)
+        w = np.divide(w, peak, out=np.zeros_like(w), where=peak != 0)
+        total = w.sum(axis=1)
+        np.multiply(w, w, out=w)
+        ess[t0:t1] = _safe_divide(total**2, w.sum(axis=1))
     if np.all(support == 0) or np.all(support == 1):
         return None
     undefined = support < 3
@@ -750,9 +756,8 @@ _WCORR_BLOCK_ELEMENTS = 2**23
 _WCORR_NAN_PRODUCTS = 10
 
 # Time slicing of the estimator's kernel products (see ``_time_slices``): the
-# output timepoints are processed in chunks of this many kernel rows, each
-# against the span of kernel columns where the chunk has non-zero weight.
-_TIME_CHUNK = CHUNK
+# output timepoints are processed in chunks of ``_kernels.CHUNK`` kernel rows,
+# each against the span of kernel columns where the chunk has non-zero weight.
 # Slicing is used only when the spans cover at most this fraction of the
 # kernel's entries; otherwise the full products are computed.
 _TIME_SLICE_MAX_FRACTION = 0.5
@@ -762,7 +767,7 @@ _TIME_SLICING = True
 # float64 elements (32 MB); blocks beyond it are computed again when needed.
 _KERNEL_CACHE_ELEMENTS = 2**22
 # Besides those blocks, the estimator holds up to this many blocks of
-# _TIME_CHUNK rows by up to T columns while it computes a LagKernel's rows
+# CHUNK rows by up to T columns while it computes a LagKernel's rows
 # (measured with tracemalloc: about 3 at T 3,000 and 20,000).
 _KERNEL_WORK_BLOCKS = 4
 # Private hook for tests: when a list, ``_time_slices`` appends its result.
@@ -842,13 +847,13 @@ def _kernel_work_elements(T, dense_elements):
     Float64 elements the estimator holds for one kernel of T timepoints that
     it reads: for a ``LagKernel``, at most its kept blocks
     (``_KERNEL_CACHE_ELEMENTS``) plus ``_KERNEL_WORK_BLOCKS`` blocks of
-    ``_TIME_CHUNK`` x T, and at most ``dense_elements`` (what the same
+    ``CHUNK`` x T, and at most ``dense_elements`` (what the same
     kernel costs as T x T arrays), whichever is smaller.
     """
     T = int(T)
     return min(
         int(dense_elements),
-        _KERNEL_CACHE_ELEMENTS + _KERNEL_WORK_BLOCKS * _TIME_CHUNK * T,
+        _KERNEL_CACHE_ELEMENTS + _KERNEL_WORK_BLOCKS * CHUNK * T,
     )
 
 
@@ -861,213 +866,188 @@ def _kernel_shape(weights):
 
 def _abs_row_chunks(weights):
     """
-    ``(t0, t1, w)`` for consecutive chunks of ``_TIME_CHUNK`` kernel rows:
-    ``w`` holds the absolute weights of rows ``t0:t1`` (NaN as 0) over a span
-    of columns that contains every non-zero weight of the chunk (all columns
-    of an array; the span of a ``LagKernel``).  Chunks of a ``LagKernel``
-    with equal blocks share one array.
+    ``(t0, t1, w)`` for consecutive chunks of ``CHUNK`` kernel rows: ``w``
+    holds the absolute weights of rows ``t0:t1`` (NaN as 0) over a span of
+    columns that contains every non-zero weight of the chunk.  Chunks with
+    equal blocks share one array.
     """
-    if isinstance(weights, LagKernel):
-        seen = {}
-        for t0, t1, c0, c1, key in weights.chunks(_TIME_CHUNK):
-            if key is not None and key in seen:
-                yield t0, t1, seen[key]
-                continue
-            w = np.abs(np.nan_to_num(weights.block(t0, t1, c0, c1), nan=0.0))
-            if key is not None:
-                seen[key] = w
-            yield t0, t1, w
-        return
-    weights = np.asarray(weights, dtype=np.float64)
-    for t0 in range(0, weights.shape[0], _TIME_CHUNK):
-        t1 = min(weights.shape[0], t0 + _TIME_CHUNK)
-        yield t0, t1, np.abs(np.nan_to_num(weights[t0:t1], nan=0.0))
+    def absolute(w):
+        # as np.abs(np.nan_to_num(w, nan=0.0)): NaN 0, +-inf the largest float
+        w = np.abs(w)
+        w[np.isnan(w)] = 0
+        w[np.isinf(w)] = np.finfo(np.float64).max
+        return w
+
+    for t0, t1, _, _, _, w in blocks(as_kernel(weights), CHUNK, absolute):
+        yield t0, t1, w
+
+
+def _without_nan(w):
+    """
+    A kernel block with NaN weights set to 0 (inf kept): ``w`` itself when it
+    has none, otherwise a copy.
+    """
+    nan = np.isnan(w)
+    if not nan.any():
+        return w
+    w = w.copy()
+    w[nan] = 0
+    return w
 
 
 class _KernelRows:
     """
     The estimator's working copy of a (T', T) kernel, read in chunks of
-    ``_TIME_CHUNK`` rows.
+    ``CHUNK`` rows.
 
-    ``weights`` is an array (copied, with NaN weights set to 0) or a
-    ``LagKernel``, whose rows are computed chunk by chunk, each over the span
-    of columns where it can have weight, so no T' x T array is allocated.
-    Both give the same values: each chunk's products and row sums are
-    computed from a contiguous block of the chunk's rows over the same
-    columns, in the same order.
+    ``weights`` is an array or a ``LagKernel``; both are read through the
+    interface of ``_kernels`` (``as_kernel``): chunks of rows, each with the
+    columns where it can have weight (all columns of an array) and a key
+    shared by chunks with equal blocks.  A ``LagKernel``'s rows are computed
+    chunk by chunk, so no T' x T array is allocated.  Each chunk's products
+    and row sums are computed from a contiguous block of the chunk's rows
+    over the same columns, in the same order, so an array and the equal
+    ``LagKernel`` give the same values.  NaN weights count as 0.
 
     Use: ``support`` (non-zero weights per row) and ``first_nonzero()`` are
     available at once; ``zero_rows(mask)`` sets rows to 0; ``prepare(finite)``
-    divides the rows whose largest weight is extreme by that weight (see
-    ``_rescale_extreme_rows``) and chooses the columns of each chunk: the
-    span where it has non-zero weight (time slicing, see ``_time_slices``),
-    or every column when slicing is off, when ``finite`` is False, or when
-    the spans cover more than ``_TIME_SLICE_MAX_FRACTION`` of the kernel;
-    then ``product(x, kind)`` and ``row_sum(kind)`` give ``M @ x`` and
-    ``M.sum(axis=1)`` for ``M`` the kernel (``kind`` "w"), its absolute
-    value ("a") or its support as 0/1 ("s").  Blocks are kept between
-    products up to ``_KERNEL_CACHE_ELEMENTS`` elements and computed again
-    beyond that.
+    divides each row whose largest absolute weight is below
+    ``_KERNEL_ROW_MIN`` or above ``_KERNEL_ROW_MAX`` by that weight (a
+    correlation does not depend on the scale of its kernel row, and the
+    moment sums of such rows would underflow or overflow) and chooses the
+    columns of each chunk (``_time_slices``; every column when slicing is
+    off, when ``finite`` is False, or when the spans cover more than
+    ``_TIME_SLICE_MAX_FRACTION`` of the kernel); then ``product(x, kind)``
+    and ``row_sum(kind)`` give ``M @ x`` and ``M.sum(axis=1)`` for ``M`` the
+    kernel (``kind`` "w"), its absolute value ("a") or its support as 0/1
+    ("s").  Blocks are kept between products up to
+    ``_KERNEL_CACHE_ELEMENTS`` elements and computed again beyond that.
     """
 
     def __init__(self, weights):
-        self.lazy = isinstance(weights, LagKernel)
-        if self.lazy:
-            self.kernel = weights
-            self.shape = weights.shape
-            self._chunks = list(weights.chunks(_TIME_CHUNK))
-            self._raw_stats()
-        else:
-            W = np.array(weights, dtype=np.float64, copy=True)
-            W[np.isnan(W)] = 0
-            self.W = W
-            self.shape = W.shape
-            self.support = (
-                np.count_nonzero(W, axis=1) if W.ndim == 2 else np.zeros(0, dtype=int)
-            )
+        self.kernel = as_kernel(weights)
+        self.shape = self.kernel.shape
+        self._chunks = list(self.kernel.chunks(CHUNK))
+        T_out = self.shape[0] if len(self.shape) == 2 else 0
+        self.support = np.zeros(T_out, dtype=np.int64)
+        self._peak = np.zeros(T_out)
+        self._first = np.zeros(T_out, dtype=np.int64)
+        for t0, t1, c0, c1, _, w in blocks(self.kernel, CHUNK, _without_nan):
+            self.support[t0:t1] = np.count_nonzero(w, axis=1)
+            if w.shape[1]:
+                self._peak[t0:t1] = np.maximum(w.max(axis=1), -w.min(axis=1))
+                self._first[t0:t1] = c0 + np.argmax(w != 0, axis=1)
         self.zero = None
+        self._scale = None
         self.spans = None
         self._cache = {}
         self._cached = 0
 
-    # -- per-row statistics of a LagKernel ---------------------------------
-    def _raw(self, i):
-        t0, t1, c0, c1, _ = self._chunks[i]
-        w = self.kernel.block(t0, t1, c0, c1)
-        w[np.isnan(w)] = 0
-        return w
-
-    def _raw_stats(self):
-        T_out = self.shape[0]
-        self.support = np.zeros(T_out, dtype=np.int64)
-        self._peak = np.zeros(T_out)
-        self._first = np.zeros(T_out, dtype=np.int64)
-        seen = {}
-        for i, (t0, t1, c0, c1, key) in enumerate(self._chunks):
-            if key is not None and key in seen:
-                support, peak, first = seen[key]
-            else:
-                w = self._raw(i)
-                support = np.count_nonzero(w, axis=1)
-                if w.shape[1]:
-                    peak = np.maximum(w.max(axis=1), -w.min(axis=1))
-                    first = np.argmax(w != 0, axis=1)
-                else:
-                    peak = np.zeros(t1 - t0)
-                    first = np.zeros(t1 - t0, dtype=np.int64)
-                if key is not None:
-                    seen[key] = (support, peak, first)
-            self.support[t0:t1] = support
-            self._peak[t0:t1] = peak
-            self._first[t0:t1] = c0 + first
-
     def first_nonzero(self):
         """The column of each row's first non-zero weight (0 for an empty row)."""
-        if self.lazy:
-            return np.where(self.support > 0, self._first, 0)
-        return np.argmax(self.W != 0, axis=1)
+        return np.where(self.support > 0, self._first, 0)
 
     def zero_rows(self, mask):
         """Set the rows in ``mask`` to 0 (before ``prepare``)."""
-        if self.lazy:
-            self.zero = np.asarray(mask, dtype=bool)
-        else:
-            self.W[mask] = 0
+        self.zero = np.asarray(mask, dtype=bool)
 
-    # -- the chunks' columns -----------------------------------------------
     def prepare(self, finite):
-        T_out, T = self.shape
-        if not self.lazy:
-            self.W = _rescale_extreme_rows(self.W)
-            slices = _time_slices(self.W, finite=finite)
-        else:
-            peak = self._peak if self.zero is None else np.where(self.zero, 0.0, self._peak)
-            extreme = (
-                (peak > 0) & np.isfinite(peak)
-                & ((peak < _KERNEL_ROW_MIN) | (peak > _KERNEL_ROW_MAX))
-            )
-            self._scale = np.where(extreme, peak, 1.0) if extreme.any() else None
-            slices = None
-            if _TIME_SLICING and finite and T_out and T:
-                slices, covered, seen = [], 0, {}
-                for i, (t0, t1, c0, c1, key) in enumerate(self._chunks):
-                    if key is not None and key in seen:
-                        s0, s1 = (t0 + o for o in seen[key])
-                    else:
-                        w = self._final(i)
-                        cols = (w != 0).any(axis=0)
-                        if cols.any():
-                            s0 = c0 + int(cols.argmax())
-                            s1 = c0 + w.shape[1] - int(cols[::-1].argmax())
-                        else:
-                            s0 = s1 = 0
-                        if key is not None:
-                            seen[key] = (s0 - t0, s1 - t0)
-                    slices.append((t0, t1, s0, s1))
-                    covered += (t1 - t0) * (s1 - s0)
-                if covered > _TIME_SLICE_MAX_FRACTION * T_out * T:
-                    slices = None
-            if _time_slice_log is not None:
-                _time_slice_log.append(slices)
+        """Rescale the extreme rows and choose each chunk's columns."""
+        T_out = self.shape[0]
+        T = self.shape[1] if len(self.shape) == 2 else 0
+        peak = self._peak if self.zero is None else np.where(self.zero, 0.0, self._peak)
+        extreme = (
+            (peak > 0) & np.isfinite(peak)
+            & ((peak < _KERNEL_ROW_MIN) | (peak > _KERNEL_ROW_MAX))
+        )
+        self._scale = np.where(extreme, peak, 1.0) if extreme.any() else None
+        self._cache = {}
+        self._cached = 0
+        slices = _time_slices(self, finite) if len(self.shape) == 2 else None
         if slices is None:
-            slices = [
-                (t0, min(T_out, t0 + _TIME_CHUNK), 0, T)
-                for t0 in range(0, T_out, _TIME_CHUNK)
-            ]
+            slices = [(t0, t1, 0, T) for t0, t1, _, _, _ in self._chunks]
         self.spans = slices
         self._cache = {}
         self._cached = 0
 
+    # the kernel interface of ``_kernels`` over the prepared rows (NaN
+    # weights 0, rows zeroed and rescaled), read by ``_time_slices``
+    def chunks(self, size):
+        assert size == CHUNK
+        for t0, t1, c0, c1, _ in self._chunks:
+            yield t0, t1, c0, c1, None
+
+    def block(self, t0, t1, c0, c1):
+        assert (t0, t1, c0, c1) == self._chunks[t0 // CHUNK][:4]
+        return self._final(t0 // CHUNK)
+
+    def _keep(self, key, block):
+        if key is not None and self._cached + block.size <= _KERNEL_CACHE_ELEMENTS:
+            self._cache[key] = block
+            self._cached += block.size
+        return block
+
     def _final(self, i):
-        """Chunk i of a LagKernel over its candidate span, rows zeroed and rescaled."""
-        t0, t1 = self._chunks[i][:2]
-        w = self._raw(i)
-        if self.zero is not None:
-            w[self.zero[t0:t1]] = 0
-        if self._scale is not None:
-            scale = self._scale[t0:t1]
+        """
+        Chunk i over its columns: NaN weights 0, the zeroed rows 0, the
+        extreme rows rescaled.  Chunks with equal blocks, equal zeroed rows
+        and equal scales share one array (do not modify it).
+        """
+        t0, t1, c0, c1, key = self._chunks[i]
+        zero = None if self.zero is None else self.zero[t0:t1]
+        scale = None if self._scale is None else self._scale[t0:t1]
+        if key is not None:
+            key = ("final", key,
+                   None if zero is None else zero.tobytes(),
+                   None if scale is None else scale.tobytes())
+            hit = self._cache.get(key)
+            if hit is not None:
+                return hit
+        w = self.kernel.block(t0, t1, c0, c1)
+        if not w.flags.writeable:
+            w = w.copy()  # a view of an array
+        w[np.isnan(w)] = 0
+        if zero is not None:
+            w[zero] = 0
+        if scale is not None:
             rows = scale != 1.0
             if rows.any():
                 w[rows] /= scale[rows, np.newaxis]
-        return w
+        return self._keep(key, w)
 
     def _block(self, i, kind):
         t0, t1, c0, c1 = self.spans[i]
-        key = None
-        if self.lazy:
-            key = self._chunks[i][4]
-            if key is not None:
-                # equal raw blocks; equal row statistics, so equal rows zeroed
-                # and rescaled; the same span relative to t0
-                key = (key, c0 - t0, c1 - t0)
-        key = ("chunk", i) if key is None else key
+        key = self._chunks[i][4]
+        # chunks with equal blocks have equal row statistics, so equal rows
+        # zeroed and rescaled, and the same span relative to t0
+        key = ("chunk", i) if key is None else (key, c0 - t0, c1 - t0)
         hit = self._cache.get((key, kind))
         if hit is not None:
             return hit
         if kind == "w":
-            if self.lazy:
-                k0, k1 = self._chunks[i][2:4]
-                w = self._final(i)
-                if (c0, c1) == (k0, k1):
-                    block = w
-                elif c0 >= k0 and c1 <= k1:
-                    block = np.ascontiguousarray(w[:, c0 - k0 : c1 - k0])
-                else:
-                    # every column (no slicing): zeros outside the span
-                    block = np.zeros((t1 - t0, c1 - c0))
-                    lo, hi = max(k0, c0), min(k1, c1)
-                    if hi > lo:
-                        block[:, lo - c0 : hi - c0] = w[:, lo - k0 : hi - k0]
+            k0, k1 = self._chunks[i][2:4]
+            w = self._final(i)
+            if (c0, c1) == (k0, k1):
+                block = w
+            elif c0 >= k0 and c1 <= k1:
+                block = np.ascontiguousarray(w[:, c0 - k0 : c1 - k0])
             else:
-                block = np.ascontiguousarray(self.W[t0:t1, c0:c1])
+                # every column (no slicing): zeros outside the chunk's columns
+                block = np.zeros((t1 - t0, c1 - c0))
+                lo, hi = max(k0, c0), min(k1, c1)
+                if hi > lo:
+                    block[:, lo - c0 : hi - c0] = w[:, lo - k0 : hi - k0]
         elif kind == "a":
-            block = np.abs(self._block(i, "w"))
+            w = self._block(i, "w")
+            if not np.signbit(w).any():
+                # no negative weights (nor -0.0): its own absolute value
+                if (key, "w") in self._cache:
+                    self._cache[(key, "a")] = w
+                return w
+            block = np.abs(w)
         else:
             block = (self._block(i, "w") != 0).astype(np.float64)
-        if self._cached + block.size <= _KERNEL_CACHE_ELEMENTS:
-            self._cache[(key, kind)] = block
-            self._cached += block.size
-        return block
+        return self._keep((key, kind), block)
 
     def product(self, x, kind="w"):
         """``M @ x`` for a (T, n) matrix ``x`` (``M`` as in the class docstring)."""
@@ -1136,34 +1116,33 @@ def _time_slices(weights, finite=True):
     Chunks of a kernel's rows and the span of columns where each has weight,
     or None when slicing would not save work.
 
-    ``weights`` is a (T', T) kernel without NaN weights.  The rows are split
-    into consecutive chunks of ``_TIME_CHUNK`` rows; for each chunk
-    ``(t0, t1, c0, c1)``, every non-zero weight of rows ``t0:t1`` lies in
-    columns ``c0:c1`` (``c0 == c1`` when the chunk has no weight).  The
-    bounds are found one chunk at a time, so no T' x T boolean matrix is
-    held.  Returns None when ``_TIME_SLICING`` is False, when ``finite`` is
-    False (the caller's products have non-finite operands, where the full
-    products give ``0 * inf = NaN`` that slicing would skip), when T' or T
-    is 0, or when the spans cover more than ``_TIME_SLICE_MAX_FRACTION`` of
-    the kernel's entries.  (``_KernelRows`` finds the same spans for a
-    ``LagKernel`` chunk by chunk.)
+    ``weights`` is a (T', T) kernel without NaN weights: an array, a
+    ``LagKernel``, or the prepared rows of a ``_KernelRows`` (which reads
+    its kernel through the same interface).  The rows are split into
+    consecutive chunks of ``CHUNK`` rows; for each chunk ``(t0, t1, c0,
+    c1)``, every non-zero weight of rows ``t0:t1`` lies in columns ``c0:c1``
+    (``c0 == c1`` when the chunk has no weight).  The bounds are found one
+    chunk at a time, so no T' x T boolean matrix is held.  Returns None when
+    ``_TIME_SLICING`` is False, when ``finite`` is False (the caller's
+    products have non-finite operands, where the full products give
+    ``0 * inf = NaN`` that slicing would skip), when T' or T is 0, or when
+    the spans cover more than ``_TIME_SLICE_MAX_FRACTION`` of the kernel's
+    entries.
     """
-    T_out, T = weights.shape
-    if not (_TIME_SLICING and finite) or T_out == 0 or T == 0:
-        slices = None
-    else:
-        slices = []
-        covered = 0
-        for t0 in range(0, T_out, _TIME_CHUNK):
-            t1 = min(T_out, t0 + _TIME_CHUNK)
-            cols = (weights[t0:t1] != 0).any(axis=0)
+    kernel = as_kernel(weights)
+    T_out, T = kernel.shape
+    slices = None
+    if _TIME_SLICING and finite and T_out and T:
+        slices, covered = [], 0
+        for t0, t1, c0, _, _, w in blocks(kernel, CHUNK):
+            cols = (w != 0).any(axis=0)
             if cols.any():
-                c0 = int(cols.argmax())
-                c1 = T - int(cols[::-1].argmax())
+                s0 = c0 + int(cols.argmax())
+                s1 = c0 + w.shape[1] - int(cols[::-1].argmax())
             else:
-                c0 = c1 = 0
-            slices.append((t0, t1, c0, c1))
-            covered += (t1 - t0) * (c1 - c0)
+                s0 = s1 = 0
+            slices.append((t0, t1, s0, s1))
+            covered += (t1 - t0) * (s1 - s0)
         if covered > _TIME_SLICE_MAX_FRACTION * T_out * T:
             slices = None
     if _time_slice_log is not None:
@@ -1185,28 +1164,6 @@ def _products_finite(a, b):
         bounds = (peaks[0], peaks[1], peaks[0] * peaks[0], peaks[1] * peaks[1],
                   peaks[0] * peaks[1])
     return bool(np.all(np.isfinite(bounds)))
-
-
-def _rescale_extreme_rows(weights):
-    """
-    ``weights`` with each row whose largest absolute weight is below
-    ``_KERNEL_ROW_MIN`` or above ``_KERNEL_ROW_MAX`` divided by that largest
-    weight (a copy when any row is rescaled; ``weights`` itself otherwise).
-    A correlation does not depend on the scale of its kernel row, and the
-    moment sums of such rows would underflow or overflow.
-    """
-    if not weights.size:
-        return weights
-    # the largest |weight| of each row, without a T x T temporary
-    peak = np.maximum(weights.max(axis=1), -weights.min(axis=1))
-    extreme = (
-        (peak > 0) & np.isfinite(peak) & ((peak < _KERNEL_ROW_MIN) | (peak > _KERNEL_ROW_MAX))
-    )
-    if not extreme.any():
-        return weights
-    weights = weights.copy()
-    weights[extreme] /= peak[extreme, np.newaxis]
-    return weights
 
 
 def _wcorr_setup(a, b, rows, autocorrelation):
@@ -1623,6 +1580,11 @@ def _nan_weighted_mean(x, weights, tol=1e-5):
     out = np.full(num.shape, np.nan)
     np.divide(num, den, out=out, where=den != 0)
     return out
+
+
+# Temporaries of ``_fisher_symmetrize`` at their peak, in float64 elements
+# (measured with tracemalloc: 0.66 * _WCORR_BLOCK_ELEMENTS for K 10 to 200).
+_FISHER_WORKSPACE_ELEMENTS = _WCORR_BLOCK_ELEMENTS * 3 // 4
 
 
 def _fisher_symmetrize(c):

@@ -4,10 +4,9 @@ import warnings
 
 import numpy as np
 
-from ._kernels import LagKernel
+from ._kernels import CHUNK, as_kernel, blocks
 from .events import distinct_event_sets, mask_kernel, resolve_events
 from .helpers import (
-    _TIME_CHUNK,
     _as_kernel_array,
     _lag_kernel,
     autofc,
@@ -31,30 +30,21 @@ def _kernel_smooth(x, weights):
     Row t of ``weights`` is the kernel used at timepoint t.  NaN samples get no
     weight.  Entries with no weighted, observed sample are undefined; they are
     set to 0 and one warning reports how many timepoints were affected.
-    ``weights`` is an array or a ``LagKernel`` (read a chunk of rows at a
-    time, over the columns where the chunk can have weight).
+    ``weights`` is an array or a ``LagKernel``, read a chunk of rows at a
+    time over the columns where the chunk can have weight.  As in the
+    estimator, an infinite sample enters every row's sums (``0 * inf`` is
+    NaN), so with one every chunk spans all columns.
     """
     valid = ~np.isnan(x)
     observed = np.where(valid, x, 0.0)
     valid = valid.astype(np.float64)
-    if isinstance(weights, LagKernel):
-        num = np.zeros(observed.shape)
-        den = np.zeros(observed.shape)
-        seen = {}
-        for t0, t1, c0, c1, key in weights.chunks(_TIME_CHUNK):
-            if c1 <= c0:
-                continue
-            w = seen.get(key)
-            if w is None:
-                w = np.abs(weights.block(t0, t1, c0, c1))
-                if key is not None:
-                    seen[key] = w
+    num = np.zeros(observed.shape)
+    den = np.zeros(observed.shape)
+    full = not np.all(np.isfinite(observed))
+    for t0, t1, c0, c1, _, w in blocks(as_kernel(weights), CHUNK, np.abs, full=full):
+        if c1 > c0:
             num[t0:t1] = w @ observed[c0:c1]
             den[t0:t1] = w @ valid[c0:c1]
-    else:
-        w = np.abs(weights)
-        num = w @ observed
-        den = w @ valid
     out = np.zeros_like(num)
     np.divide(num, den, out=out, where=den > 0)
     undefined = np.any(den <= 0, axis=1)
@@ -86,8 +76,11 @@ def _mask_for_subjects(weights, boundaries, subjects):
 
 
 def _temporal_filter(T, k):
-    """Band of half-width |k| around the diagonal (k >= 0), or its complement."""
-    k = np.round(k)
+    """
+    Band of half-width |k| around the diagonal (k >= 0), or its complement;
+    k is rounded to the nearest integer (as for the built-in kernels).
+    """
+    k = int(np.round(k))
     filt = np.eye(T)
     for i in np.arange(1, np.min([np.abs(k) + 1, T])):
         filt = filt + np.eye(T, k=np.abs(i)) + np.eye(T, k=-np.abs(i))
@@ -375,18 +368,22 @@ def timecorr(
     ``wisfc`` and ``autofc`` receive the list of per-subject kernels in one
     call (with a kernel function of your own, one T x T array per distinct
     event set is held in memory).  Any other ``cfun`` is called once per
-    distinct event set with the full data and one T x T kernel array at a
-    time; it must return a list with one array per subject, and subject s's
-    output is taken from the call made with subject s's kernel.
+    distinct event set with the full data and that event set's T x T kernel
+    array (the arrays of all distinct event sets are built before the first
+    call and held until the last); it must return a list with one array per
+    subject, and subject s's output is taken from the call made with subject
+    s's kernel.
 
     Kernels and memory: with a built-in kernel function and ``cfun`` one of
     ``isfc``, ``wisfc``, ``autofc`` or None, the kernel is never built as a
     T x T array.  The estimator reads it 128 rows at a time, each chunk
     over the columns where its rows have non-zero weight, and keeps at most
-    32 MB of such blocks.  The correlations equal those computed from the
-    T x T array exactly, and the smoothed values (``cfun=None``) up to the
-    order of summation.  The
-    time grows linearly in T once T is well above the kernel's span (the
+    32 MB of such blocks.  A kernel function of your own is read the same
+    way, from its T x T array, so the correlations of a built-in kernel and
+    of the same kernel as an array are equal.  The smoothed values
+    (``cfun=None``) are computed a chunk of rows at a time too; an infinite
+    sample enters every row's sums, as in the full product.  The time grows
+    linearly in T once T is well above the kernel's span (the
     largest lag with a non-zero weight in float64: 192 samples for a
     Gaussian of variance 25, 385 at variance 100, 73,983 for the Laplace
     kernel at its default scale of 100, 15,823 for the t kernel at its

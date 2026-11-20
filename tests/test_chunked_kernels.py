@@ -182,6 +182,55 @@ def test_smoothing_equals_the_array_kernel(fn, params, subjects_nan):
             np.testing.assert_allclose(a, b, rtol=1e-12, atol=1e-14)
 
 
+@pytest.mark.parametrize("value", [np.inf, -np.inf, np.nan], ids=["inf", "-inf", "nan"])
+@pytest.mark.parametrize("row", [127, 128, 129, 150])
+def test_smoothing_with_a_non_finite_sample(value, row):
+    # an infinite sample enters every row's sums, as in the full product of
+    # the T x T kernel: 0 * inf is NaN where the kernel gives it no weight
+    # and +-inf where it does; a NaN sample gets no weight.  The result does
+    # not depend on where the chunks of 128 rows start.
+    x = np.random.RandomState(0).randn(300, 2)
+    x[row, 1] = value
+    kw = dict(cfun=None, weights_params={"width": 10})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        lazy = tc.timecorr(x, weights_function=tc.boxcar_weights, **kw)
+        dense = tc.timecorr(x, weights_function=as_array_function(tc.boxcar_weights),
+                            **kw)
+    np.testing.assert_array_equal(lazy, dense)
+    assert np.all(np.isfinite(lazy[:, 0]))
+    weighted = np.abs(np.arange(300) - row) < 5  # boxcar of width 10
+    if np.isnan(value):
+        assert np.all(np.isfinite(lazy[:, 1]))
+    else:
+        assert np.all(lazy[weighted, 1] == value)
+        assert np.all(np.isnan(lazy[~weighted, 1]))
+
+
+@pytest.mark.parametrize("exclude", [2.5, -0.4, 1.6, -2.5, 1e9, -1e9])
+def test_non_integer_exclude_timepoints_is_rounded_for_every_kernel(exclude, subjects):
+    # documented: real values are rounded to the nearest integer
+    kw = dict(weights_params={"var": 4}, cfun=tc.autofc, exclude_timepoints=exclude)
+    lazy = run(tc.timecorr, subjects, weights_function=tc.gaussian_weights, **kw)
+    dense = run(tc.timecorr, subjects,
+                weights_function=as_array_function(tc.gaussian_weights), **kw)
+    assert_identical(lazy[0], dense[0])
+    assert lazy[1] == dense[1]
+    rounded = run(tc.timecorr, subjects, weights_function=tc.gaussian_weights,
+                  **dict(kw, exclude_timepoints=int(np.round(exclude))))
+    assert_identical(lazy[0], rounded[0])
+
+
+def test_masking_twice_intersects_the_events():
+    lazy = _shaped_kernel(300, tc.gaussian_weights, {"var": 400})
+    dense = lazy.dense()
+    twice = mask_kernel(mask_kernel(lazy, [100]), [200])
+    np.testing.assert_array_equal(twice.dense(),
+                                  mask_kernel(mask_kernel(dense, [100]), [200]))
+    np.testing.assert_array_equal(twice.dense(), mask_kernel(dense, [100, 200]))
+    assert twice.dense()[50, 150] == 0 and twice.dense()[150, 250] == 0
+
+
 def test_a_precomputed_matrix_keeps_working(subjects):
     w = tc.gaussian_weights(400, {"var": 25})
     lazy = tc.timecorr(subjects, weights_params={"var": 25}, cfun=tc.autofc)
@@ -363,6 +412,58 @@ def test_step_estimate_is_not_below_the_traced_peak(T):
     ))
     assert not isinstance(out[0], str), out[0]
     assert peak <= est, (peak, est)
+
+
+CFUNS = [tc.isfc, tc.wisfc, tc.autofc]
+CFUN_IDS = ["isfc", "wisfc", "autofc"]
+
+
+def _materialized_peak_and_estimate(K, T, S, cfun):
+    rng = np.random.RandomState(7)
+    data = [rng.randn(T, K) for _ in range(S)]
+    est = ho.estimate_memory_gb(K, 1, T, S)[1] * 1e9
+    peak, out = traced_peak(lambda: run(
+        tc.features, data, order=1, cfun=cfun, rfun=None, delta_rfun=None,
+        max_memory_gb=None,
+    ))
+    assert not isinstance(out[0], str), out[0]
+    return peak, est
+
+
+@pytest.mark.parametrize("cfun", CFUNS, ids=CFUN_IDS)
+def test_step_estimate_covers_several_subjects_and_cross_subject_cfuns(cfun):
+    # K 60, T 2,500, 4 subjects: the estimate without the stacked subjects,
+    # the reference and the Fisher z temporaries of isfc / wisfc was below
+    # the traced peak (by 3% for isfc, 2% for autofc)
+    peak, est = _materialized_peak_and_estimate(60, 2_500, 4, cfun)
+    assert peak <= est, (peak, est)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("cfun", CFUNS, ids=CFUN_IDS)
+@pytest.mark.parametrize("K, T, S", [(60, 5_000, 6), (30, 10_000, 12)])
+def test_step_estimate_covers_large_cross_subject_steps(K, T, S, cfun):
+    peak, est = _materialized_peak_and_estimate(K, T, S, cfun)
+    assert peak <= est, (peak, est)
+
+
+@pytest.mark.parametrize("factor", [1.0, 3.0])
+@pytest.mark.parametrize("T", [3_000, 20_000])
+@pytest.mark.parametrize("cfun", [tc.autofc, tc.isfc], ids=["autofc", "isfc"])
+def test_streamed_step_stays_within_the_budget_it_was_given(cfun, T, factor):
+    # through the guard of features: the block size is chosen from
+    # max_memory_gb, and the traced peak stays within it
+    K, S = 10, 3
+    rng = np.random.RandomState(8)
+    data = [rng.randn(T, K) for _ in range(S)]
+    data[0][rng.rand(T, K) < 0.02] = np.nan
+    budget = ho.estimate_memory_gb(K, 1, T, S, streamed=True)[1] * factor
+    peak, out = traced_peak(lambda: run(
+        tc.features, data, order=1, cfun=cfun, rfun=tc.WeightedStrength(signed=True),
+        delta_rfun=None, max_memory_gb=budget,
+    ))
+    assert not isinstance(out[0], str), out[0]
+    assert peak <= budget * 1e9, (peak, budget)
 
 
 @pytest.mark.parametrize("T", [3_000, 20_000, 50_000])

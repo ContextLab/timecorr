@@ -174,6 +174,13 @@ def test_order_map_validation(name, value, match):
         tc.features(x, order=2, **{name: value})
 
 
+@pytest.mark.parametrize("value", [{True: {"var": 9}}, {1: {"var": 9}, False: None}])
+def test_boolean_keys_are_refused_as_orders(value):
+    x = nested(T=100)
+    with pytest.raises(ValueError, match="booleans are not accepted as orders"):
+        tc.features(x, order=2, weights_params=value)
+
+
 def test_order_map_messages_say_what_an_order_map_is():
     x = nested(T=100)
     with pytest.raises(ValueError) as info:
@@ -232,10 +239,12 @@ def test_feeding_shift_null_check_uses_each_orders_bandwidth():
     assert ho._bandwidth(tc.gaussian_weights, ANALYSIS[3]) == 30.0
 
 
-def test_streamed_memory_checks_use_each_orders_kernel():
-    # the memory estimates do not depend on kernel parameters, so a budget
-    # that refuses one order's step refuses it whatever that order's
-    # kernel; the MemoryError names the order whose step does not fit
+def test_streamed_memory_check_does_not_depend_on_kernel_parameters():
+    # the memory estimates do not depend on kernel parameters (this test
+    # does not show that each order's kernel reaches the memory check):
+    # a budget that refuses order 1's streamed step refuses it with plain
+    # parameters and with order maps of different widths alike, and the
+    # MemoryError names the order whose step does not fit
     x = nested(T=300)
     need = ho.estimate_memory_gb(24, 1, 300, 2, streamed=True)[1]
     budget = need / 2

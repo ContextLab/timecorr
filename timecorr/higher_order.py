@@ -1088,6 +1088,12 @@ def _params_by_order(value, name, max_order):
     if not _has_integer_keys(value):
         return None
     keys = list(value)
+    if any(isinstance(k, bool) for k in keys):
+        raise ValueError(
+            f"The keys of an order map {name} are integer orders in "
+            f"1..{max_order}; booleans are not accepted as orders; got keys "
+            f"{sorted(map(repr, keys))}."
+        )
     if not all(isinstance(k, numbers.Integral) and not isinstance(k, bool)
                for k in keys):
         raise ValueError(

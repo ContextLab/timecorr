@@ -17,6 +17,13 @@ from timecorr.helpers import _corr_row_blocks, _time_slices, _wcorr
 RTOL, ATOL = 1e-10, 1e-12
 
 
+@pytest.fixture(autouse=True)
+def _restore_switches(monkeypatch):
+    """Every test restores the module switches it changes (monkeypatch)."""
+    monkeypatch.setattr(helpers, "_TIME_SLICING", helpers._TIME_SLICING)
+    monkeypatch.setattr(helpers, "_time_slice_log", helpers._time_slice_log)
+
+
 def _run(fn, sliced):
     """``fn()`` with time slicing on or off; returns (result, warning texts)."""
     saved = helpers._TIME_SLICING
@@ -89,15 +96,11 @@ def test_slicing_skipped_for_wide_kernel(x):
     assert _engaged(lambda: _wcorr(x, x, w)) == [None]
 
 
-def test_slicing_off_switch(x):
+def test_slicing_off_switch(x, monkeypatch):
     w = tc.gaussian_weights(len(x), {"var": 25})
     assert _time_slices(w) is not None
-    saved = helpers._TIME_SLICING
-    helpers._TIME_SLICING = False
-    try:
-        assert _time_slices(w) is None
-    finally:
-        helpers._TIME_SLICING = saved
+    monkeypatch.setattr(helpers, "_TIME_SLICING", False)
+    assert _time_slices(w) is None
 
 
 def test_boxcar(x, y):
@@ -107,8 +110,13 @@ def test_boxcar(x, y):
 
 
 def test_mexican_hat(x):
-    w = tc.mexican_hat_weights(len(x), {"sigma": 8})
+    # a signed kernel narrow enough to be sliced (it underflows to 0 beyond
+    # about 116 samples at sigma 3)
+    w = tc.mexican_hat_weights(len(x), {"sigma": 3})
+    assert (w < 0).any()
     _check(lambda: _wcorr(x, x, w))
+    slices = _engaged(lambda: _wcorr(x, x, w))
+    assert slices and slices[0] is not None
 
 
 def test_one_sided(x):
@@ -219,3 +227,86 @@ def test_features_streamed_summary():
             rfun=tc.WeightedStrength(signed=True),
         )
     )
+
+
+def test_empty_kernels_are_not_sliced():
+    assert _time_slices(np.zeros((5, 0))) is None
+    assert _time_slices(np.zeros((0, 5))) is None
+    assert _time_slices(np.zeros((0, 0))) is None
+
+
+def test_support_scan_does_not_hold_a_full_boolean_kernel():
+    # the support bounds are found one chunk of rows at a time
+    import tracemalloc
+
+    T = 2000
+    w = tc.boxcar_weights(T, {"width": 12})
+    _time_slices(w)  # warm up
+    tracemalloc.start()
+    try:
+        assert _time_slices(w) is not None
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    assert peak < T * T / 4  # a T x T boolean matrix is T * T bytes
+
+
+@pytest.mark.parametrize("kind", ["overflow", "inf"])
+def test_non_finite_products_are_not_sliced(kind):
+    # squares of 1e200 overflow: the full products give 0 * inf = NaN, so
+    # the sliced path is not used and the result is the full one exactly,
+    # NaN included; data with inf are not sliced either
+    a = np.random.RandomState(0).randn(600, 2)
+    big = 1e200 if kind == "overflow" else np.inf
+    a[500] = big
+    a[501] = -big
+    w = np.zeros((600, 600))
+    w[:, 0:3] = 1.0
+    (s, ws), (f, wf) = _sliced_and_full(lambda: _wcorr(a, a, w))
+    if kind == "overflow":
+        assert np.isnan(f).any()
+    np.testing.assert_array_equal(s, f)  # NaN positions equal too
+    assert ws == wf
+    assert _engaged(lambda: _wcorr(a, a, w)) == [None]
+    # the same kernel on finite data with ordinary squares is sliced
+    b = np.random.RandomState(0).randn(600, 2)
+    assert _engaged(lambda: _wcorr(b, b, w))[0] is not None
+
+
+def test_nan_weights(x):
+    w = tc.gaussian_weights(len(x), {"var": 25})
+    rng = np.random.RandomState(6)
+    band = np.abs(np.subtract.outer(np.arange(len(x)), np.arange(len(x)))) < 10
+    w[band & (rng.rand(*w.shape) < 0.05)] = np.nan  # inside the band
+    w[~band & (rng.rand(*w.shape) < 1e-4)] = np.nan  # outside it
+    _check(lambda: _wcorr(x, x, w))
+    assert _engaged(lambda: _wcorr(x, x, w))[0] is not None
+
+
+def test_rows_with_disjoint_supports(x, y):
+    # alternating rows weight two windows that do not overlap, and one chunk
+    # of rows has no weight at all
+    T = len(x)
+    w = np.zeros((T, T))
+    for t in range(T):
+        lo = t if t % 2 == 0 else min(T - 7, t + 20)
+        w[t, max(0, lo - 3):lo + 4] = 1.0 + 0.1 * (t % 5)
+    w[256:384] = 0
+    slices = _engaged(lambda: _wcorr(x, y, w))[0]
+    assert slices is not None
+    assert (256, 384, 0, 0) in slices
+    _check(lambda: _wcorr(x, y, w))
+    _check(lambda: _wcorr(x, x, w))
+
+
+def test_events_that_differ_by_subject_under_isfc():
+    rng = np.random.RandomState(7)
+    data = [rng.randn(900, 4) for _ in range(3)]
+    events = [[150, 400], None, [300, 301, 700]]
+    for cfun in (tc.isfc, tc.wisfc):
+        fn = lambda: tc.timecorr(  # noqa: E731
+            data, weights_params={"var": 25}, cfun=cfun, events=events,
+            combine=tc.null_combine,
+        )
+        _check(fn)
+        assert any(s is not None for s in _engaged(fn))

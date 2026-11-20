@@ -73,7 +73,7 @@ The `timecorr` function accepts:
 - `combine`: how per-subject results are combined (`null_combine` keeps them separate)
 - `rfun`: dimensionality reduction applied to the vectorized correlations (a model name, a graph measure, a summary such as `tc.WeightedStrength(signed=True)` or `"communities"`, or a callable); in `features` also `"auto"` (the default) and dicts keyed by order, with `delta_rfun` for the feeding path
 
-The estimator (`wcorr`) is a kernel-weighted Pearson correlation; a true delta kernel (`eye_weights`) gives co-fluctuations (products of z-scored series). Its kernel products are time sliced: chunks of 128 kernel rows are multiplied only with the span of columns where they have non-zero weight, unless the spans cover more than half the kernel (`helpers._TIME_SLICING = False` forces the full products; `tests/test_time_sliced_estimation.py` compares both).
+The estimator (`wcorr`) is a kernel-weighted Pearson correlation; a true delta kernel (`eye_weights`) gives co-fluctuations (products of z-scored series). Its kernel products are time sliced: chunks of 128 kernel rows are multiplied only with the span of columns where they have non-zero weight, unless the spans cover more than half the kernel or the samples, their squares or cross products are not all finite (`helpers._TIME_SLICING = False` forces the full products; `tests/test_time_sliced_estimation.py` compares both).
 
 ### Data Flow
 

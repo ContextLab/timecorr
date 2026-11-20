@@ -230,9 +230,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   zero bands benefit: a Gaussian underflows to exactly 0 beyond a finite
   distance (beyond 192 samples for variance 25), one-sided kernels are zero
   on one side, and event-restricted kernels are block diagonal. When the
-  spans cover more than half of the kernel's entries the full products are
-  computed as before. Results equal the full computation up to the order of
-  floating-point summation, and the warnings are unchanged. Measured:
+  spans cover more than half of the kernel's entries, or when the samples,
+  their squares or their cross products are not all finite (where the full
+  products give `0 * inf = NaN`), the full products are computed as before.
+  Results equal the full computation up to the order of floating-point
+  summation, and the warnings are unchanged. The spans are found one chunk
+  of rows at a time and the chunk products are written in place, so the
+  peak memory measured with `tracemalloc` is the same with and without
+  slicing to within 0.01% (`autofc` on one subject of T 2000, K 4 with a
+  width-12 boxcar kernel: 98,619,812 and 98,617,860 bytes; T 6000, K 4 with
+  a Gaussian of variance 25: 871,844,068 and 871,837,860 bytes). Building
+  the kernel and finding the spans still take time proportional to `T**2`.
+  Measured:
   `features(order=1, cfun=autofc, rfun=WeightedStrength(signed=True))` on 2
   subjects of T 6000, K 96 (random data, default kernel, Apple Accelerate
   BLAS with default threads) took 38.6 s before and 12.3 s after. The

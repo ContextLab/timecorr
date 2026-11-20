@@ -848,7 +848,7 @@ def _wcorr_inputs(a, b, weights):
     return a, b, weights, support
 
 
-def _time_slices(weights):
+def _time_slices(weights, finite=True):
     """
     Chunks of a kernel's rows and the span of columns where each has weight,
     or None when slicing would not save work.
@@ -856,24 +856,27 @@ def _time_slices(weights):
     ``weights`` is a (T', T) kernel without NaN weights.  The rows are split
     into consecutive chunks of ``_TIME_CHUNK`` rows; for each chunk
     ``(t0, t1, c0, c1)``, every non-zero weight of rows ``t0:t1`` lies in
-    columns ``c0:c1`` (``c0 == c1`` when the chunk has no weight).  Returns
-    None when ``_TIME_SLICING`` is False or when the spans cover more than
-    ``_TIME_SLICE_MAX_FRACTION`` of the kernel's entries.
+    columns ``c0:c1`` (``c0 == c1`` when the chunk has no weight).  The
+    bounds are found one chunk at a time, so no T' x T boolean matrix is
+    held.  Returns None when ``_TIME_SLICING`` is False, when ``finite`` is
+    False (the caller's products have non-finite operands, where the full
+    products give ``0 * inf = NaN`` that slicing would skip), when T' or T
+    is 0, or when the spans cover more than ``_TIME_SLICE_MAX_FRACTION`` of
+    the kernel's entries.
     """
-    if not _TIME_SLICING:
+    T_out, T = weights.shape
+    if not (_TIME_SLICING and finite) or T_out == 0 or T == 0:
         slices = None
     else:
-        nonzero = weights != 0
-        T_out, T = nonzero.shape
-        has = nonzero.any(axis=1)
-        first = np.where(has, nonzero.argmax(axis=1), T)
-        end = np.where(has, T - nonzero[:, ::-1].argmax(axis=1), 0)
         slices = []
         covered = 0
         for t0 in range(0, T_out, _TIME_CHUNK):
             t1 = min(T_out, t0 + _TIME_CHUNK)
-            c0, c1 = int(first[t0:t1].min()), int(end[t0:t1].max())
-            if c1 <= c0:
+            cols = (weights[t0:t1] != 0).any(axis=0)
+            if cols.any():
+                c0 = int(cols.argmax())
+                c1 = T - int(cols[::-1].argmax())
+            else:
                 c0 = c1 = 0
             slices.append((t0, t1, c0, c1))
             covered += (t1 - t0) * (c1 - c0)
@@ -884,18 +887,34 @@ def _time_slices(weights):
     return slices
 
 
+def _products_finite(a, b):
+    """
+    True when every operand of the estimator's products is finite: the
+    samples of ``a`` and ``b`` (NaN samples excluded), their squares and
+    their cross products.
+    """
+    with np.errstate(over="ignore", invalid="ignore"):
+        peaks = [
+            np.max(np.abs(x), initial=0.0, where=~np.isnan(x)) if x.size else 0.0
+            for x in (a, b)
+        ]
+        bounds = (peaks[0], peaks[1], peaks[0] * peaks[0], peaks[1] * peaks[1],
+                  peaks[0] * peaks[1])
+    return bool(np.all(np.isfinite(bounds)))
+
+
 def _kernel_product(W, x, slices):
     """
     ``W @ x`` for a (T', T) kernel and a (T, n) matrix; with ``slices`` from
     ``_time_slices``, each chunk of rows is multiplied with its span of
-    columns only (equal up to the order of summation).
+    columns only (equal up to the order of summation), written in place.
     """
     if slices is None:
         return W @ x
-    out = np.zeros((W.shape[0], x.shape[1]))
+    out = np.zeros((W.shape[0], x.shape[1]), dtype=np.result_type(W, x))
     for t0, t1, c0, c1 in slices:
         if c1 > c0:
-            out[t0:t1] = W[t0:t1, c0:c1] @ x[c0:c1]
+            np.matmul(W[t0:t1, c0:c1], x[c0:c1], out=out[t0:t1])
     return out
 
 
@@ -907,8 +926,13 @@ def _rescale_extreme_rows(weights):
     A correlation does not depend on the scale of its kernel row, and the
     moment sums of such rows would underflow or overflow.
     """
-    peak = np.abs(weights).max(axis=1) if weights.size else np.zeros(len(weights))
-    extreme = (peak > 0) & ((peak < _KERNEL_ROW_MIN) | (peak > _KERNEL_ROW_MAX))
+    if not weights.size:
+        return weights
+    # the largest |weight| of each row, without a T x T temporary
+    peak = np.maximum(weights.max(axis=1), -weights.min(axis=1))
+    extreme = (
+        (peak > 0) & np.isfinite(peak) & ((peak < _KERNEL_ROW_MIN) | (peak > _KERNEL_ROW_MAX))
+    )
     if not extreme.any():
         return weights
     weights = weights.copy()
@@ -925,9 +949,10 @@ def _wcorr_setup(a, b, weights, autocorrelation):
     """
     W = _rescale_extreme_rows(weights)
     A = np.abs(W)
+    finite = _products_finite(a, b)  # an infinite sample makes its column NaN
     a = _nan_center(a)
     b = _nan_center(b)
-    slices = _time_slices(W)
+    slices = _time_slices(W, finite=finite and _products_finite(a, b))
     state = {"T": a.shape[0], "W": W, "A": A, "a": a, "b": b, "slices": slices}
     state["active"] = A.sum(axis=1) > 0
     state["has_nan"] = bool(np.isnan(a).any() or np.isnan(b).any())

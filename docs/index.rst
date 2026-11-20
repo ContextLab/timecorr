@@ -39,6 +39,10 @@ Features
 Quick start
 -----------
 
+New to timecorr? The :doc:`quickstart tutorial <tutorial/quickstart>` gets you
+running in four calls, and the :doc:`tutorial gallery <tutorials>` shows every
+part of the toolbox.
+
 .. code-block:: python
 
    import numpy as np
@@ -98,10 +102,9 @@ Contents
    :caption: User Guide
 
    tutorials
-   auto_examples/index
 
 .. toctree::
-   :maxdepth: 2  
+   :maxdepth: 2
    :caption: API Reference
 
    api

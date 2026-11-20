@@ -184,7 +184,7 @@ the decoders the events are resolved once, on the full subject list, before the
 folds are formed; a per-subject entry stays with its subject in every fold; the
 boundaries are external information supplied by the caller, used as given in
 every fold and not estimated from held-out data; and segmentation does not
-advance NumPy's global random state. The :doc:`tutorial <tutorial/event_kernels_tutorial>`
+advance NumPy's global random state. The :doc:`tutorial <tutorial/events>`
 shows each form.
 
 .. code-block:: python
@@ -457,7 +457,6 @@ Utilities
 See Also
 --------
 
-* :doc:`tutorials`: tutorials
-* :doc:`auto_examples/index`: example gallery
+* :doc:`tutorials`: the tutorial gallery
 * `GitHub repository <https://github.com/ContextLab/timecorr>`_: source code and issues
 * `Owen, Chang & Manning (2021) <https://doi.org/10.1038/s41467-021-25876-x>`_: the paper describing the method

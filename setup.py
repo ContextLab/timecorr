@@ -38,17 +38,23 @@ setup(
             "polars",
             "hmmlearn",
         ],
+        # building the documentation (the notebooks are not executed)
         "docs": [
             "sphinx>=4.0.0",
             "furo",
-            "sphinx-gallery",
             "numpydoc",
             "nbsphinx",
-            "seaborn>=0.8.1",
+            "ipython",
+        ],
+        # running the tutorial notebooks in docs/tutorial/
+        "tutorials": [
+            "jupyter",
             "ipykernel",
             "nbconvert",
+            "polars",
             "hmmlearn",
             "htfa[plot,brain3d]>=0.1.0",
+            "imageio-ffmpeg",
         ],
     },
     packages=find_packages(exclude=("tests", "docs")),

@@ -2,7 +2,7 @@
 
 The timecorr toolbox computes and explores the correlational structure of timeseries data. It estimates how correlations between features change from moment to moment (**dynamic correlations**), and it computes **higher-order** dynamic correlations: dynamic correlations of features derived from lower-order dynamic correlations.
 
-The toolbox accompanies Owen, Chang & Manning (2021), *Nature Communications* 12, 5728 ([doi:10.1038/s41467-021-25876-x](https://doi.org/10.1038/s41467-021-25876-x)). Version 0.3.0 changed the correlation estimator, so its numbers differ from version 0.2.0 and from Eq. 4 of the paper; see [CHANGELOG.md](https://github.com/ContextLab/timecorr/blob/master/CHANGELOG.md). Tutorials, examples and the API reference are on [Read the Docs](https://timecorr.readthedocs.io/en/latest/).
+The toolbox accompanies Owen, Chang & Manning (2021), *Nature Communications* 12, 5728 ([doi:10.1038/s41467-021-25876-x](https://doi.org/10.1038/s41467-021-25876-x)). Version 0.3.0 changed the correlation estimator, so its numbers differ from version 0.2.0 and from Eq. 4 of the paper; see [CHANGELOG.md](https://github.com/ContextLab/timecorr/blob/master/CHANGELOG.md). Tutorials and the API reference are on [Read the Docs](https://timecorr.readthedocs.io/en/latest/).
 
 ## Features
 
@@ -94,7 +94,7 @@ r = np.corrcoef(X[2][:, off_diagonal].ravel(), truth["corrs"][:, off_diagonal].r
 print(round(r, 2))  # 0.9
 ```
 
-`tc.carrier_reducer` keeps, at each order, only the features that carry the simulated structure, so the estimate at order 2 is the 4 x 4 correlation matrix among the block products. See the [higher-order tutorial](https://github.com/ContextLab/timecorr/blob/master/docs/tutorial/higher_order_tutorial.ipynb) for recovery at each order and for the limits of variance-based reduction.
+`tc.carrier_reducer` keeps, at each order, only the features that carry the simulated structure, so the estimate at order 2 is the 4 x 4 correlation matrix among the block products. See the [higher-order tutorial](https://github.com/ContextLab/timecorr/blob/master/docs/tutorial/higher_order.ipynb) for recovery at each order and for the limits of variance-based reduction.
 
 ## Squared-correlation summaries and the feeding kernel
 
@@ -109,7 +109,7 @@ X = tc.features(nested, order=2, cfun=tc.autofc, weights_params={"var": 33 ** 2}
 print(comm.fits_[0]["n"], X[2][0].shape)  # 18 (1000, 36)
 ```
 
-This call gives the same features as the default call above; passing a `tc.Communities` object makes its fit readable in `fits_`. `tc.WeightedStrength` and `tc.Communities` summarize each subject's correlations by weighted sums of squared correlations per node or by the mean squared correlation within each community of nodes; they are accepted wherever `rfun` is. `delta_weights_function` and `delta_weights_params` set the kernel of the feeding path (default: `gaussian_weights` with variance 25; `eye_weights` gives co-fluctuations). In the gallery example `plot_nested_recovery.py` (this call, seed 0), a ridge map from subject A's order-2 features to `h`, applied to subject B, gives a mean correlation of 0.74 with `h` over the 6 supergroups (a raw score for one seed; over 24 seeds in `tests/test_nested_recovery.py`, with this configuration (`cfun=tc.autofc`, an analysis kernel with standard deviation 33, wider than the default 10, `Communities()` on the feeding path and the default analysis reducers), the score is .753 +- .019, mean +- standard error, with a control of -.025 +- .018 from subjects with an independent `h`). The default `cfun=tc.isfc` correlates each subject's features with the other subjects' and so reflects structure shared across subjects; `cfun=tc.autofc` computes within-subject correlations. Measured over 12 seeds (108 nodes, T 1000, 6 subjects per call, every argument other than those named left at its default; mean +- standard error):
+This call gives the same features as the default call above; passing a `tc.Communities` object makes its fit readable in `fits_`. `tc.WeightedStrength` and `tc.Communities` summarize each subject's correlations by weighted sums of squared correlations per node or by the mean squared correlation within each community of nodes; they are accepted wherever `rfun` is. `delta_weights_function` and `delta_weights_params` set the kernel of the feeding path (default: `gaussian_weights` with variance 25; `eye_weights` gives co-fluctuations). In the higher-order tutorial (`higher_order.ipynb`; this call with a third, control subject, seed 0), a ridge map from subject A's order-2 features to `h`, applied to subject B, gives a mean correlation of 0.74 with `h` over the 6 supergroups (a raw score for one seed; over 24 seeds in `tests/test_nested_recovery.py`, with this configuration (`cfun=tc.autofc`, an analysis kernel with standard deviation 33, wider than the default 10, `Communities()` on the feeding path and the default analysis reducers), the score is .753 +- .019, mean +- standard error, with a control of -.025 +- .018 from subjects with an independent `h`). The default `cfun=tc.isfc` correlates each subject's features with the other subjects' and so reflects structure shared across subjects; `cfun=tc.autofc` computes within-subject correlations. Measured over 12 seeds (108 nodes, T 1000, 6 subjects per call, every argument other than those named left at its default; mean +- standard error):
 
 | data (`shared=`) | call | `X[2]` score (control) | `D[2]` score (control) |
 |-|-|-|-|
@@ -171,20 +171,21 @@ eigenvector = tc.timecorr(data, rfun="eigenvector_centrality")
 
 A model name, a dict such as `{"model": "PCA", "params": {"whiten": True}}`, a graph measure, or a callable `f(list_of_arrays) -> list_of_arrays` is accepted. When a list of subjects is reduced, one model is fit jointly to all of them.
 
-# Tutorials and Examples
+# Tutorials
 
-The tutorials are Jupyter notebooks in `docs/tutorial/`, also rendered on Read the Docs:
+The tutorials are Jupyter notebooks in `docs/tutorial/`. On [Read the Docs](https://timecorr.readthedocs.io/en/latest/tutorials.html) they form a gallery, shown with the output of a full run. Each link below opens the notebook in Google Colab, where its first code cell installs timecorr.
 
-- **Using timecorr** (`timecorr_notebook.ipynb`): simulation, kernels, the vectorized format, several subjects.
-- **Synthetic data** (`synthetic_data_tutorial.ipynb`): the simulated dataset types, kernel shape and width compared against the true correlations, co-fluctuations from the delta kernel, several subjects, and a per-timepoint test across subjects.
-- **Higher-order correlations** (`higher_order_tutorial.ipynb`): the two paths of Fig. 10 (the original pipeline, with co-fluctuations), `tc.features`, one-sided kernels, simulation and recovery at a chosen order, the limits (feature counts, memory, variance-based reduction), and the defaults of `tc.features` (Gaussian feeding kernel, squared-correlation summaries) on `simulate_nested` data.
-- **Event-restricted kernels** (`event_kernels_tutorial.ipynb`): what restricting a kernel to events does, passing boundaries, segmenting synthetic stimulus embeddings with `tc.segment` (ordered events and recurring states), recovery of block-wise correlations compared with the unrestricted kernel and with wrong boundaries, per-subject events, events per order in `tc.features`, and events in the decoders.
-- **Applications** (`applications_tutorial.ipynb`): dynamic correlations in simulated neuroscience, finance, climate and social-network data.
-- **Brain-network animations with HTFA** (`htfa_network_animations.ipynb`): features of orders 1 to 4 (defaults of `tc.features`) of the HTFA node weights of the story-listening fMRI data analyzed by Owen, Chang & Manning (2021), downloaded from the paper's data archive; which nodes each order's features belong to; and animations of each order on the brain, drawn with the [htfa](https://htfa.readthedocs.io/en/latest/) toolbox (installed with the `docs` extra).
+- [**Quickstart**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/quickstart.ipynb) (`quickstart.ipynb`): up and running in four calls: one dataset, several subjects, higher orders.
+- [**Kernels**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/kernels.ipynb) (`kernels.ipynb`): the kernels and their parameters, kernel shape and width, one-sided kernels, the delta kernel (co-fluctuations), the output format, and smoothing.
+- [**Several subjects**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/subjects.ipynb) (`subjects.ipynb`): data formats (NumPy, pandas, polars), `autofc`, `isfc` and `wisfc`, the combine functions, and a test at each timepoint.
+- [**Reducing correlations**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/reduce.ipynb) (`reduce.ipynb`): models by name, graph measures, `WeightedStrength` and `Communities`.
+- [**Simulating data**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/simulate.ipynb) (`simulate.ipynb`): `simulate_data` and its templates, structure at a chosen order, `simulate_multi_order`, `simulate_nested` and `simulate_hierarchy`.
+- [**Higher-order correlations**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/higher_order.ipynb) (`higher_order.ipynb`): the two paths, `tc.features` and `two_path_step`, `return_info`, reducers and kernels by order, memory, the original pipeline of the paper, and recovery of an injected order-2 signal.
+- [**Event-restricted kernels**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/events.ipynb) (`events.ipynb`): passing event boundaries, finding them with `tc.segment`, several subjects, and events by order.
+- [**Decoding timepoints**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/decoding.ipynb) (`decoding.ipynb`): one decoding step by hand and the four decoders.
+- [**Brain-network animations with HTFA**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/htfa_network_animations.ipynb) (`htfa_network_animations.ipynb`): features of orders 1 to 4 of the story-listening fMRI data analyzed by Owen, Chang & Manning (2021), drawn on the brain with the [htfa](https://htfa.readthedocs.io/en/latest/) toolbox.
 
-Each tutorial has an "Open in Colab" link at the top that opens the notebook in Google Colab, where its first code cell installs timecorr.
-
-The `examples/` folder holds short scripts, shown in the example gallery on Read the Docs.
+To run them locally: `pip install -e ".[tutorials]"`, then `jupyter notebook docs/tutorial/`.
 
 # Installation
 
@@ -210,7 +211,7 @@ pip install --upgrade git+https://github.com/ContextLab/timecorr.git
 
 Python 3.10 or later. The toolbox is currently supported on Mac and Linux.  It has not been tested on Windows (and we expect key functionality not to work properly on Windows systems).
 
-Dependencies (installed by pip): pydata-wrangler, hypertools>=0.8, numpy, scipy, scikit-learn, pandas, matplotlib. Optional: polars (for polars DataFrame input); hmmlearn, used only by `tc.segment`, which installs it on demand the first time it is needed (the `segment` extra, `pip install "timecorr[segment]"`; setting `TIMECORR_AUTO_INSTALL=0` turns automatic installation off); and the `test` and `docs` extras (`pip install "timecorr[test]"`, `pip install "timecorr[docs]"`).
+Dependencies (installed by pip): pydata-wrangler, hypertools>=0.8, numpy, scipy, scikit-learn, pandas, matplotlib. Optional: polars (for polars DataFrame input); hmmlearn, used only by `tc.segment`, which installs it on demand the first time it is needed (the `segment` extra, `pip install "timecorr[segment]"`; setting `TIMECORR_AUTO_INSTALL=0` turns automatic installation off); and the `test`, `docs` (building the documentation) and `tutorials` (running the tutorial notebooks) extras (`pip install "timecorr[test]"`, `pip install "timecorr[docs]"`, `pip install "timecorr[tutorials]"`).
 
 # Citing this toolbox
 
@@ -239,7 +240,7 @@ The preferred way to contribute to timecorr is to fork the main repository on Gi
 
 - All public methods should be documented in the README.
 
-- Each high-level plotting function should have a simple example in the examples folder. This should be as simple as possible to demonstrate the method.
+- Each high-level plotting function should have a simple example in a tutorial in `docs/tutorial/`. This should be as simple as possible to demonstrate the method.
 
 - Changes (both new features and bugfixes) should be tested using `pytest`.  Add tests for your new feature to the `tests/` repo folder.
 
@@ -272,5 +273,4 @@ pytest --doctest-modules timecorr/
 
 - **Documentation**: [timecorr.readthedocs.io](https://timecorr.readthedocs.io/en/latest/)
 - **Issues**: [GitHub Issues](https://github.com/ContextLab/timecorr/issues)
-- **Tutorials**: Jupyter notebooks in `docs/tutorial/`
-- **Examples**: scripts in `examples/`
+- **Tutorials**: Jupyter notebooks in `docs/tutorial/`, shown as a gallery on [Read the Docs](https://timecorr.readthedocs.io/en/latest/tutorials.html)

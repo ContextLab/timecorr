@@ -32,6 +32,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Nunito Sans, lowercase light headings, green brand colors) in place of
   `sphinx-book-theme`; the `docs` extra installs `furo`.
 
+- **Tutorials are the gallery.** `docs/tutorials.rst` shows the notebooks
+  as a gallery of cards (nbsphinx `nbgallery`); each card shows a figure of
+  its notebook (the cell tagged `nbsphinx-thumbnail`) and opens it. The
+  tutorials were rewritten with shorter text: `timecorr_notebook` became
+  `subjects`, `synthetic_data_tutorial` became `kernels`,
+  `higher_order_tutorial` became `higher_order` and `event_kernels_tutorial`
+  became `events`.
+- **Documentation extras.** The `docs` extra holds only what the Sphinx build
+  needs (sphinx, furo, numpydoc, nbsphinx, ipython); the notebooks are
+  rendered from their saved outputs. `.readthedocs.yaml` installs the
+  package with the `docs` extra, installs pandoc, and fails on warnings.
+
 ### Added
 
 - Tutorial `docs/tutorial/htfa_network_animations.ipynb`: features of
@@ -41,8 +53,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   repository; which nodes each order's features belong to; and one
   animation per order on the brain, drawn with the htfa toolbox (1920 x
   1080 H.264 videos at 30 frames per second, with linearly interpolated
-  frames between timepoints, in `docs/_static/tutorial_media/`). The `docs`
-  extra now includes `htfa[plot,brain3d]>=0.1.0`.
+  frames between timepoints, in `docs/_static/tutorial_media/`). The
+  `tutorials` extra includes `htfa[plot,brain3d]>=0.1.0`.
+- Tutorials `quickstart` (four calls, one plot each), `kernels`, `subjects`,
+  `reduce`, `simulate` and `decoding` in `docs/tutorial/`. Every public name
+  of the package appears in a code cell of a tutorial;
+  `tests/test_docs_tutorials.py` checks this, that the gallery and the
+  notebooks match, and that each notebook has one thumbnail cell with an
+  image, a Colab badge naming its own file and no error outputs.
+- `tutorials` extra (`pip install "timecorr[tutorials]"`): what running the
+  notebooks needs (jupyter, ipykernel, nbconvert, polars, hmmlearn,
+  `htfa[plot,brain3d]`, imageio-ffmpeg).
+
+### Removed
+
+- The sphinx-gallery example gallery (`examples/`, `docs/auto_examples/`)
+  and the `sphinx-gallery` dependency. What the examples showed is in the
+  tutorials. The simulated-domains tutorial (`applications_tutorial.ipynb`)
+  is removed.
 
 ## [0.3.0] - 2026-11-17
 

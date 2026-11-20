@@ -39,3 +39,53 @@ pre {
     border-radius: 4px;
 }
 
+
+/* Tutorial gallery (nbsphinx nbgallery in tutorials.rst): one card per
+   notebook. Furo's color variables follow the light and dark themes. */
+.nbsphinx-gallery {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0;
+}
+
+.nbsphinx-gallery > a {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--color-background-border);
+    border-radius: 8px;
+    background: var(--color-background-secondary);
+    color: var(--color-foreground-primary);
+    text-decoration: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.nbsphinx-gallery > a:hover {
+    border-style: solid;
+    border-color: var(--color-brand-primary);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+    transform: translateY(-2px);
+    color: var(--color-brand-content);
+}
+
+/* the figures are drawn on white, so the image area stays white in dark mode */
+.nbsphinx-gallery > a > div:first-child {
+    height: 150px;
+    margin: 0;
+    padding: 8px;
+    align-items: center;
+    background: #ffffff;
+    border-bottom: 1px solid var(--color-background-border);
+}
+
+.nbsphinx-gallery img {
+    object-fit: contain;
+}
+
+.nbsphinx-gallery > a > div:last-child {
+    padding: 0.6rem 0.8rem 0.8rem;
+    font-weight: 600;
+    font-size: 0.95rem;
+    line-height: 1.3;
+}

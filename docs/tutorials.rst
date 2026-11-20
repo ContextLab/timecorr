@@ -16,6 +16,7 @@ Google Colab, where its first code cell installs timecorr.
    tutorial/higher_order_tutorial
    tutorial/event_kernels_tutorial
    tutorial/applications_tutorial
+   tutorial/htfa_network_animations
 
 Using timecorr
 --------------
@@ -65,6 +66,17 @@ Applications
 four domains (brain networks, financial returns, climate variables and social
 groups), at more than one kernel width.
 
+Brain-network animations with HTFA
+----------------------------------
+
+``htfa_network_animations.ipynb``: features of orders 1 to 4 (the defaults
+of ``tc.features``) of the hierarchical topographic factor analysis (HTFA)
+node weights of the story-listening fMRI data analyzed by Owen, Chang &
+Manning (2021), downloaded from the data archive of the paper's repository;
+the record of each step (``return_info=True``); which nodes each order's
+features belong to; and an animation of each order on the brain, drawn with
+the `htfa <https://htfa.readthedocs.io/en/latest/>`_ toolbox.
+
 Running the tutorials
 ---------------------
 
@@ -75,4 +87,6 @@ From the root of the repository:
    pip install -e ".[docs]"
    jupyter notebook docs/tutorial/
 
-Each notebook runs top to bottom in under about two minutes.
+Each notebook runs top to bottom in under about two minutes, except
+``htfa_network_animations.ipynb``: it downloads a 460 MB archive on its first
+run, and its last full run took about 7 minutes after the download.

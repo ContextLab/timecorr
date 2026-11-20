@@ -96,7 +96,7 @@ The estimator (`wcorr`) is a kernel-weighted Pearson correlation; a true delta k
 - Sphinx with numpydoc, autosummary, sphinx-gallery and nbsphinx; source in `docs/`
 - API pages: `docs/api.rst` (autosummary stubs in `docs/generated/`)
 - Gallery examples: `examples/` (rendered into `docs/auto_examples/`; only `plot_*` scripts are executed)
-- Tutorial notebooks: `docs/tutorial/` (rendered without execution; execute them with nbconvert before committing)
+- Tutorial notebooks: `docs/tutorial/` (rendered without execution; execute them with nbconvert before committing). `htfa_network_animations.ipynb` downloads the HTFA fit of the story-listening data of Owen, Chang & Manning (2021) (460 MB archive, cached under `$TIMECORR_DATA`, default `~/timecorr_data`) and draws the features of orders 1 to 4 on the brain with the htfa toolbox; its four embedded mp4 movies make it about 4.7 MB (keep it under about 5 MB)
 
 ## Dependencies
 
@@ -108,4 +108,4 @@ Runtime (`setup.py` `install_requires`, Python >= 3.10):
 Extras:
 - `segment`: hmmlearn (used only by `segment`, and installed on demand if missing)
 - `test`: pytest, polars, hmmlearn
-- `docs`: sphinx, sphinx-book-theme, sphinx-gallery, numpydoc, nbsphinx, seaborn, ipykernel, nbconvert, hmmlearn
+- `docs`: sphinx, sphinx-book-theme, sphinx-gallery, numpydoc, nbsphinx, seaborn, ipykernel, nbconvert, hmmlearn, htfa[plot,brain3d] (for running `htfa_network_animations.ipynb`)

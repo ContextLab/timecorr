@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Tutorial `docs/tutorial/htfa_network_animations.ipynb`: features of
+  orders 1 to 4 (defaults of `features`, with `return_info=True`) of the
+  HTFA node weights of the story-listening fMRI data analyzed by Owen,
+  Chang & Manning (2021), downloaded from the data archive of the paper's
+  repository; which nodes each order's features belong to; and one
+  animation per order on the brain, drawn with the htfa toolbox. The `docs`
+  extra now includes `htfa[plot,brain3d]>=0.1.0`.
+
+### Fixed
+
+- `wcorr` (and everything built on it) divided by `sqrt(var_a * var_b)`,
+  which underflows to 0 when both kernel-weighted variances are below
+  about 1e-162 (features scaled by about 1e-130 or less), so it warned
+  "divide by zero" and returned +-1 for such pairs. It now divides by
+  `sqrt(var_a) * sqrt(var_b)`, and the correlations of such features equal
+  those of the same features rescaled.
+
 ## [0.3.0] - 2026-11-17
 
 ### Changed

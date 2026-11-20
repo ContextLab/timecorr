@@ -324,7 +324,11 @@ Dimensionality reduction and smoothing
 such as ``{"model": "PCA", "params": {"whiten": True}}``, a graph measure
 (``"eigenvector_centrality"``, ``"pagerank_centrality"``, ``"strength"``), a
 squared-correlation summary (below), or a callable that maps a list of arrays
-to a list of arrays.
+to a list of arrays.  PageRank on signed correlations is not always defined:
+for some valid correlation matrices its linear system is singular.  Those
+timepoints get the minimum-norm least-squares solution when it solves the
+system, and otherwise the uniform vector 1/K, with one ``UserWarning`` per
+``reduce`` call giving the counts (see ``reduce``).
 
 Squared-correlation summaries
 -----------------------------

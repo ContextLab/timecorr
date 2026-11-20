@@ -340,11 +340,11 @@ def test_reduce_is_deterministic_for_each_model(rfun):
     np.testing.assert_array_equal(first, second)
 
 
-# --- PageRank on signed correlations: singular systems raise ValueError
+# --- PageRank on signed correlations: ill-posed systems
 
 
 def _previous_pagerank(W, d=0.85):
-    # the package's algorithm before the singular-system check (scipy LU solve)
+    # the package's algorithm at commit 863a412 (scipy LU solve, no checks)
     from scipy import linalg
 
     N = len(W)
@@ -355,26 +355,90 @@ def _previous_pagerank(W, d=0.85):
     return r / np.sum(r)
 
 
-@pytest.mark.parametrize("K, c", [(2, -3 / 37), (3, -1 / 19)])
-def test_pagerank_singular_system_raises(K, c):
-    # a valid correlation matrix (diagonal 1, off-diagonal c, positive definite)
-    # for which I - 0.85 W diag(1 / column sums) is singular
-    M = (1 - c) * np.eye(K) + c
-    assert np.linalg.eigvalsh(M).min() > 0
-    V = np.stack([mat2vec(np.eye(K)), mat2vec(M)])
-    with pytest.raises(ValueError) as info:
+def _agy_singular(a):
+    # valid correlation matrix (positive definite for a near 0.054)
+    return np.array([[1, -a, -a], [-a, 1, a], [-a, a, 1]], dtype=float)
+
+
+_AGY_A = (57 - np.sqrt(2841)) / 68
+
+
+def _pagerank_warnings(record):
+    return [
+        str(w.message) for w in record
+        if issubclass(w.category, UserWarning) and "pagerank_centrality" in str(w.message)
+    ]
+
+
+@pytest.mark.parametrize(
+    "M, expected, n_lstsq, n_uniform",
+    [
+        # 2 x 2, off-diagonal -3/37: B is singular, b in its range; the
+        # minimum-norm solution is the symmetric one
+        ((1 + 3 / 37) * np.eye(2) - 3 / 37, [0.5, 0.5], 1, 0),
+        # 3 x 3, off-diagonal -1/19: two-dimensional null space
+        ((1 + 1 / 19) * np.eye(3) - 1 / 19, [1 / 3] * 3, 1, 0),
+        # agy's exactly singular 3 x 3 (|r| about 0.054): inconsistent system,
+        # so the uniform vector
+        (_agy_singular(_AGY_A), [1 / 3] * 3, 0, 1),
+    ],
+)
+def test_pagerank_ill_posed_timepoint_falls_back_and_warns_once(
+    M, expected, n_lstsq, n_uniform
+):
+    K = len(M)
+    assert np.linalg.eigvalsh(M).min() > 0  # a valid correlation matrix
+    V = np.stack([mat2vec(np.eye(K)), mat2vec(M), mat2vec(np.eye(K))])
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        out = reduce(V, rfun="pagerank_centrality")
+    assert out.shape == (3, K) and np.all(np.isfinite(out))
+    np.testing.assert_allclose(out[1], expected, rtol=0, atol=1e-12)
+    # the well-posed timepoints are what the previous algorithm gave
+    for t in (0, 2):
+        assert np.array_equal(out[t], _previous_pagerank(vec2mat(V)[:, :, t]))
+    messages = _pagerank_warnings(record)
+    assert len(messages) == 1
+    message = messages[0]
+    assert "1 of 3 timepoints" in message
+    assert f"{n_lstsq} used the minimum-norm least-squares solution" in message
+    assert f"{n_uniform} the uniform vector" in message
+    assert "not always defined" in message
+
+
+def test_pagerank_one_warning_per_reduce_call_for_lists():
+    bad = _agy_singular(_AGY_A)
+    V1 = np.stack([mat2vec(np.eye(3)), mat2vec(bad)])
+    V2 = np.stack([mat2vec(bad), mat2vec(bad), mat2vec(np.eye(3))])
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        out = reduce([V1, V2], rfun="pagerank_centrality")
+    assert isinstance(out, list) and len(out) == 2
+    messages = _pagerank_warnings(record)
+    assert len(messages) == 1
+    assert "3 of 5 timepoints" in messages[0]
+    assert "0 used the minimum-norm least-squares solution" in messages[0]
+    assert "3 the uniform vector" in messages[0]
+    # a second call warns again (one warning per call, not per session)
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        reduce(V1, rfun="pagerank_centrality")
+    assert len(_pagerank_warnings(record)) == 1
+
+
+def test_pagerank_well_posed_input_does_not_warn():
+    V = seeded_vectorized_corrs(T=20, K=6)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
         reduce(V, rfun="pagerank_centrality")
-    message = str(info.value)
-    assert "pagerank_centrality" in message
-    assert "singular" in message
-    assert "column sums" in message
-    assert "'strength'" in message and "'eigenvector_centrality'" in message
 
 
 def test_pagerank_well_posed_outputs_unchanged_bit_for_bit():
     rng = np.random.RandomState(7)
     mats = [np.corrcoef(rng.randn(6, 10)) for _ in range(25)]
     mats.append((1 - (-3 / 37)) * np.eye(4)[:4, :4] + (-3 / 37))  # K 4: well posed
+    # badly scaled (a column sum of -2e-12) but well posed: the solve is kept
+    mats.append(_agy_singular(0.5 + 1e-12))
     for M in mats:
         V = mat2vec(M)[None]
         got = reduce(V, rfun="pagerank_centrality")[0]

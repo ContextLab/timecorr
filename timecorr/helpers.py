@@ -731,10 +731,17 @@ _TIME_SLICING = True
 # Private hook for tests: when a list, ``_time_slices`` appends its result.
 _time_slice_log = None
 
-# The PageRank system of ``reduce(..., rfun='pagerank_centrality')`` counts as
-# singular when its smallest singular value is at most this fraction of its
-# largest.
-_PAGERANK_SINGULAR_TOL = 1e-10
+# The PageRank system ``B r = b`` of ``reduce(..., rfun='pagerank_centrality')``
+# is ill-posed for a timepoint when the solve fails, the solution is not
+# finite, its sum is below _PAGERANK_SUM_TOL * max(1, max|r|), its relative
+# residual ||B r - b|| / ||b|| exceeds _PAGERANK_RESIDUAL_TOL, or LAPACK's
+# estimate of the reciprocal 1-norm condition number of B is below
+# _PAGERANK_RCOND (singular to within about 50 units of round-off; the
+# solution is then not unique to working precision).  _PAGERANK_RCOND is
+# also the relative singular-value cutoff of the least-squares fallback.
+_PAGERANK_SUM_TOL = 1e-12
+_PAGERANK_RESIDUAL_TOL = 1e-8
+_PAGERANK_RCOND = 1e-14
 
 # Relative round-off of removing a column's mean (a few float64 spacings).
 _ROUND_OFF = 64 * np.finfo(np.float64).eps
@@ -2065,6 +2072,45 @@ def _umap_defaults(rfun):
     return {**rfun, "kwargs": {**defaults, **(rfun.get("kwargs") or {})}}
 
 
+def _pagerank_solution_ok(B, b, r):
+    """True when ``r`` is finite, has a usable sum and solves ``B r = b``."""
+    if not np.all(np.isfinite(r)):
+        return False
+    if abs(np.sum(r)) < _PAGERANK_SUM_TOL * max(1.0, np.max(np.abs(r))):
+        return False
+    residual = np.linalg.norm(B @ r - b) / np.linalg.norm(b)
+    return bool(residual <= _PAGERANK_RESIDUAL_TOL)
+
+
+def _pagerank_solve(B, b):
+    """
+    Solve the PageRank system with ``scipy.linalg.solve``, or return None.
+
+    Returns the unnormalized solution when the system is well-posed (see
+    ``_PAGERANK_RCOND``), otherwise None.  The solution is computed exactly as
+    at commit 863a412, so well-posed outputs are unchanged bit for bit; the
+    condition estimate comes from a separate LU factorization (``getrf``,
+    ``gecon``), with no singular value decomposition.
+    """
+    getrf, gecon = linalg.get_lapack_funcs(("getrf", "gecon"), (B,))
+    lu, _, info = getrf(B)
+    if info > 0:
+        return None
+    rcond, _ = gecon(lu, np.max(np.sum(np.abs(B), axis=0)), norm="1")
+    if not rcond >= _PAGERANK_RCOND:
+        return None
+    try:
+        with warnings.catch_warnings():
+            # an ill-conditioned warning is superseded by the checks here
+            warnings.simplefilter("ignore", linalg.LinAlgWarning)
+            r = linalg.solve(B, b)
+    except np.linalg.LinAlgError:
+        return None
+    if not _pagerank_solution_ok(B, b, r):
+        return None
+    return r
+
+
 def reduce(corrs, rfun=None, ndims=None):
     """
     Reduce vectorized correlation matrices back to a (timepoints by features) matrix.
@@ -2100,10 +2146,20 @@ def reduce(corrs, rfun=None, ndims=None):
           eigenvalue of the symmetrized matrix; ``'pagerank_centrality'``
           (damping 0.85, uniform prior) divides each column by its column
           sum (a zero sum is replaced by 1; negative weights can make a
-          column sum small or zero) and normalizes the result to sum to 1,
-          and raises ``ValueError`` when its linear system is singular (the
-          smallest singular value of ``I - 0.85 W diag(1 / column sums)`` at
-          most 1e-10 of the largest).  A delta-kernel co-fluctuation matrix
+          column sum small or zero) and normalizes the result to sum to 1.
+          PageRank on signed correlations is not always defined: for some
+          valid correlation matrices the system
+          ``(I - 0.85 W diag(1 / column sums)) r = b`` is singular.  A
+          timepoint is ill-posed when the solve fails, the solution is not
+          finite, its sum is below 1e-12 times ``max(1, max|r|)``, its
+          relative residual ``||B r - b|| / ||b||`` exceeds 1e-8, or the
+          LAPACK estimate of the reciprocal condition number of the system
+          (1-norm) is below 1e-14.  Such a timepoint gets the minimum-norm
+          least-squares solution (``numpy.linalg.lstsq`` with relative
+          singular-value cutoff 1e-14), normalized, when it passes the same
+          residual and sum tests, and otherwise the uniform vector 1/K; one
+          ``UserWarning`` per call gives the counts.  Other timepoints are
+          computed as before (``scipy.linalg.solve``).  A delta-kernel co-fluctuation matrix
           ``z z^T`` has rank one, so on the delta path of ``features`` with
           ``delta_weights_function=eye_weights`` eigenvector centrality equals ``|z| / ||z||`` and the graph measures
           carry no network structure.
@@ -2145,16 +2201,17 @@ def reduce(corrs, rfun=None, ndims=None):
     ValueError
         If a dict ``rfun`` gives a key in both ``'params'`` and ``'kwargs'`` with
         different values, if ``ndims`` is not a positive integer, if
-        ``ndims`` is given with a graph measure, a summary or a callable, if
-        the PageRank system of ``'pagerank_centrality'`` is singular for a
-        timepoint's matrix, or from a summary (see ``WeightedStrength`` and
-        ``Communities``).
+        ``ndims`` is given with a graph measure, a summary or a callable, or
+        from a summary (see ``WeightedStrength`` and ``Communities``).
 
     Warns
     -----
     UserWarning
         When the output is padded with zero columns (``ndims`` larger than the
-        number of features or samples).
+        number of features or samples), and once per call when the PageRank
+        system of ``'pagerank_centrality'`` is ill-posed for any timepoint
+        (with the numbers of ill-posed timepoints, of least-squares
+        solutions and of uniform vectors).
 
     Examples
     --------
@@ -2198,6 +2255,8 @@ def reduce(corrs, rfun=None, ndims=None):
 
         return centrality
 
+    pagerank_counts = {"total": 0, "lstsq": 0, "uniform": 0}
+
     def pagerank_centrality(W, d=0.85, falff=None):
         """
         Compute PageRank centrality using the same algorithm as brainconn.
@@ -2215,7 +2274,10 @@ def reduce(corrs, rfun=None, ndims=None):
         Returns
         -------
         numpy.ndarray
-            PageRank centrality values
+            PageRank centrality values.  For an ill-posed system (see
+            ``_PAGERANK_RCOND``) the normalized minimum-norm least-squares
+            solution when it solves the system, otherwise the uniform vector;
+            ``pagerank_counts`` records which.
         """
         N = len(W)
         if falff is None:
@@ -2228,19 +2290,15 @@ def reduce(corrs, rfun=None, ndims=None):
         D1 = np.diag(1 / deg)
         B = np.eye(N) - d * np.dot(W, D1)
         b = (1 - d) * norm_falff
-        singular_values = np.linalg.svd(B, compute_uv=False)
-        try:
-            if singular_values.min() <= _PAGERANK_SINGULAR_TOL * singular_values.max():
-                raise np.linalg.LinAlgError("singular matrix")
-            r = linalg.solve(B, b)
-        except np.linalg.LinAlgError:
-            raise ValueError(
-                "rfun='pagerank_centrality': the PageRank system "
-                "(I - 0.85 W diag(1 / column sums)) r = b is singular for this "
-                "correlation matrix (negative weights can cancel the column "
-                "sums), so PageRank is not defined for it.  Use "
-                "rfun='strength' or rfun='eigenvector_centrality' instead."
-            ) from None
+        pagerank_counts["total"] += 1
+        r = _pagerank_solve(B, b)
+        if r is None:
+            r = np.linalg.lstsq(B, b, rcond=_PAGERANK_RCOND)[0]
+            if _pagerank_solution_ok(B, b, r):
+                pagerank_counts["lstsq"] += 1
+            else:
+                pagerank_counts["uniform"] += 1
+                return np.full(N, 1.0 / N)
         r /= np.sum(r)
         return r
 
@@ -2295,7 +2353,23 @@ def reduce(corrs, rfun=None, ndims=None):
         return rfun([corrs])[0]
 
     if isinstance(rfun, str) and rfun in graph_measures:
-        return apply_by_row(corrs, graph_measures[rfun])
+        out = apply_by_row(corrs, graph_measures[rfun])
+        n_lstsq, n_uniform = pagerank_counts["lstsq"], pagerank_counts["uniform"]
+        if n_lstsq + n_uniform:
+            warnings.warn(
+                "rfun='pagerank_centrality': the PageRank system "
+                "(I - 0.85 W diag(1 / column sums)) r = b was ill-posed "
+                f"(singular, inconsistent or not solved accurately) for "
+                f"{n_lstsq + n_uniform} of {pagerank_counts['total']} timepoints; "
+                f"{n_lstsq} used the minimum-norm least-squares solution and "
+                f"{n_uniform} the uniform vector 1/K.  PageRank on signed "
+                "correlations is not always defined (negative weights can "
+                "cancel the column sums); rfun='strength' and "
+                "rfun='eigenvector_centrality' are defined for every matrix.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return out
 
     arrays = corrs if isinstance(corrs, list) else [corrs]
     n_features = arrays[0].shape[1]

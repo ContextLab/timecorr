@@ -494,12 +494,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   correlation matrices (for example 2 x 2 with off-diagonal -3/37) the
   PageRank system `(I - 0.85 W diag(1 / column sums)) r = b` is singular
   (negative weights can cancel the column sums); the solve returned
-  meaningless values without a warning (0.474 and 0.526 for that symmetric
-  matrix). It now raises `ValueError` naming the measure and suggesting
-  `'strength'` or `'eigenvector_centrality'` when the smallest singular
-  value of the system is at most 1e-10 of the largest (or the solve fails).
-  Outputs for other matrices are unchanged bit for bit. The `reduce`
-  docstring states how each graph measure treats signed weights.
+  arbitrary values without a warning (0.474 and 0.526 for that symmetric
+  matrix). A timepoint is now ill-posed when the solve fails, the solution
+  is not finite, its sum is below 1e-12 times `max(1, max|r|)`, its relative
+  residual `||B r - b|| / ||b||` exceeds 1e-8, or LAPACK's estimate of the
+  reciprocal 1-norm condition number of the system is below 1e-14 (from a
+  separate LU factorization; no singular value decomposition). Such a
+  timepoint gets the minimum-norm least-squares solution
+  (`numpy.linalg.lstsq`, relative cutoff 1e-14), normalized, when its
+  residual and sum pass the same tests (0.5 and 0.5 for the example above),
+  and otherwise the uniform vector 1/K. One `UserWarning` per `reduce` call
+  gives the number of ill-posed timepoints, of least-squares solutions and of
+  uniform vectors, and says that PageRank on signed correlations is not
+  always defined. Outputs for other matrices are unchanged bit for bit. The
+  `reduce` docstring states how each graph measure treats signed weights.
 
 ### Documentation
 

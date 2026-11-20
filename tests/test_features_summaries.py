@@ -556,14 +556,26 @@ def test_streamed_feeding_counts_the_unreduced_analysis_results():
 
 
 def test_shift_null_on_the_eye_path_is_checked_before_computing():
-    data = noise(S=2, T=2000, K=10)
-    need, held = _held_sizes()
+    # The budget lets the materialized analysis step, whose kernel function
+    # is the user's (T x T arrays, estimate_memory_gb(..., weights_function=)),
+    # run and leaves too little for the shift null (one streamed row per
+    # block on the eye kernel, read in chunks, while the co-fluctuations are
+    # held).  T is 1,000: at T 2,000 the analysis step alone is estimated at
+    # 0.118 GB and the shift null at 0.095 GB, so no budget lets the first
+    # run and stops the second there.
+    T = 1000
+    data = noise(S=2, T=T, K=10)
+    need, held = _held_sizes(T=T)
     calls = []
+    kernel = recording_kernel(calls)
+    analysis = estimate_memory_gb(10, 1, T, 2, weights_function=kernel)[1]
+    budget = (analysis + need + held) / 2
+    assert analysis < budget < need + held
     common = dict(order=1, cfun=tc.autofc, rfun="PCA", return_delta=True,
-                  delta_rfun=tc.Communities(), weights_function=recording_kernel(calls),
+                  delta_rfun=tc.Communities(), weights_function=kernel,
                   delta_weights_function=tc.eye_weights)
     with pytest.raises(MemoryError, match="shift null of the feeding step"):
-        tc.features(data, max_memory_gb=need + held / 2, **common)
+        tc.features(data, max_memory_gb=budget, **common)
     # the analysis kernel was not built, so no correlation was computed
     assert calls == []
     with warnings.catch_warnings():

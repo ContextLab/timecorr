@@ -54,7 +54,7 @@ from .helpers import (
     _check_rfun,
     _LAG_PROFILES,
     _is_model,
-    _FISHER_WORKSPACE_ELEMENTS,
+    _fisher_workspace,
     _kernel_work_elements,
     _lag_kernel,
     _wcorr_block_rows,
@@ -107,8 +107,9 @@ _STREAMED_CFUNS = (autofc, isfc, wisfc)
 
 # Block temporaries of the correlation step, in multiples of one block
 # (``_wcorr_blocks`` keeps about this many block-sized arrays alive at once;
-# measured with tracemalloc for isfc and autofc).
-_WORKSPACE_BLOCKS = 6
+# measured with tracemalloc for isfc and autofc: about 7.3 to 8 blocks
+# including the kernel's blocks, which are counted separately).
+_WORKSPACE_BLOCKS = 7
 
 
 def _builtin_kernel(weights_function):
@@ -139,12 +140,13 @@ def _step_gb(d, T, n_subjects=1, n_outputs=1, kernel_feeding=False, dense=False)
         + S * T * v  # the analysis path's vectorized results, every subject
         + 3 * S * T * d  # the inputs (and the copies made while formatting)
         + kernel
-        # isfc and wisfc (the default cfun): the stacked subjects, one
-        # subject's reference and the temporaries of the Fisher z
-        # symmetrization, held with the correlation array
-        + (S + 1) * T * d + _FISHER_WORKSPACE_ELEMENTS
-        + _workspace(_WORKSPACE_BLOCKS * block, (n_outputs - 1) * S * T * v,
-                     kernel_feeding)
+        # isfc and wisfc (the default cfun): the stacked subjects and one
+        # subject's reference
+        + (S + 1) * T * d
+        # the estimator's blocks, or the Fisher z symmetrization of isfc and
+        # wisfc, which runs after them
+        + _workspace(max(_WORKSPACE_BLOCKS * block, _fisher_workspace(d, T)),
+                     (n_outputs - 1) * S * T * v, kernel_feeding)
     )
     return elements * 8 / _BYTES_PER_GB
 
@@ -180,10 +182,10 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
     their kernel term is ``3 T**2`` elements up to T = 1,270 and then
     grows linearly in T (at most 32 MB plus 4 blocks of 128 rows by T
     columns); a kernel function of your own gives T x T arrays (``3 T**2``).
-    It also counts what ``isfc`` and ``wisfc`` hold besides the
-    correlations (the stacked subjects, one subject's reference and the
-    temporaries of the Fisher z symmetrization), so for ``autofc`` it is
-    larger than the peak.
+    It counts 7 block temporaries of the estimator (or the temporaries of
+    the Fisher z symmetrization of ``isfc`` and ``wisfc``, when larger) and
+    what ``isfc`` and ``wisfc`` hold besides the correlations (the stacked
+    subjects and one subject's reference).
     With per-subject events, the kernels of the distinct event sets (one
     T x T array each for a kernel function of your own) are not included in
     the estimate.
@@ -235,11 +237,11 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
     --------
     >>> from timecorr.higher_order import estimate_memory_gb
     >>> [round(x, 3) for x in estimate_memory_gb(100, 2, 200, n_subjects=3)]
-    [0.0, 0.214, 102.566]
+    [0.0, 0.18, 104.372]
     >>> import timecorr as tc
     >>> [round(x, 3) for x in estimate_memory_gb(100, 2, 200, n_subjects=3,
     ...                                          delta_weights_function=tc.eye_weights)]
-    [0.0, 0.19, 102.566]
+    [0.0, 0.155, 104.372]
     >>> [round(x, 3) for x in estimate_memory_gb(100, 2, 200, 3, streamed=True)]
     [0.0, 0.014, 0.014]
     """

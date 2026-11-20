@@ -432,9 +432,9 @@ def _materialized_peak_and_estimate(K, T, S, cfun):
 
 @pytest.mark.parametrize("cfun", CFUNS, ids=CFUN_IDS)
 def test_step_estimate_covers_several_subjects_and_cross_subject_cfuns(cfun):
-    # K 60, T 2,500, 4 subjects: the estimate without the stacked subjects,
-    # the reference and the Fisher z temporaries of isfc / wisfc was below
-    # the traced peak (by 3% for isfc, 2% for autofc)
+    # K 60, T 2,500, 4 subjects: the estimate of commit 2a64d24 (6 block
+    # temporaries, neither the stacked subjects nor the reference of isfc /
+    # wisfc) was below the traced peak (by 3% for isfc, 2% for autofc)
     peak, est = _materialized_peak_and_estimate(60, 2_500, 4, cfun)
     assert peak <= est, (peak, est)
 

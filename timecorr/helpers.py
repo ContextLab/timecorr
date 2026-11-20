@@ -1582,9 +1582,21 @@ def _nan_weighted_mean(x, weights, tol=1e-5):
     return out
 
 
-# Temporaries of ``_fisher_symmetrize`` at their peak, in float64 elements
-# (measured with tracemalloc: 0.66 * _WCORR_BLOCK_ELEMENTS for K 10 to 200).
-_FISHER_WORKSPACE_ELEMENTS = _WCORR_BLOCK_ELEMENTS * 3 // 4
+def _fisher_step(K):
+    """Timepoints per block of ``_fisher_symmetrize`` for K features."""
+    # _fisher_mean makes about ten temporaries of its input's size (which is
+    # twice the block): keep the block small enough that they stay below the
+    # workspace of wcorr's own blocks
+    return max(1, _WCORR_BLOCK_ELEMENTS // (16 * max(1, K * K)))
+
+
+def _fisher_workspace(K, T):
+    """
+    Float64 elements of the temporaries of ``_fisher_symmetrize`` on a
+    (K, K, T) array at their peak: 11 times one block of K x K x step
+    timepoints (measured with tracemalloc: 10.6 times for K 20 to 300).
+    """
+    return 11 * K * K * min(int(T), _fisher_step(K))
 
 
 def _fisher_symmetrize(c):
@@ -1601,11 +1613,7 @@ def _fisher_symmetrize(c):
     at a time, so the temporaries stay at block size rather than the size of
     ``c``.
     """
-    K = c.shape[0]
-    # _fisher_mean makes about ten temporaries of its input's size (which is
-    # twice the block): keep the block small enough that they stay below the
-    # workspace of wcorr's own blocks
-    step = max(1, _WCORR_BLOCK_ELEMENTS // (16 * max(1, K * K)))
+    step = _fisher_step(c.shape[0])
     for t0 in range(0, c.shape[2], step):
         block = c[:, :, t0 : t0 + step]
         block[...] = _fisher_mean(

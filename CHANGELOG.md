@@ -49,14 +49,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   then at most 32 MB plus 4 blocks of 128 x T per correlation call).
   `estimate_memory_gb` has a keyword `weights_function` that counts a
   kernel function of your own as T x T arrays. The estimate of a step
-  that holds its correlations now also counts what `isfc` and `wisfc`
-  (the default `cfun`) hold besides the correlations: the stacked
-  subjects, one subject's reference and the temporaries of the Fisher z
-  symmetrization (about 50 MB). Before, the estimate could be below the
-  peak traced with `tracemalloc` (K = 60, T = 5,000, 6 subjects, `isfc`:
-  1.069 GB estimated, 1.130 GB traced; now 1.136 GB estimated). For
-  example, `estimate_memory_gb(100, 2, 200, n_subjects=3)` is now
-  `[0.0, 0.214, 102.566]` (it was `[0.0, 0.163, 102.484]`).
+  that holds its correlations now counts 7 block temporaries of the
+  estimator instead of 6 (measured with `tracemalloc`: 7.3 to 8 blocks,
+  the kernel's blocks included), the temporaries of the Fisher z
+  symmetrization of `isfc` and `wisfc` (the default `cfun`) when they are
+  larger, and the stacked subjects and one subject's reference that
+  `isfc` and `wisfc` hold. Before, the estimate could be below the peak
+  traced with `tracemalloc` (K = 60, T = 5,000, 6 subjects, `isfc`:
+  1.069 GB estimated, 1.130 GB traced; now 1.151 GB estimated; on 11
+  sizes from K = 10 to 300 and T = 200 to 10,000 the traced peak was 0.35
+  to 0.99 of the new estimate). For example,
+  `estimate_memory_gb(100, 2, 200, n_subjects=3)` is now
+  `[0.0, 0.18, 104.372]` (it was `[0.0, 0.163, 102.484]`).
 - **`exclude_timepoints` with a non-integer value.** It is rounded to the
   nearest integer, as documented, for a kernel function of your own too
   (it raised `TypeError` before; 2.5, for example).

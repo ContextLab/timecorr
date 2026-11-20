@@ -521,16 +521,17 @@ def test_prefix_consistency_across_requested_orders():
 
 def test_memory_accounting_after_a_fallback():
     # 6 noise features, order 3: every automatic feeding step keeps 6
-    # columns.  The smallest budget that completes (bisection to 1e-17 GB):
-    # 0.23053376 GB, of which 0.00077 GB are held while the order-3 streamed
-    # analysis step runs on the 6 fallback columns (X_1, X_2 and D_2: 96,000
-    # values, with the fits); just below it, that step raises before it
-    # computes anything (measured: "The streamed analysis step at order 3
-    # needs at least about 0.231 GB"; the match below accepts a MemoryError
+    # columns.  The smallest budget that completes (bisection from [0, 0.5]
+    # GB until the bounds are adjacent floats, with the built-in kernels read
+    # in chunks of rows): 0.090026624 GB, of which 0.00077 GB are held while
+    # the order-3 streamed analysis step runs on the 6 fallback columns (X_1,
+    # X_2 and D_2: 96,000 values, with the fits); just below it, that step
+    # raises before it computes anything (measured: "The streamed analysis
+    # step at order 3 needs at least about 0.09 GB"; the match below accepts a MemoryError
     # at order 2 or 3 on the 6 input features, so it also holds if a change
     # of accounting moves the refusal one order earlier)
     x = noise(2, (2000, 6), 4)
-    budget = 0.23053376
+    budget = 0.090026624
     X = quiet(tc.features, x, order=3, max_memory_gb=budget)
     assert X[3][0].shape == (2000, 12)
     with pytest.raises(MemoryError, match=r"at order [23] .*6 input features"):

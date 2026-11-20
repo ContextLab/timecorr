@@ -30,6 +30,7 @@ from .helpers import (
     _WCORR_NAN_PRODUCTS,
     _corr_row_blocks,
     _fisher_mean,
+    _kernel_work_elements,
     _kernels_message,
     _nan_weighted_mean,
     _subject_kernels,
@@ -929,40 +930,55 @@ def _auto_emitter(summary, fit, K, order=None):
 _PEAK_PER_BLOCK = 32  # times b * K * T: block arrays and estimator temporaries
 _PEAK_PER_DATA = 16  # times T * K: the estimator's per-feature terms
 _PEAK_PER_SUBJECT = 6  # times T * K per subject: stacked data, references, outputs
-_PEAK_PER_KERNEL = 7  # times T * T: kernel copies of both orientations
+_PEAK_PER_KERNEL = 7  # times T * T: kernel copies of both orientations (arrays)
 _PEAK_PER_UNIT_PAIRS = 6  # times K * K per subject: accumulators and fitted weights
 _FISHER_CHUNKS = 16  # the Fisher average of a block runs on 1/16 of it at a time
 
 
-def _streamed_peak_elements(T, K, S, b):
+def _streamed_kernel_elements(T, dense=False):
+    """
+    Float64 elements the kernels of a streamed step hold while both
+    orientations are read: ``7 T**2`` for arrays (``dense``), and for a
+    ``LagKernel`` at most that and two kernels' worth of
+    ``helpers._kernel_work_elements``.
+    """
+    T = int(T)
+    dense_elements = _PEAK_PER_KERNEL * T * T
+    if dense:
+        return dense_elements
+    return min(dense_elements, 2 * _kernel_work_elements(T, dense_elements))
+
+
+def _streamed_peak_elements(T, K, S, b, dense=False):
     """
     Number of float64 elements a streamed step holds at its peak, for S
     subjects of T timepoints and K features and row blocks of b rows:
     ``32 b K T`` (the block, its other orientation and the estimator's
     temporaries) ``+ 16 T K`` (the estimator's per-feature terms) ``+ 6 S T
-    K`` (stacked data, references, outputs of up to 4K columns) ``+ 7 T**2``
-    (kernel copies of both orientations) ``+ 6 S K**2`` (accumulators and
-    fitted weights).  The coefficients are measured with ``tracemalloc``
-    (autofc and isfc, with and without NaN samples), with margin; the
-    caller's inputs (data and kernels) are not included.
+    K`` (stacked data, references, outputs of up to 4K columns) ``+`` the
+    kernels (``_streamed_kernel_elements``: ``7 T**2`` for T x T arrays,
+    ``dense``; linear in T for the built-in kernels at large T) ``+ 6 S
+    K**2`` (accumulators and fitted weights).  The coefficients are measured
+    with ``tracemalloc`` (autofc and isfc, with and without NaN samples),
+    with margin; the caller's inputs (data and kernels) are not included.
     """
     T, K, S, b = int(T), int(K), int(S), int(b)
     return (
         _PEAK_PER_BLOCK * b * K * T
         + _PEAK_PER_DATA * T * K
         + _PEAK_PER_SUBJECT * S * T * K
-        + _PEAK_PER_KERNEL * T * T
+        + _streamed_kernel_elements(T, dense)
         + _PEAK_PER_UNIT_PAIRS * S * K * K
     )
 
 
-def _block_rows_for(T, K, S, max_bytes):
+def _block_rows_for(T, K, S, max_bytes, dense=False):
     """
     The largest number of rows per block b (at most K) whose peak
-    (``8 * _streamed_peak_elements(T, K, S, b)`` bytes) fits in
+    (``8 * _streamed_peak_elements(T, K, S, b, dense)`` bytes) fits in
     ``max_bytes``; 0 if one row does not fit.
     """
-    fixed = 8 * _streamed_peak_elements(T, K, S, 0)
+    fixed = 8 * _streamed_peak_elements(T, K, S, 0, dense)
     per_row = 8 * _PEAK_PER_BLOCK * int(K) * int(T)
     if max_bytes < fixed + per_row:
         return 0

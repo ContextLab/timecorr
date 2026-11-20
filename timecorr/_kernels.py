@@ -131,6 +131,8 @@ class LagKernel:
     def _lag_range(self):
         p = self.profile
         finite = bool(np.all(np.isfinite(p)))
+        self._finite = finite
+        self._symmetric = None
         nonzero = np.flatnonzero(p != 0)  # NaN counts as non-zero
         L = int(nonzero[-1]) if nonzero.size else -1
         if not finite:
@@ -210,25 +212,65 @@ class LagKernel:
 
     def block(self, t0, t1, c0, c1):
         """Rows ``t0:t1``, columns ``c0:c1`` of the kernel (a new float array)."""
+        if self.exclude is None and self._finite:
+            return self._toeplitz_block(t0, t1, c0, c1)
+        # in place where possible: about two blocks of 8-byte temporaries
         d = np.subtract.outer(np.arange(t0, t1), np.arange(c0, c1))  # t - tau
-        w = self.profile[np.abs(d)]
+        drop = None  # weights set to 0 by the direction or the diagonal
         if self.include == "all":
             if not self.include_zero:
-                w[d == 0] = 0
+                drop = d == 0
         elif self.include == "backward":
-            w = np.where(d >= (0 if self.include_zero else 1), w, 0.0)
+            drop = d < (0 if self.include_zero else 1)
         else:
-            w = np.where(d <= (0 if self.include_zero else -1), w, 0.0)
+            drop = d > (0 if self.include_zero else -1)
+        np.abs(d, out=d)
+        w = self.profile[d]
+        if drop is not None:
+            w[drop] = 0
+            del drop
         if self.exclude is not None:
-            k = min(abs(self.exclude), self.T - 1)
-            band = np.abs(d) <= k
+            band = d <= min(abs(self.exclude), self.T - 1)
             if self.exclude < 0:
-                band = ~band
-            w = np.multiply(band.astype(np.float64), w)
+                np.logical_not(band, out=band)
+            # as the 0/1 matrix of timecorr's exclude_timepoints multiplies it
+            np.multiply(w, band, out=w)
+            del band
         del d
         if self.labels is not None:
-            same = self.labels[t0:t1, np.newaxis] == self.labels[np.newaxis, c0:c1]
-            w = np.where(same, w, 0.0)
+            other = self.labels[t0:t1, np.newaxis] != self.labels[np.newaxis, c0:c1]
+            w[other] = 0
+        return w
+
+    def _toeplitz_block(self, t0, t1, c0, c1):
+        """``block`` without ``exclude`` and with a finite profile: each row
+        is a slice of the symmetric profile, copied from a strided view."""
+        n, m = t1 - t0, c1 - c0
+        if n <= 0 or m <= 0:
+            return np.zeros((max(n, 0), max(m, 0)))
+        T = self.T
+        if self._symmetric is None:
+            # weights at the signed lags T - 1, ..., -(T - 1) (symmetric)
+            self._symmetric = self.profile[np.abs(np.arange(2 * T - 1) - (T - 1))]
+        # row t holds entries T - 1 - t + c0 ... T - 1 - t + c1 - 1
+        windows = np.lib.stride_tricks.sliding_window_view(self._symmetric, m)
+        w = np.array(windows[T - t1 + c0 : T - t0 + c0][::-1])
+        k = t0 - c0  # entry (r, j) is at the lag t - tau = r - j + k
+        if self.include == "all":
+            if not self.include_zero:
+                r = np.arange(max(0, -k), min(n, m - k))
+                w[r, r + k] = 0
+        elif self.include == "backward":
+            # keep t - tau >= 0 (> 0 without the diagonal): j <= r + k (- 1)
+            w[~np.tri(n, m, k - (0 if self.include_zero else 1), dtype=bool)] = 0
+        else:
+            # keep t - tau <= 0 (< 0 without the diagonal): j >= r + k (+ 1)
+            w[np.tri(n, m, k - (1 if self.include_zero else 0), dtype=bool)] = 0
+        if self.labels is not None and (
+            self.labels[min(t0, c0)] != self.labels[max(t1, c1) - 1]
+        ):
+            other = self.labels[t0:t1, np.newaxis] != self.labels[np.newaxis, c0:c1]
+            w[other] = 0
         return w
 
     def dense(self):

@@ -52,7 +52,9 @@ from .helpers import (
     _SUMMARY_NAMES,
     _check_ndims,
     _check_rfun,
+    _LAG_PROFILES,
     _is_model,
+    _kernel_work_elements,
     _lag_kernel,
     _wcorr_block_rows,
     _warn_user,
@@ -108,22 +110,34 @@ _STREAMED_CFUNS = (autofc, isfc, wisfc)
 _WORKSPACE_BLOCKS = 6
 
 
-def _step_gb(d, T, n_subjects=1, n_outputs=1, kernel_feeding=False):
+def _builtin_kernel(weights_function):
+    """True for a built-in kernel function (read in chunks of rows, no T x T array)."""
+    try:
+        return weights_function is None or weights_function in _LAG_PROFILES
+    except TypeError:
+        return False
+
+
+def _step_gb(d, T, n_subjects=1, n_outputs=1, kernel_feeding=False, dense=False):
     """
     Peak memory (GB) of one unreduced correlation step on ``n_subjects`` (T, d)
     inputs that holds ``n_outputs`` (T, d(d+1)/2) results per subject.
     ``kernel_feeding``: the feeding path (``n_outputs=2``) uses a kernel other
     than ``eye_weights``, so it has block temporaries of its own while both
-    paths' results are held.
+    paths' results are held.  ``dense``: a kernel of the step is a T x T
+    array (a kernel function that is not built in), not read in chunks.
     """
     d, T, S = int(d), int(T), int(n_subjects)
     v = d * (d + 1) // 2
     block = min(d, _wcorr_block_rows(T, d)) * T * d
+    # the kernel, its working copy and its absolute value as T x T arrays;
+    # a built-in kernel holds at most that and a bounded set of row blocks
+    kernel = 3 * T * T if dense else _kernel_work_elements(T, 3 * T * T)
     elements = (
         d * d * T  # the (d, d, T) correlation array of one subject
         + S * T * v  # the analysis path's vectorized results, every subject
         + 3 * S * T * d  # the inputs (and the copies made while formatting)
-        + 3 * T * T  # the kernel, its working copy and its absolute value
+        + kernel
         + _workspace(_WORKSPACE_BLOCKS * block, (n_outputs - 1) * S * T * v,
                      kernel_feeding)
     )
@@ -143,7 +157,7 @@ def _workspace(blocks, feeding, kernel_feeding):
 
 
 def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=False,
-                       *, delta_weights_function=None):
+                       *, delta_weights_function=None, weights_function=None):
     """
     Estimate the peak memory of each order of an unreduced or streamed pipeline.
 
@@ -157,9 +171,13 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
     ``tc.features(..., rfun=None, delta_rfun=None)`` with the same
     ``delta_weights_function`` and the default ``combine`` (``null_combine``)
     for data without NaNs; other ``combine`` functions and reducers allocate
-    more.  With per-subject events, the kernels of the
-    distinct event sets (one T x T array each) are not included in the
-    estimate.
+    more.  The built-in kernel functions are read a chunk of rows at a time:
+    their kernel term is ``3 T**2`` elements up to about T = 1,200 and then
+    grows linearly in T (at most 32 MB plus 4 blocks of 128 rows by T
+    columns); a kernel function of your own gives T x T arrays (``3 T**2``).
+    With per-subject events, the kernels of the distinct event sets (one
+    T x T array each for a kernel function of your own) are not included in
+    the estimate.
 
     With ``streamed=True`` each entry is instead the smallest peak of one
     streamed step (one row of correlations per block; see ``features``) on
@@ -190,7 +208,13 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
         ``features``: None (the default Gaussian kernel) or any kernel other
         than ``eye_weights`` counts the feeding path's block temporaries;
         ``eye_weights`` (the original pipeline's co-fluctuations) does not.
-        Not used with ``streamed=True``.  Default: None.
+        Default: None.
+    weights_function : function or None, optional
+        The analysis kernel of the run (keyword-only), as in ``features``:
+        None (the default Gaussian kernel) or a built-in kernel function is
+        read in chunks of rows; a function of your own returns T x T arrays,
+        which are counted as such (as is a ``delta_weights_function`` of your
+        own).  Default: None.
 
     Returns
     -------
@@ -210,31 +234,40 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
     >>> [round(x, 3) for x in estimate_memory_gb(100, 2, 200, 3, streamed=True)]
     [0.0, 0.014, 0.014]
     """
+    dense = not (
+        _builtin_kernel(weights_function) and _builtin_kernel(delta_weights_function)
+    )
+    return _estimates(K, order, T, n_subjects, return_delta, streamed,
+                      delta_weights_function is not eye_weights, dense)
+
+
+def _estimates(K, order, T, n_subjects, return_delta, streamed, kernel_feeding,
+               dense):
+    """``estimate_memory_gb`` with the kernels given by ``kernel_feeding`` and
+    ``dense`` (see ``_step_gb``)."""
     K = int(K)
     T = int(T)
     if streamed:
-        step = 8 * _streamed_peak_elements(T, K, n_subjects, 1) / _BYTES_PER_GB
+        step = 8 * _streamed_peak_elements(T, K, n_subjects, 1, dense) / _BYTES_PER_GB
         return [0.0] + [step] * int(order)
-    kernel_feeding = delta_weights_function is not eye_weights
     estimates = [0.0]
     d = K
     for k in range(1, int(order) + 1):
         both_paths = k < order or return_delta
         estimates.append(
-            _step_gb(d, T, n_subjects, 2 if both_paths else 1, kernel_feeding)
+            _step_gb(d, T, n_subjects, 2 if both_paths else 1, kernel_feeding, dense)
         )
         d = d * (d + 1) // 2
     return estimates
 
 
 def _largest_k(order, T, max_memory_gb, n_subjects=1, return_delta=False,
-               streamed=False, kernel_feeding=False):
+               streamed=False, kernel_feeding=False, dense=False):
     """Largest K whose estimates up to ``order`` all fit (0 if none)."""
-    feeding = gaussian_weights if kernel_feeding else eye_weights
 
     def fits(k):
-        est = estimate_memory_gb(k, order, T, n_subjects, return_delta, streamed,
-                                 delta_weights_function=feeding)
+        est = _estimates(k, order, T, n_subjects, return_delta, streamed,
+                         kernel_feeding, dense)
         return max(est) <= max_memory_gb
 
     if not fits(1):
@@ -264,23 +297,25 @@ def _stream_hint(order):
 
 
 def _check_step_memory(d, T, n_subjects, n_outputs, max_memory_gb, order=None,
-                       kernel_feeding=False, held_elements=0, hint=""):
+                       kernel_feeding=False, held_elements=0, hint="", dense=False):
     """
     Raise MemoryError before an unreduced correlation step on ``n_subjects``
     (T, d) inputs whose estimate (``_step_gb``), plus ``held_elements``
     float64 values retained by the caller (earlier outputs and fits of a
     ``features`` run), exceeds ``max_memory_gb``.  ``max_memory_gb=None``
-    checks nothing.  ``hint`` is appended to the message.  Shared by ``features``, the path functions and the
-    decoders, so all refuse the same steps.
+    checks nothing.  ``hint`` is appended to the message.  ``dense``: a
+    kernel of the step is a T x T array (see ``_step_gb``).  Shared by
+    ``features``, the path functions and the decoders, so all refuse the
+    same steps.
     """
     if max_memory_gb is None:
         return
     S = int(n_subjects)
-    step = _step_gb(d, T, S, n_outputs, kernel_feeding)
+    step = _step_gb(d, T, S, n_outputs, kernel_feeding, dense)
     held = 8 * int(held_elements) / _BYTES_PER_GB
     if step + held > max_memory_gb:
         fit = _largest_k(1, T, max_memory_gb - held, S, n_outputs > 1,
-                         kernel_feeding=kernel_feeding)
+                         kernel_feeding=kernel_feeding, dense=dense)
         where = "" if order is None else f" at order {order}"
         retained = (
             f", plus {held:.3g} GB of outputs and fits retained by the run"
@@ -297,7 +332,7 @@ def _check_step_memory(d, T, n_subjects, n_outputs, max_memory_gb, order=None,
 
 
 def _streamed_block_elements(d, T, n_subjects, max_memory_gb, order=None,
-                             path="analysis"):
+                             path="analysis", dense=False):
     """
     ``max_block_elements`` for a streamed step on ``n_subjects`` (T, d)
     inputs: ``b * d * T`` with b the largest number of rows per block whose
@@ -306,14 +341,15 @@ def _streamed_block_elements(d, T, n_subjects, max_memory_gb, order=None,
     size, ``helpers._wcorr_block_rows``).  Raise MemoryError, before the step
     computes anything, when one row per block does not fit.  The only place
     that converts the byte budget of a streamed step to a block size.
+    ``dense``: the step's kernels are T x T arrays (see ``_step_gb``).
     """
     if max_memory_gb is None:
         return None
     S = int(n_subjects)
-    b = _block_rows_for(T, d, S, max_memory_gb * _BYTES_PER_GB)
+    b = _block_rows_for(T, d, S, max_memory_gb * _BYTES_PER_GB, dense)
     if b < 1:
-        need = estimate_memory_gb(d, 1, T, S, streamed=True)[1]
-        fit = _largest_k(1, T, max_memory_gb, S, streamed=True)
+        need = _estimates(d, 1, T, S, False, True, True, dense)[1]
+        fit = _largest_k(1, T, max_memory_gb, S, streamed=True, dense=dense)
         where = "" if order is None else f" at order {order}"
         raise MemoryError(
             f"The streamed {path} step{where} needs at least about {need:.3g} GB "
@@ -326,18 +362,20 @@ def _streamed_block_elements(d, T, n_subjects, max_memory_gb, order=None,
     return b * int(d) * int(T)
 
 
-def _budget_left(max_memory_gb, held_elements, d, T, n_subjects, order, what):
+def _budget_left(max_memory_gb, held_elements, d, T, n_subjects, order, what,
+                 dense=False):
     """
     The budget (GB) left for a streamed computation on ``n_subjects`` (T, d)
     inputs while ``held_elements`` float64 values are held (None: no limit).
     Raise MemoryError, before anything is computed, when what is held plus one
-    row of correlations per block exceeds ``max_memory_gb``.
+    row of correlations per block exceeds ``max_memory_gb``.  ``dense``: the
+    kernels are T x T arrays (see ``_step_gb``).
     """
     if max_memory_gb is None:
         return None
     S = int(n_subjects)
     held = 8 * int(held_elements) / _BYTES_PER_GB
-    need = 8 * _streamed_peak_elements(T, d, S, 1) / _BYTES_PER_GB
+    need = 8 * _streamed_peak_elements(T, d, S, 1, dense) / _BYTES_PER_GB
     if held + need > max_memory_gb:
         where = "" if order is None else f" at order {order}"
         raise MemoryError(
@@ -353,14 +391,24 @@ def _budget_left(max_memory_gb, held_elements, d, T, n_subjects, order, what):
     return max_memory_gb - held
 
 
-def _event_kernel_elements(T, n_subjects, events):
+# float64 elements (per timepoint) of a LagKernel: its profile, its
+# symmetric profile, and the block labels and bounds of its events
+_LAG_KERNEL_PER_T = 6
+
+
+def _event_kernel_elements(T, n_subjects, events, dense=False):
     """
-    Elements of the kernels a step builds for RESOLVED ``events``: one T x T
-    array per distinct event set when the subjects' events differ, 0 when
-    one kernel is shared by every subject (as without events).
+    Elements of the kernels a step builds for RESOLVED ``events`` when the
+    subjects' events differ: per distinct event set, one T x T array for a
+    kernel function that is not built in (``dense``), and
+    ``_LAG_KERNEL_PER_T * T`` for a built-in one; 0 when one kernel is
+    shared by every subject (as without events).
     """
     groups = distinct_event_sets(_restricted(events), int(n_subjects))
-    return len(groups) * int(T) * int(T) if len(groups) > 1 else 0
+    if len(groups) == 1:
+        return 0
+    T = int(T)
+    return len(groups) * (T * T if dense else _LAG_KERNEL_PER_T * T)
 
 
 def _fits_elements(*reducers):
@@ -502,7 +550,7 @@ def _step_kernels(T, n_subjects, weights_function, weights_params,
 
 
 def _run_streamed(subjects, summary, cfun, kernels, *, max_memory_gb, order, path,
-                  auto_n, bandwidth, append_fit=False):
+                  auto_n, bandwidth, append_fit=False, dense=False):
     """
     ``summaries._streamed_summary`` under a memory budget; issues the
     estimator's warning.  ``append_fit`` as in ``_apply_reducer``.
@@ -512,7 +560,7 @@ def _run_streamed(subjects, summary, cfun, kernels, *, max_memory_gb, order, pat
     subjects = [np.ascontiguousarray(x, dtype=np.float64) for x in subjects]
     T, d = subjects[0].shape
     max_block = _streamed_block_elements(
-        d, T, len(subjects), max_memory_gb, order, path
+        d, T, len(subjects), max_memory_gb, order, path, dense
     )
     out, message = _streamed_summary(
         subjects,
@@ -589,15 +637,16 @@ def _analysis_path(
     ``append_fit``, otherwise the only entry; see ``_apply_reducer``).
     """
     T, d = subjects[0].shape
+    dense = not _builtin_kernel(weights_function)
     if _streams(rfun, cfun, combine, groups):
         summary = _as_summary(rfun)
         # the distinct event kernels and earlier fits are held while the step
         # runs: checked before the kernels are built
         budget = _budget_left(
             max_memory_gb,
-            held_elements + _event_kernel_elements(T, len(subjects), events)
+            held_elements + _event_kernel_elements(T, len(subjects), events, dense)
             + _fits_elements(summary, *reducers),
-            d, T, len(subjects), order, "streamed analysis step",
+            d, T, len(subjects), order, "streamed analysis step", dense,
         )
         kernels = _step_kernels(
             T, len(subjects), weights_function, weights_params,
@@ -614,10 +663,12 @@ def _analysis_path(
             auto_n=cfun is autofc,
             bandwidth=_bandwidth(weights_function, weights_params),
             append_fit=append_fit,
+            dense=dense,
         )
     _check_step_memory(d, T, len(subjects), n_outputs, max_memory_gb, order,
                        kernel_feeding,
-                       held_elements - input_elements + _fits_elements(*reducers))
+                       held_elements - input_elements + _fits_elements(*reducers),
+                       dense=dense)
 
     def analyze(members, member_events):
         return combine(
@@ -741,6 +792,7 @@ def _delta_path(
     T, d = subjects[0].shape
     S = len(subjects)
     summary = _as_summary(rfun)
+    dense = not _builtin_kernel(weights_function)
     if weights_function is not eye_weights:
         if summary is not None:
             # what the caller holds (``held_elements``: results and retained
@@ -748,8 +800,8 @@ def _delta_path(
             # kernels are built
             budget = _budget_left(
                 max_memory_gb,
-                held_elements + _event_kernel_elements(T, S, events),
-                d, T, S, order, "streamed feeding step",
+                held_elements + _event_kernel_elements(T, S, events, dense),
+                d, T, S, order, "streamed feeding step", dense,
             )
             kernels = _step_kernels(
                 T, S, weights_function, weights_params, include_timepoints,
@@ -766,9 +818,10 @@ def _delta_path(
                 auto_n=True,
                 bandwidth=_bandwidth(weights_function, weights_params),
                 append_fit=append_fit,
+                dense=dense,
             )
         _check_step_memory(d, T, S, n_outputs, max_memory_gb, order, True,
-                           retained_elements)
+                           retained_elements, dense=dense)
         corrs = _as_list(
             timecorr(
                 subjects,
@@ -1031,7 +1084,7 @@ def _known_width(rfun, d, ndims):
 
 
 def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfun,
-                          combine, feeding_function, ndims):
+                          combine, feeding_function, ndims, weights_function=None):
     """
     Raise MemoryError, before anything is computed, for a streamed step of
     ``features`` that does not fit ``max_memory_gb`` with one row per block.
@@ -1044,13 +1097,17 @@ def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfu
     again, with its actual width, when it runs.
     """
     d = int(K)
+    dense_analysis = not _builtin_kernel(weights_function)
+    dense_feeding = not _builtin_kernel(feeding_function)
     for k in sorted(analysis):
         if d is not None:
             if _streams(analysis[k], cfun, combine):
-                _streamed_block_elements(d, T, S, max_memory_gb, k, "analysis")
+                _streamed_block_elements(d, T, S, max_memory_gb, k, "analysis",
+                                         dense_analysis)
             if (k in fed and feeding_function is not eye_weights
                     and _is_summary(feeding[k])):
-                _streamed_block_elements(d, T, S, max_memory_gb, k, "feeding")
+                _streamed_block_elements(d, T, S, max_memory_gb, k, "feeding",
+                                         dense_feeding)
             width = _known_width(feeding[k], d, ndims)
             if width is None and not _is_summary(feeding[k]):
                 width = int(K)  # a callable: the original K, as estimate_memory_gb uses
@@ -1503,11 +1560,14 @@ def _two_path_step(
     feeding_streamed = feeding_function is not eye_weights and _is_summary(delta_rfun)
     n_outputs = 2 if feed and not (analysis_streamed or feeding_streamed) else 1
     kernel_feeding = feed and feeding_function is not eye_weights
+    dense_analysis = not _builtin_kernel(analysis.get("weights_function"))
+    dense_feeding = feed and not _builtin_kernel(feeding_function)
+    dense = dense_analysis or dense_feeding
     S = len(subjects)
     v = d * (d + 1) // 2
     analysis_rfun = analysis.get("rfun", "PCA")
     events = analysis.get("events")
-    kernel_elements = _event_kernel_elements(T, S, events)
+    kernel_elements = _event_kernel_elements(T, S, events, dense)
     reducers = tuple(reducers)
     retained = int(retained_elements)
     # materialized checks: the step's input is already in _step_gb
@@ -1524,8 +1584,9 @@ def _two_path_step(
             _streamed_block_elements(
                 d, T, S,
                 _budget_left(max_memory_gb, retained + kernel_elements + fits,
-                             d, T, S, order, "streamed analysis step"),
-                order, "analysis",
+                             d, T, S, order, "streamed analysis step",
+                             dense_analysis),
+                order, "analysis", dense_analysis,
             )
         else:
             # the hint is given only for an analysis reducer from "auto" (an
@@ -1543,22 +1604,22 @@ def _two_path_step(
                 if delta_rfun is analysis_rfun:
                     streamable = False
                 elif not feeding_streamed:
-                    alone = _step_gb(d, T, S, 1, kernel_feeding)
+                    alone = _step_gb(d, T, S, 1, kernel_feeding, dense)
                     held_gb = 8 * (retained_m + fits) / _BYTES_PER_GB
                     streamable = alone + held_gb <= max_memory_gb
             _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
                                kernel_feeding, retained_m + fits,
-                               _stream_hint(order) if streamable else "")
+                               _stream_hint(order) if streamable else "", dense=dense)
         if feed and feeding_streamed:
             _streamed_block_elements(
                 d, T, S,
                 _budget_left(max_memory_gb, retained + held + kernel_elements + fits,
-                             d, T, S, order, "streamed feeding step"),
-                order, "feeding",
+                             d, T, S, order, "streamed feeding step", dense_feeding),
+                order, "feeding", dense_feeding,
             )
         elif feed:
             _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
-                               kernel_feeding, retained_m + fits)
+                               kernel_feeding, retained_m + fits, dense=dense)
             if _needs_shift_null(delta_rfun):
                 _budget_left(
                     max_memory_gb, retained + held + fits + S * T * v, d, T, S, order,
@@ -2193,12 +2254,17 @@ def features(
     if delta_unreduced and max_memory_gb is not None:
         # widths are known in advance: refuse before computing anything
         estimates = estimate_memory_gb(
-            K, order, T, S, return_delta, delta_weights_function=feeding_function
+            K, order, T, S, return_delta, delta_weights_function=feeding_function,
+            weights_function=weights_function,
         )
         for k in range(1, order + 1):
             if estimates[k] > max_memory_gb:
-                fit = _largest_k(order, T, max_memory_gb, S, return_delta,
-                                 kernel_feeding=feeding_function is not eye_weights)
+                fit = _largest_k(
+                    order, T, max_memory_gb, S, return_delta,
+                    kernel_feeding=feeding_function is not eye_weights,
+                    dense=not (_builtin_kernel(weights_function)
+                               and _builtin_kernel(feeding_function)),
+                )
                 raise MemoryError(
                     f"Unreduced features at order {k} need about {estimates[k]:.3g} GB "
                     f"(K={K}, T={T}, {S} subject{'s' if S > 1 else ''}), more than "
@@ -2211,6 +2277,7 @@ def features(
         _check_streamed_steps(
             K, T, S, max_memory_gb, analysis_rfun, feeding_rfun, fed, cfun=cfun,
             combine=combine, feeding_function=feeding_function, ndims=ndims,
+            weights_function=weights_function,
         )
 
     X = [subjects]

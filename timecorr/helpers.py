@@ -761,6 +761,10 @@ _TIME_SLICING = True
 # Kernel blocks the estimator keeps between products (``_KernelRows``), in
 # float64 elements (32 MB); blocks beyond it are computed again when needed.
 _KERNEL_CACHE_ELEMENTS = 2**22
+# Besides those blocks, the estimator holds up to this many blocks of
+# _TIME_CHUNK rows by up to T columns while it computes a LagKernel's rows
+# (measured with tracemalloc: about 3 at T 3,000 and 20,000).
+_KERNEL_WORK_BLOCKS = 4
 # Private hook for tests: when a list, ``_time_slices`` appends its result.
 _time_slice_log = None
 
@@ -831,6 +835,21 @@ def _zscore_columns(x):
 def _wcorr_block_rows(T, Kb, n_products=1):
     """Rows of ``a`` per block in ``_wcorr_blocks`` (each row pairs with Kb columns)."""
     return max(1, _WCORR_BLOCK_ELEMENTS // (n_products * T * Kb))
+
+
+def _kernel_work_elements(T, dense_elements):
+    """
+    Float64 elements the estimator holds for one kernel of T timepoints that
+    it reads: for a ``LagKernel``, at most its kept blocks
+    (``_KERNEL_CACHE_ELEMENTS``) plus ``_KERNEL_WORK_BLOCKS`` blocks of
+    ``_TIME_CHUNK`` x T, and at most ``dense_elements`` (what the same
+    kernel costs as T x T arrays), whichever is smaller.
+    """
+    T = int(T)
+    return min(
+        int(dense_elements),
+        _KERNEL_CACHE_ELEMENTS + _KERNEL_WORK_BLOCKS * _TIME_CHUNK * T,
+    )
 
 
 def _kernel_shape(weights):

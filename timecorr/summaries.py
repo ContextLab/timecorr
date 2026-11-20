@@ -1255,8 +1255,13 @@ class _Units:
             self.weights = None
             self.stacked = None
         else:
-            given = 1 - np.eye(S) if self.kind == "isfc" else None
-            self.weights = _subject_weight_matrix(self.subjects, given)
+            # wisfc's default weights correlate the subjects' static
+            # correlation matrices: computed on the first call of blocks(),
+            # in that call's blocks of rows, so they fit the step's budget
+            self.weights = (
+                _subject_weight_matrix(self.subjects, 1 - np.eye(S))
+                if self.kind == "isfc" else None
+            )
             self.stacked = np.stack(self.subjects, axis=2)
         self._mean = _nan_weighted_mean
 
@@ -1270,6 +1275,8 @@ class _Units:
         a = self.subjects[s]
         if self.kind == "auto":
             return _unit_row_blocks(a, a, self.kernel(s), True, b)
+        if self.weights is None:
+            self.weights = _subject_weight_matrix(self.subjects, None, rows_per_block=b)
         ref = self._mean(self.stacked, self.weights[s, :])
         symmetric = bool(np.array_equal(a, ref, equal_nan=True))
         return _unit_row_blocks(a, ref, self.kernel(s), symmetric, b)

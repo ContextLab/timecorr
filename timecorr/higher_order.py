@@ -60,12 +60,15 @@ from .helpers import (
     _wcorr_block_rows,
     _warn_user,
     autofc,
+    corrmean_combine,
     eye_weights,
     format_data,
     gaussian_weights,
     isfc,
+    mean_combine,
     null_combine,
     reduce,
+    tstat_combine,
     wisfc,
 )
 from .events import (
@@ -120,7 +123,25 @@ def _builtin_kernel(weights_function):
         return False
 
 
-def _step_gb(d, T, n_subjects=1, n_outputs=1, kernel_feeding=False, dense=False):
+def _combine_elements(combine, S, T, v):
+    """
+    Float64 elements a built-in ``combine`` function allocates on S (T, v)
+    results, its output included (measured with ``tracemalloc`` for S 2 to
+    10: ``corrmean_combine`` 5.26 to 5.31 S T v, ``mean_combine`` (S + 1) T v,
+    ``tstat_combine`` 7.65 to 9.75 S T v, with margin); 0 for
+    ``null_combine`` and for a function of your own, which is not counted.
+    """
+    if combine is corrmean_combine:
+        return 11 * S * T * v // 2 if S > 1 else 0
+    if combine is mean_combine:
+        return (S + 1) * T * v
+    if combine is tstat_combine:
+        return (15 * S + 10) * T * v // 2
+    return 0
+
+
+def _step_gb(d, T, n_subjects=1, n_outputs=1, kernel_feeding=False, dense=False,
+             combine=None):
     """
     Peak memory (GB) of one unreduced correlation step on ``n_subjects`` (T, d)
     inputs that holds ``n_outputs`` (T, d(d+1)/2) results per subject.
@@ -128,6 +149,8 @@ def _step_gb(d, T, n_subjects=1, n_outputs=1, kernel_feeding=False, dense=False)
     than ``eye_weights``, so it has block temporaries of its own while both
     paths' results are held.  ``dense``: a kernel of the step is a T x T
     array (a kernel function that is not built in), not read in chunks.
+    ``combine``: the analysis path's combine function; a built-in one is
+    counted (``_combine_elements``), after the correlations are freed.
     """
     d, T, S = int(d), int(T), int(n_subjects)
     v = d * (d + 1) // 2
@@ -135,11 +158,8 @@ def _step_gb(d, T, n_subjects=1, n_outputs=1, kernel_feeding=False, dense=False)
     # the kernel, its working copy and its absolute value as T x T arrays;
     # a built-in kernel holds at most that and a bounded set of row blocks
     kernel = 3 * T * T if dense else _kernel_work_elements(T, 3 * T * T)
-    elements = (
+    correlation = (
         d * d * T  # the (d, d, T) correlation array of one subject
-        + S * T * v  # the analysis path's vectorized results, every subject
-        + 3 * S * T * d  # the inputs (and the copies made while formatting)
-        + kernel
         # the stacked subjects and one subject's reference (wisfc, which
         # also computes isfc and autofc, stacks the subjects)
         + (S + 1) * T * d
@@ -148,6 +168,13 @@ def _step_gb(d, T, n_subjects=1, n_outputs=1, kernel_feeding=False, dense=False)
         # its own reference and is not symmetrized)
         + _workspace(max(_WORKSPACE_BLOCKS * block, _fisher_workspace(d, T) if S > 1 else 0),
                      (n_outputs - 1) * S * T * v, kernel_feeding)
+    )
+    elements = (
+        S * T * v  # the analysis path's vectorized results, every subject
+        + 3 * S * T * d  # the inputs (and the copies made while formatting)
+        + kernel
+        # the correlation step, or the combine function, which runs after it
+        + max(correlation, _combine_elements(combine, S, T, v))
     )
     return elements * 8 / _BYTES_PER_GB
 
@@ -165,7 +192,8 @@ def _workspace(blocks, feeding, kernel_feeding):
 
 
 def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=False,
-                       *, delta_weights_function=None, weights_function=None):
+                       *, delta_weights_function=None, weights_function=None,
+                       combine=null_combine):
     """
     Estimate the peak memory of each order of an unreduced or streamed pipeline.
 
@@ -177,9 +205,8 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
     unless its kernel is ``eye_weights``) uses block temporaries of bounded
     size, all in float64.  The estimate is the peak of
     ``tc.features(..., rfun=None, delta_rfun=None)`` with the same
-    ``delta_weights_function`` and the default ``combine`` (``null_combine``)
-    for data without NaNs; other ``combine`` functions and reducers allocate
-    more.  The built-in kernel functions are read a chunk of rows at a time:
+    ``delta_weights_function`` and ``combine`` for data without NaNs;
+    reducers allocate more.  The built-in kernel functions are read a chunk of rows at a time:
     their kernel term is ``3 T**2`` elements up to T = 1,270 and then
     grows linearly in T (at most 32 MB plus 4 blocks of 128 rows by T
     columns); a kernel function of your own gives T x T arrays (``3 T**2``).
@@ -227,6 +254,12 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
         read in chunks of rows; a function of your own returns T x T arrays,
         which are counted as such (as is a ``delta_weights_function`` of your
         own).  Default: None.
+    combine : function, optional
+        The combine function of the run (keyword-only), as in ``features``.
+        The temporaries of the built-in ones (``corrmean_combine``,
+        ``mean_combine``, ``tstat_combine``) are counted; a function of your
+        own cannot be counted and is estimated as ``null_combine``.  Not used
+        with ``streamed=True``.  Default: ``null_combine``.
 
     Returns
     -------
@@ -250,11 +283,11 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
         _builtin_kernel(weights_function) and _builtin_kernel(delta_weights_function)
     )
     return _estimates(K, order, T, n_subjects, return_delta, streamed,
-                      delta_weights_function is not eye_weights, dense)
+                      delta_weights_function is not eye_weights, dense, combine)
 
 
 def _estimates(K, order, T, n_subjects, return_delta, streamed, kernel_feeding,
-               dense):
+               dense, combine=None):
     """``estimate_memory_gb`` with the kernels given by ``kernel_feeding`` and
     ``dense`` (see ``_step_gb``)."""
     K = int(K)
@@ -267,19 +300,20 @@ def _estimates(K, order, T, n_subjects, return_delta, streamed, kernel_feeding,
     for k in range(1, int(order) + 1):
         both_paths = k < order or return_delta
         estimates.append(
-            _step_gb(d, T, n_subjects, 2 if both_paths else 1, kernel_feeding, dense)
+            _step_gb(d, T, n_subjects, 2 if both_paths else 1, kernel_feeding, dense,
+                     combine)
         )
         d = d * (d + 1) // 2
     return estimates
 
 
 def _largest_k(order, T, max_memory_gb, n_subjects=1, return_delta=False,
-               streamed=False, kernel_feeding=False, dense=False):
+               streamed=False, kernel_feeding=False, dense=False, combine=None):
     """Largest K whose estimates up to ``order`` all fit (0 if none)."""
 
     def fits(k):
         est = _estimates(k, order, T, n_subjects, return_delta, streamed,
-                         kernel_feeding, dense)
+                         kernel_feeding, dense, combine)
         return max(est) <= max_memory_gb
 
     if not fits(1):
@@ -309,25 +343,27 @@ def _stream_hint(order):
 
 
 def _check_step_memory(d, T, n_subjects, n_outputs, max_memory_gb, order=None,
-                       kernel_feeding=False, held_elements=0, hint="", dense=False):
+                       kernel_feeding=False, held_elements=0, hint="", dense=False,
+                       combine=None):
     """
     Raise MemoryError before an unreduced correlation step on ``n_subjects``
     (T, d) inputs whose estimate (``_step_gb``), plus ``held_elements``
     float64 values retained by the caller (earlier outputs and fits of a
     ``features`` run), exceeds ``max_memory_gb``.  ``max_memory_gb=None``
     checks nothing.  ``hint`` is appended to the message.  ``dense``: a
-    kernel of the step is a T x T array (see ``_step_gb``).  Shared by
+    kernel of the step is a T x T array, and ``combine`` the analysis
+    path's combine function (see ``_step_gb``).  Shared by
     ``features``, the path functions and the decoders, so all refuse the
     same steps.
     """
     if max_memory_gb is None:
         return
     S = int(n_subjects)
-    step = _step_gb(d, T, S, n_outputs, kernel_feeding, dense)
+    step = _step_gb(d, T, S, n_outputs, kernel_feeding, dense, combine)
     held = 8 * int(held_elements) / _BYTES_PER_GB
     if step + held > max_memory_gb:
         fit = _largest_k(1, T, max_memory_gb - held, S, n_outputs > 1,
-                         kernel_feeding=kernel_feeding, dense=dense)
+                         kernel_feeding=kernel_feeding, dense=dense, combine=combine)
         where = "" if order is None else f" at order {order}"
         retained = (
             f", plus {held:.3g} GB of outputs and fits retained by the run"
@@ -682,7 +718,7 @@ def _analysis_path(
     _check_step_memory(d, T, len(subjects), n_outputs, max_memory_gb, order,
                        kernel_feeding,
                        held_elements - input_elements + _fits_elements(*reducers),
-                       dense=dense)
+                       dense=dense, combine=combine)
 
     def analyze(members, member_events):
         return combine(
@@ -1623,7 +1659,8 @@ def _two_path_step(
                     streamable = alone + held_gb <= max_memory_gb
             _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
                                kernel_feeding, retained_m + fits,
-                               _stream_hint(order) if streamable else "", dense=dense)
+                               _stream_hint(order) if streamable else "", dense=dense,
+                               combine=analysis.get("combine", null_combine))
         if feed and feeding_streamed:
             _streamed_block_elements(
                 d, T, S,
@@ -1962,9 +1999,10 @@ def features(
         ``fits_`` of the summary objects the run holds; a streamed feeding
         step also counts the analysis results of its order.  A step that
         holds its correlations does not count its own input (the previous
-        order's feeding features) twice: its estimate already includes it.  The input data
-        and the memory of reducers and ``combine`` functions themselves are
-        not counted.  None checks nothing (a streamed step then uses the
+        order's feeding features) twice: its estimate already includes it.  The
+        temporaries of the built-in ``combine`` functions are counted; the
+        memory of a ``combine`` function of your own cannot be counted.  The
+        input data and the memory of reducers are not counted.  None checks nothing (a streamed step then uses the
         estimator's default block size).  Default: 4.0.
     events : None, dict, array-like, or list
         Restricts kernels to events (keyword-only; see ``timecorr`` for one
@@ -2269,7 +2307,7 @@ def features(
         # widths are known in advance: refuse before computing anything
         estimates = estimate_memory_gb(
             K, order, T, S, return_delta, delta_weights_function=feeding_function,
-            weights_function=weights_function,
+            weights_function=weights_function, combine=combine,
         )
         for k in range(1, order + 1):
             if estimates[k] > max_memory_gb:
@@ -2278,6 +2316,7 @@ def features(
                     kernel_feeding=feeding_function is not eye_weights,
                     dense=not (_builtin_kernel(weights_function)
                                and _builtin_kernel(feeding_function)),
+                    combine=combine,
                 )
                 raise MemoryError(
                     f"Unreduced features at order {k} need about {estimates[k]:.3g} GB "

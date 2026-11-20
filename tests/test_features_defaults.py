@@ -608,3 +608,26 @@ def test_default_order_one_memory_error_names_a_streamed_reducer():
     X = tc.features(x, order=1, max_memory_gb=budget,
                     rfun={1: tc.WeightedStrength(signed=True)})
     assert X[1][0].shape == (T, 2 * K)
+
+
+def test_round_off_constant_feeding_columns_do_not_amplify_noise():
+    # Columns [a, a, b, b] of two independent series (default_rng(10),
+    # T 100): the order-1 feeding step falls back to weighted strength, and
+    # its four columns are nearly identical, so the order-2 feeding columns
+    # differ from constants only by round-off (range about 1e-13 on values
+    # about 3 before the fix, and order 3 then varied by about 1.2).  They
+    # are set to their means and reported by the constant-output warning;
+    # order 3 then meets exact zero variance, whose correlations the
+    # estimator sets to 0, so its weighted strength is exactly 0.
+    rng = np.random.default_rng(10)
+    a, b = rng.standard_normal(100), rng.standard_normal(100)
+    x = np.column_stack([a, a, b, b])
+    with warnings.catch_warnings(record=True) as rec:
+        warnings.simplefilter("always")
+        _, D = tc.features(x, order=3, rfun=None, return_delta=True)
+    messages = [str(w.message) for w in rec]
+    assert any("constant over time" in m for m in messages), messages
+    assert np.ptp(D[1], axis=0).min() > 1e-3
+    assert np.all(np.ptp(D[2], axis=0) == 0)
+    assert np.all(np.isfinite(D[3]))
+    np.testing.assert_array_equal(D[3], 0)

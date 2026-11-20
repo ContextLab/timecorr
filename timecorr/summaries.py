@@ -48,6 +48,10 @@ __all__ = ["WeightedStrength", "Communities"]
 # ----------------------------------------------------------------------------
 
 
+# relative tolerance below which an output column's range over time is
+# round-off (see ``_Summary._warn_constant``)
+CONSTANT_RTOL = 1e-9
+
 def _new_state(K, T, signed):
     """
     Empty fitting state of one unit with K nodes and T timepoints.
@@ -434,7 +438,10 @@ class _Summary:
         -----
         UserWarning
             Once per call when some output column is constant over time (for
-            example when all weights are 0).
+            example when all weights are 0).  A column whose range over time
+            is nonzero but at most ``1e-9 * max(1, max|column|)`` is
+            round-off: it is set to its mean exactly and counted in the same
+            warning.
         """
         name = type(self).__name__
         if not self.fits_:
@@ -463,16 +470,36 @@ class _Summary:
         return outs[0] if single else outs
 
     def _warn_constant(self, outs):
-        """One ``UserWarning`` when some column of the outputs is constant over time."""
-        constant = sum(
-            int(np.sum(np.ptp(o, axis=0) == 0)) for o in outs if o.shape[0] > 0
-        )
+        """
+        Set columns that are constant up to round-off to their means (in
+        place), then issue one ``UserWarning`` when some column of the
+        outputs is constant over time.
+
+        A column of one unit's output counts as constant when its range over
+        time is at most ``CONSTANT_RTOL * max(1, max|column|)`` with
+        ``CONSTANT_RTOL = 1e-9``.  A nonzero range within that tolerance is
+        round-off (for example 1e-13 on values of 3 when nearly identical
+        input features give identical summaries), and the column is set to
+        its mean exactly, so a later order meets exact zero variance rather
+        than amplified round-off; exact constants are returned unchanged.
+        """
+        constant = 0
+        for o in outs:
+            if o.shape[0] == 0:
+                continue
+            rng = np.ptp(o, axis=0)
+            tol = CONSTANT_RTOL * np.maximum(1.0, np.max(np.abs(o), axis=0))
+            snap = (rng > 0) & (rng <= tol)
+            if snap.any():
+                o[:, snap] = np.mean(o[:, snap], axis=0)
+            constant += int(np.sum(rng <= tol))
         if constant:
             _warn_user(
                 f"{type(self).__name__}: {constant} output "
                 f"column{'s are' if constant > 1 else ' is'} constant over time "
-                "(zero variance), for example because every weight is 0; returned "
-                "as computed."
+                "(zero variance, or a range within round-off of 0, set to the "
+                "column's mean), for example because every weight is 0; "
+                "returned as computed otherwise."
             )
 
     def __call__(self, corrs):

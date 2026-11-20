@@ -84,8 +84,11 @@ def test_order_maps_equal_a_chain_of_steps(cfun):
 
 def test_one_path_by_order_the_other_plain():
     x = nested()
+    # delta_weights_params=None: the fixed feeding kernel (variance 25 at
+    # every order), as chain() passes it; left out, the feeding kernel is
+    # automatic (tests/test_features_auto_kernels.py)
     X, D = quiet(tc.features, x, order=3, cfun=tc.autofc, weights_params=ANALYSIS,
-                 return_delta=True, max_memory_gb=None)
+                 delta_weights_params=None, return_delta=True, max_memory_gb=None)
     Xc, Dc = chain(x, 3, ANALYSIS, {}, cfun=tc.autofc)
     for k in range(1, 4):
         assert_identical(X[k], Xc[k])
@@ -113,8 +116,11 @@ def test_missing_orders_use_the_defaults():
         assert_identical(D[k], De[k])
         assert_identical(X[k], Xc[k])
         assert_identical(D[k], Dc[k])
-    # orders left out equal passing nothing at all for them
-    X0, D0 = quiet(tc.features, x, **common)
+    # orders left out of a map equal weights_params=None and
+    # delta_weights_params=None (the kernels' fixed defaults); they do not
+    # equal leaving the arguments out, which gives the automatic kernels
+    X0, D0 = quiet(tc.features, x, weights_params=None, delta_weights_params=None,
+                   **common)
     assert_identical(X[1], X0[1])
     assert_identical(D[1], D0[1])
     # explicit defaults

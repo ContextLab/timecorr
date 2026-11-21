@@ -86,17 +86,16 @@ CASES = {
 
 
 def reference_values(name):
-    """The case's output: subject 0 in full, then each subject's column sums
-    (NaN and inf entries kept)."""
+    """The case's output: every subject's array in full (NaN and inf entries
+    kept), so a permutation of timepoints or features in any subject is
+    detected."""
     kind, f, params, cfun, options = CASES[name]
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         out = tc.timecorr(subjects(kind), weights_function=f, weights_params=params,
                           cfun=cfun, combine=tc.null_combine, **options)
     out = [np.asarray(x, dtype=np.float64) for x in out]
-    with np.errstate(invalid="ignore"):
-        sums = np.stack([x.sum(axis=0) for x in out])
-    return np.concatenate([out[0].ravel(), sums.ravel()])
+    return np.concatenate([x.ravel() for x in out])
 
 
 @pytest.mark.parametrize("name", sorted(CASES))
@@ -105,3 +104,17 @@ def test_outputs_equal_those_of_the_full_kernel_products(name):
         expected = reference[name]
     np.testing.assert_allclose(reference_values(name), expected, rtol=1e-9,
                                atol=1e-12, equal_nan=True)
+
+
+def test_the_reference_detects_permuted_timepoints_of_a_later_subject():
+    # control: the stored values cover every subject, so swapping two
+    # timepoints of the last subject's output is outside the tolerance (the
+    # column sums stored before could not see it)
+    name = "gaussian_isfc"
+    with np.load(FIXTURE) as reference:
+        expected = reference[name]
+    values = reference_values(name).reshape(S, T, -1)
+    values[-1, [10, 140]] = values[-1, [140, 10]]
+    assert not np.allclose(values.ravel(), expected, rtol=1e-9, atol=1e-12)
+    np.testing.assert_allclose(values.sum(axis=1), expected.reshape(S, T, -1).sum(axis=1),
+                               rtol=1e-9, atol=1e-12)

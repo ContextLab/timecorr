@@ -260,7 +260,9 @@ def eye_weights(T, params=eye_params, direction=None, include_zero=True):
     0.0
     """
 
-    return _finish_kernel(eye_profile(_lags(T), params), direction, include_zero)
+    # built directly (equal to eye_profile at every lag) without the T x T
+    # matrix of lags
+    return _finish_kernel(np.eye(int(T)), direction, include_zero)
 
 
 def uniform_weights(T, params=uniform_params, direction=None, include_zero=True):
@@ -304,7 +306,9 @@ def uniform_weights(T, params=uniform_params, direction=None, include_zero=True)
      [1. 1. 0.]
      [1. 1. 1.]]
     """
-    return _finish_kernel(uniform_profile(_lags(T), params), direction, include_zero)
+    # built directly (equal to uniform_profile at every lag) without the
+    # T x T matrix of lags
+    return _finish_kernel(np.ones((int(T), int(T))), direction, include_zero)
 
 
 def t_weights(T, params=t_params, direction=None, include_zero=True):
@@ -496,7 +500,8 @@ def _lag_kernel(T, weights_function, weights_params, include="all", include_zero
     except (KeyError, TypeError):
         return None
     params = defaults if weights_params is None else weights_params
-    return LagKernel(profile(np.arange(int(T)), params), include, include_zero, exclude)
+    return LagKernel(profile(np.arange(int(T), dtype=np.int64), params), include,
+                     include_zero, exclude)
 
 
 def _as_kernel_array(weights):
@@ -841,6 +846,9 @@ def _zero_variance(var, msq, s, mean):
 # Values at most this far outside [-1, 1] are correlations with round-off error
 # (clipped to +-1), not co-fluctuations.
 _R_TOLERANCE = 1e-12
+# Correlations at least 1 - _UNIT_TOLERANCE in magnitude are +-1 up to
+# round-off in Fisher z averaging (see _correlation_z).
+_UNIT_TOLERANCE = 1e-12
 
 
 def _safe_divide(num, den):
@@ -989,6 +997,7 @@ class _KernelRows:
         self.spans = None
         self._cache = {}
         self._cached = 0
+        self._kept = set()
 
     def first_nonzero(self):
         """The column of each row's first non-zero weight (0 for an empty row)."""
@@ -1008,14 +1017,15 @@ class _KernelRows:
             & ((peak < _KERNEL_ROW_MIN) | (peak > _KERNEL_ROW_MAX))
         )
         self._scale = np.where(extreme, peak, 1.0) if extreme.any() else None
+        # blocks of the rows before zeroing and rescaling are stale; the final
+        # blocks _time_slices reads are kept for the products
         self._cache = {}
         self._cached = 0
+        self._kept = set()
         slices = _time_slices(self, finite) if len(self.shape) == 2 else None
         if slices is None:
             slices = [(t0, t1, 0, T) for t0, t1, _, _, _ in self._chunks]
         self.spans = slices
-        self._cache = {}
-        self._cached = 0
 
     # the kernel interface of ``_kernels`` over the prepared rows (NaN
     # weights 0, rows zeroed and rescaled), read by ``_time_slices``
@@ -1028,11 +1038,24 @@ class _KernelRows:
         assert (t0, t1, c0, c1) == self._chunks[t0 // CHUNK][:4]
         return self._final(t0 // CHUNK)
 
-    def _keep(self, key, block):
-        if key is not None and self._cached + block.size <= _KERNEL_CACHE_ELEMENTS:
+    def _keep(self, key, block, shared=False):
+        """Cache ``block`` under ``key`` within ``_KERNEL_CACHE_ELEMENTS``;
+        ``shared``: it is an array already cached, not counted again."""
+        if key is None:
+            return block
+        if shared:
+            self._cache[key] = block
+        elif self._cached + block.size <= _KERNEL_CACHE_ELEMENTS:
             self._cache[key] = block
             self._cached += block.size
+            self._kept.add(id(block))  # cached arrays are never dropped
         return block
+
+    def _row_state(self, t0, t1):
+        """The zeroed rows and scales of rows t0:t1, as part of a cache key."""
+        zero = None if self.zero is None else self.zero[t0:t1].tobytes()
+        scale = None if self._scale is None else self._scale[t0:t1].tobytes()
+        return zero, scale
 
     def _final(self, i):
         """
@@ -1043,13 +1066,12 @@ class _KernelRows:
         t0, t1, c0, c1, key = self._chunks[i]
         zero = None if self.zero is None else self.zero[t0:t1]
         scale = None if self._scale is None else self._scale[t0:t1]
-        if key is not None:
-            key = ("final", key,
-                   None if zero is None else zero.tobytes(),
-                   None if scale is None else scale.tobytes())
-            hit = self._cache.get(key)
-            if hit is not None:
-                return hit
+        # a chunk without a shared key (at an edge or an event boundary) is
+        # kept under its own index
+        key = ("final", ("chunk", i) if key is None else key) + self._row_state(t0, t1)
+        hit = self._cache.get(key)
+        if hit is not None:
+            return hit
         w = self.kernel.block(t0, t1, c0, c1)
         if not w.flags.writeable:
             w = w.copy()  # a view of an array
@@ -1065,9 +1087,10 @@ class _KernelRows:
     def _block(self, i, kind):
         t0, t1, c0, c1 = self.spans[i]
         key = self._chunks[i][4]
-        # chunks with equal blocks have equal row statistics, so equal rows
-        # zeroed and rescaled, and the same span relative to t0
-        key = ("chunk", i) if key is None else (key, c0 - t0, c1 - t0)
+        # chunks with equal blocks, equal rows zeroed and rescaled (as in
+        # _final) and the same span relative to t0 have equal blocks
+        key = (("chunk", i) if key is None
+               else (key, c0 - t0, c1 - t0) + self._row_state(t0, t1))
         hit = self._cache.get((key, kind))
         if hit is not None:
             return hit
@@ -1075,7 +1098,8 @@ class _KernelRows:
             k0, k1 = self._chunks[i][2:4]
             w = self._final(i)
             if (c0, c1) == (k0, k1):
-                block = w
+                # the final block itself: counted once, where _final kept it
+                return self._keep((key, kind), w, shared=id(w) in self._kept)
             elif c0 >= k0 and c1 <= k1:
                 block = np.ascontiguousarray(w[:, c0 - k0 : c1 - k0])
             else:
@@ -1710,7 +1734,7 @@ def _correlation_z(r):
     # memory estimates of corrmean_combine and tstat_combine count them)
     a = np.abs(r)
     outside = a > 1 + _R_TOLERANCE
-    unit = a >= 1 - _R_TOLERANCE
+    unit = a >= 1 - _UNIT_TOLERANCE
     del a
     unit &= ~outside
     c = np.where(outside, 0.0, r)
@@ -1884,8 +1908,17 @@ def _static_connectome(d, iu, rows_per_block):
         return wcorr(d, d, static)[:, :, 0][iu]
     K = d.shape[1]
     c = np.empty((K, K))
-    for i0, i1, R, _, _ in _corr_row_blocks(d, d, static, True, rows_per_block):
+    cancelled, sparse = None, None
+    for i0, i1, R, zero_all, few_any in _corr_row_blocks(d, d, static, True,
+                                                         rows_per_block):
         c[i0:i1] = R[:, :, 0]
+        # the masks of the whole call, and its warning (as wcorr gives)
+        cancelled = zero_all if cancelled is None else cancelled & zero_all
+        sparse = few_any if sparse is None else sparse | few_any
+    if cancelled is not None:
+        message = _estimator_message(static, cancelled, sparse)
+        if message is not None:
+            _warn_user(message)
     return c[iu]
 
 
@@ -2579,8 +2612,11 @@ def reduce(corrs, rfun=None, ndims=None):
           ``z z^T`` has rank one, so on the delta path of ``features`` with
           ``delta_weights_function=eye_weights`` eigenvector centrality equals ``|z| / ||z||`` and the graph measures
           carry no network structure.  With one node (K = 1, the 1 x 1
-          matrix ``[[w]]``), ``'strength'`` is ``w`` and the other three
-          measures are 1 at every timepoint.
+          matrix ``[[w]]``), ``'strength'`` is ``w`` and, for a finite ``w``,
+          the other three measures are 1 (for a non-finite ``w``,
+          ``'pagerank_centrality_abs'`` is NaN and
+          ``'eigenvector_centrality'`` and ``'pagerank_centrality'`` raise
+          an error, as they do for any matrix with a non-finite entry).
         - A squared-correlation summary (see ``timecorr.summaries``): a
           ``WeightedStrength`` or ``Communities`` instance, or the strings
           ``'weighted_strength'`` (``WeightedStrength()``),
@@ -2726,23 +2762,26 @@ def reduce(corrs, rfun=None, ndims=None):
 
         Uniform prior; a node whose weights are all zero spreads its rank
         uniformly (equivalently, the solution of the linear system below is
-        normalized to sum to 1).  ``|W|`` is divided by its largest entry
-        first (PageRank does not depend on the scale of the weights), so the
-        column sums neither overflow nor underflow.  With column sums
+        normalized to sum to 1).  Each column of ``|W|`` is divided by its
+        largest entry first (PageRank depends only on the relative weights
+        within each column), so the column sums, between 1 and K, neither
+        overflow nor underflow, and a column of small weights is not lost
+        next to a column of large ones.  With column sums
         ``s_j`` of the scaled weights (zero sums replaced by 1), the matrix
         ``B = I - d |W| diag(1 / s)`` is strictly diagonally dominant by
         columns for ``d < 1``, so the system ``B r = (1 - d) / K`` always has
         a unique, positive solution and its 1-norm condition number is at
         most ``(1 + d) / (1 - d)``.  Returns NaNs when ``W`` has a non-finite
-        entry.
+        entry, and an empty array for K = 0.
         """
         N = len(W)
+        if N == 0:
+            return np.zeros(0)
         A = np.abs(W)
         if not np.all(np.isfinite(A)):
             return np.full(N, np.nan)
-        top = np.max(A) if N else 0.0
-        if top > 0:
-            A = A / top
+        top = np.max(A, axis=0)
+        A = A / np.where(top > 0, top, 1.0)[None, :]
         deg = np.sum(A, axis=0)
         deg[deg == 0] = 1
         B = np.eye(N) - d * (A / deg[None, :])

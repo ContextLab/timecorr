@@ -32,19 +32,28 @@ CHUNK = 128
 # ----------------------------------------------------------------------------
 
 
+def _as_lags(d):
+    """Integer lags as int64 (``d**2`` of int32 lags overflows from 46,341)."""
+    d = np.asarray(d)
+    return d.astype(np.int64) if d.dtype.kind in "iu" else d
+
+
 def gaussian_profile(d, params):
+    d = _as_lags(d)
     c1 = np.divide(1, np.sqrt(2 * math.pi * params["var"]))
     c2 = np.divide(-1, 2 * params["var"])
     return c1 * np.exp(c2 * d**2)
 
 
 def laplace_profile(d, params):
+    d = _as_lags(d)
     return np.multiply(
         np.divide(1, 2 * params["scale"]), np.exp(-np.divide(d, params["scale"]))
     )
 
 
 def eye_profile(d, params):
+    d = _as_lags(d)
     return np.where(d == 0, 1.0, 0.0)
 
 
@@ -53,6 +62,7 @@ def uniform_profile(d, params):
 
 
 def t_profile(d, params):
+    d = _as_lags(d)
     c1 = np.divide(
         gamma((params["df"] + 1) / 2),
         np.sqrt(params["df"] * math.pi) * gamma(params["df"] / 2),
@@ -62,6 +72,7 @@ def t_profile(d, params):
 
 
 def mexican_hat_profile(d, params):
+    d = _as_lags(d)
     a = np.divide(2, np.sqrt(3 * params["sigma"]) * np.power(math.pi, 0.25))
     b = 1 - np.power(np.divide(d, params["sigma"]), 2)
     c = np.exp(-np.divide(d**2, 2 * np.power(params["sigma"], 2)))
@@ -74,8 +85,39 @@ def boxcar_profile(d, params):
 
 def lags(T):
     """The T x T matrix of absolute lags ``|t - tau|`` (int64)."""
-    idx = np.arange(int(T))
+    idx = np.arange(int(T), dtype=np.int64)
     return np.abs(np.subtract.outer(idx, idx))
+
+
+def check_exclude(exclude):
+    """
+    ``exclude_timepoints`` as a float rounded to an integer, or None; a
+    non-finite value (inf or NaN) is rejected, for every kernel function.
+    """
+    if exclude is None:
+        return None
+    x = float(exclude)
+    if not math.isfinite(x):
+        raise ValueError(
+            f"exclude_timepoints must be a finite number or None, not {exclude!r}"
+        )
+    return float(np.round(x))
+
+
+def _canonical_labels(labels, T):
+    """
+    Block labels renumbered 0, 1, ... along time: the blocks are the runs of
+    consecutive equal labels (a label that returns after another starts a
+    new block, as the boundaries of ``events.block_labels`` give).  None for
+    a single block (no restriction).
+    """
+    labels = np.asarray(labels)
+    if labels.shape != (T,):
+        raise ValueError(f"labels must have length T={T}, not shape {labels.shape}")
+    change = labels[1:] != labels[:-1]
+    if not change.any():
+        return None
+    return np.concatenate([[0], np.cumsum(change)]).astype(np.int64)
 
 
 # ----------------------------------------------------------------------------
@@ -102,7 +144,9 @@ class LagKernel:
         ``-x`` the lags ``> x`` (rounded to an integer).
     labels : numpy.ndarray or None
         Event block of each timepoint (``events.block_labels``): weights
-        between timepoints in different blocks are 0.
+        between timepoints in different blocks are 0.  The blocks are the
+        runs of consecutive equal labels (a label that returns after another
+        starts a new block); labels with a single block are stored as None.
 
     The values equal those of the T x T matrix that ``timecorr`` builds from
     the kernel function and the same restrictions, entry for entry.
@@ -117,8 +161,8 @@ class LagKernel:
             raise ValueError(f"invalid include {include!r}")
         self.include = include
         self.include_zero = bool(include_zero)
-        self.exclude = None if exclude is None else float(np.round(exclude))
-        self.labels = None if labels is None else np.asarray(labels, dtype=np.int64)
+        self.exclude = check_exclude(exclude)
+        self.labels = None if labels is None else _canonical_labels(labels, self.T)
         self._lag_range()
         if self.labels is not None:
             # first and one-past-last timepoint of each timepoint's block
@@ -157,15 +201,20 @@ class LagKernel:
 
     def with_events(self, labels):
         """
-        A copy confined to the blocks of ``labels`` (None: no restriction)
-        and of the events it already has: two timepoints keep their weight
-        only when they share a block of both, as ``events.mask_kernel``
-        applied twice to the T x T matrix.
+        A copy confined to the blocks of ``labels`` (None: no further
+        restriction) and of the events it already has: two timepoints keep
+        their weight only when they share a block of both, as
+        ``events.mask_kernel`` applied twice to the T x T matrix.
         """
-        if labels is not None and self.labels is not None:
-            labels = np.asarray(labels, dtype=np.int64)
-            change = (np.diff(labels) != 0) | (np.diff(self.labels) != 0)
-            labels = np.concatenate([[0], np.cumsum(change)])
+        if labels is None:
+            labels = self.labels
+        elif self.labels is not None:
+            new = _canonical_labels(labels, self.T)
+            if new is not None:
+                change = (np.diff(new) != 0) | (np.diff(self.labels) != 0)
+                labels = np.concatenate([[0], np.cumsum(change)])
+            else:
+                labels = self.labels
         return LagKernel(self.profile, self.include, self.include_zero, self.exclude,
                          labels)
 

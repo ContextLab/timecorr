@@ -248,13 +248,17 @@ used to estimate at timepoint ``t``. Every kernel function accepts
 not call the built-in kernel functions below. They compute the same weights
 128 rows at a time, over the columns where those rows can have non-zero
 weight, with ``include_timepoints``, ``include_zero``, ``exclude_timepoints``
-and ``events`` applied, so no ``T x T`` array is allocated and memory grows
-linearly in ``T``. The correlations equal those computed from the ``T x T``
-matrix. Run time grows linearly in ``T`` once ``T`` is well above the largest
-lag with a non-zero weight in float64 (192 samples for a Gaussian of variance
-25, 385 at variance 100); the uniform kernel has weight at every lag, so its
-run time grows with ``T**2``. A kernel function of your own is called, and its
-``T x T`` matrix is used.
+and ``events`` applied, so with the correlation functions ``autofc``,
+``isfc`` and ``wisfc`` (or ``cfun=None``) no ``T x T`` array is allocated and
+memory grows linearly in ``T``. The correlations equal those computed from
+the ``T x T`` matrix. Run time grows linearly in ``T`` once ``T`` is well
+above the largest lag with a non-zero weight in float64 (192 samples for a
+Gaussian of variance 25, 385 at variance 100); the uniform kernel has weight
+at every lag, so its run time grows with ``T**2``. A kernel function of your
+own is called, and its ``T x T`` matrix is used; a correlation function of
+your own receives ``T x T`` matrices, built from the built-in kernels too.
+The memory guards (``max_memory_gb``) and :func:`estimate_memory_gb` count
+those matrices.
 
 .. autosummary::
    :toctree: generated/

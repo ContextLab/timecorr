@@ -706,24 +706,8 @@ def _hint_subjects(K=120, T=600, S=2, seed=0):
     return [rng.standard_normal((T, K)) for _ in range(S)]
 
 
-def _original_step(S, return_delta, budget):
-    """
-    The figures of the ad50637 messages, from estimate_memory_gb (the
-    original pipeline, T 600): the order-1 step for 120 input features,
-    printed to 3 significant digits, and the largest K whose step fits
-    ``budget``.
-    """
-    from timecorr.higher_order import estimate_memory_gb
-
-    def step(k):
-        return estimate_memory_gb(k, 1, 600, S, return_delta,
-                                  delta_weights_function=tc.eye_weights)[1]
-
-    return f"{step(120):.3g}", max(k for k in range(1, 121) if step(k) <= budget)
-
-
-@pytest.mark.parametrize("frac", [0.3, 0.5, 0.7])
-def test_original_pipeline_memory_error_has_no_hint(frac):
+@pytest.mark.parametrize("frac, fits", [(0.3, 59), (0.5, 78), (0.7, 92)])
+def test_original_pipeline_memory_error_has_no_hint(frac, fits):
     # K 120, T 600, 2 subjects: the order-1 step was estimated at 0.552 GB
     # (the budgets below stay fractions of that figure).
     # The co-fluctuation feeding step is materialized, so a summary reducer
@@ -732,15 +716,15 @@ def test_original_pipeline_memory_error_has_no_hint(frac):
     # for its figures.  The GB figure (and with it the largest K that fits)
     # was corrected because the earlier estimate was below the measured
     # peak: this call traces 0.6001 GB with tracemalloc against 0.552 GB
-    # estimated then and 0.620 GB now; both are derived from
-    # estimate_memory_gb (_original_step).
+    # estimated then and 0.620 GB now.  The figures are literals (0.62 GB,
+    # and K = 59, 78 and 92 for the three budgets), so the expectation does
+    # not depend on the code under test.
     budget = 0.552 * frac
     kw = dict(rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
     with pytest.raises(MemoryError) as err:
         tc.features(_hint_subjects(), order=2, max_memory_gb=budget, **kw)
-    gb, fits = _original_step(2, True, budget)
     assert str(err.value) == (
-        f"The correlation step at order 1 needs about {gb} GB (120 input "
+        "The correlation step at order 1 needs about 0.62 GB (120 input "
         f"features, T=600, 2 subjects), more than max_memory_gb={budget}. The "
         f"largest number of input features that fits one step is K={fits}. "
         "Reduce to fewer features (ndims, rfun, delta_rfun) or raise "
@@ -766,16 +750,16 @@ def test_default_call_memory_error_hint_names_order_one_and_works():
 
 
 # The text of commit ad50637 with its figures corrected: the GB figure
-# (0.515 GB then) and with it the largest K that fits (89 then) follow from
-# estimate_memory_gb, because the earlier estimate was below the measured
-# peak (this call, computed without the budget, traces 0.5617 GB with
-# tracemalloc, 0.5675 GB at commit 6b3d23a; the estimate is now 0.583 GB).
-# Every other character is that commit's.
-_GB_SINGLE, _K_SINGLE = _original_step(1, False, 0.3)
+# (0.515 GB then) and with it the largest K that fits (89 then) were raised
+# because the earlier estimate was below the measured peak (this call,
+# computed without the budget, traces 0.5617 GB with tracemalloc, 0.5675 GB
+# at commit 6b3d23a; the estimate is now 0.583 GB, and K = 84 fits).  The
+# figures are literals, independent of the code under test.  Every other
+# character is that commit's.
 AD50637_SINGLE = (
-    f"The correlation step at order 1 needs about {_GB_SINGLE} GB (120 input "
+    "The correlation step at order 1 needs about 0.583 GB (120 input "
     "features, T=600, 1 subject), more than max_memory_gb=0.3. The largest "
-    f"number of input features that fits one step is K={_K_SINGLE}. Reduce to fewer "
+    "number of input features that fits one step is K=84. Reduce to fewer "
     "features (ndims, rfun, delta_rfun) or raise max_memory_gb."
 )
 

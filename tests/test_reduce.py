@@ -616,3 +616,20 @@ def test_graph_measures_with_two_nodes(measure):
         expected = np.full((3, 2), 0.5)
     np.testing.assert_allclose(out, expected, rtol=0, atol=1e-12)
     np.testing.assert_allclose(single, out[:1], rtol=0, atol=0)
+
+
+def test_pagerank_abs_scales_each_column_so_small_columns_survive():
+    # dividing by the largest entry of the matrix underflowed the column of
+    # 1e-20 to 0; PageRank depends only on each column's relative weights
+    from timecorr import helpers
+    v = mat2vec(np.array([[1e308, 0.0], [0.0, 1e-20]]))
+    r = helpers.reduce(np.atleast_2d(v), rfun="pagerank_centrality_abs")
+    np.testing.assert_allclose(r, [[0.5, 0.5]], rtol=1e-15)
+    np.testing.assert_allclose(
+        r, helpers.reduce(np.atleast_2d(v), rfun="pagerank_centrality"), rtol=1e-15)
+
+
+def test_pagerank_abs_of_no_nodes_is_empty():
+    from timecorr import helpers
+    out = helpers.reduce(np.zeros((3, 0)), rfun="pagerank_centrality_abs")
+    assert out.shape == (3, 0)

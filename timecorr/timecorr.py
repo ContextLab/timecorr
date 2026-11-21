@@ -4,7 +4,7 @@ import warnings
 
 import numpy as np
 
-from ._kernels import CHUNK, as_kernel, blocks
+from ._kernels import CHUNK, as_kernel, blocks, check_exclude
 from .events import distinct_event_sets, mask_kernel, resolve_events
 from .helpers import (
     _as_kernel_array,
@@ -80,7 +80,7 @@ def _temporal_filter(T, k):
     Band of half-width |k| around the diagonal (k >= 0), or its complement;
     k is rounded to the nearest integer (as for the built-in kernels).
     """
-    k = int(np.round(k))
+    k = int(check_exclude(k))
     filt = np.eye(T)
     for i in np.arange(1, np.min([np.abs(k) + 1, T])):
         filt = filt + np.eye(T, k=np.abs(i)) + np.eye(T, k=-np.abs(i))
@@ -105,6 +105,7 @@ def _shaped_kernel(
     function it is a ``LagKernel``, whose rows are computed when they are
     read (no T x T array); for any other function, the array it returns.
     """
+    exclude_timepoints = check_exclude(exclude_timepoints)
     include_timepoints = include_timepoints.lower()
     sides = {"all": "all", "backward": "backward", "pre": "backward",
              "forward": "forward", "post": "forward"}
@@ -230,9 +231,11 @@ def timecorr(
         co-fluctuations: products of the z-scored series), or a function of
         your own with the same signature.  The built-in kernel functions are
         not called: the same weights are computed 128 rows at a time, over
-        the columns where those rows can have weight, so no T x T array is
-        allocated and memory grows linearly in T (see Notes).  A function of
-        your own is called, and its T x T array is used.
+        the columns where those rows can have weight, so with ``cfun``
+        ``autofc``, ``isfc``, ``wisfc`` or None no T x T array is allocated
+        and memory grows linearly in T (see Notes).  A function of your own
+        is called, and its T x T array is used; a ``cfun`` of your own
+        receives T x T arrays.
     weights_params : dict or None
         Parameters of the kernel, e.g. ``{"var": 100}`` for
         ``gaussian_weights``.  Default: None (the kernel's defaults:
@@ -253,7 +256,8 @@ def timecorr(
         ``x`` keeps only the timepoints at most ``x`` samples from ``t``; a
         negative value ``-x`` removes them (``t`` itself included), keeping
         only timepoints more than ``x`` samples away.  Real values are rounded
-        to the nearest integer.  Default: None (no restriction).
+        to the nearest integer; a non-finite value (inf or NaN) raises
+        ``ValueError``.  Default: None (no restriction).
     combine : function
         Applied to the per-subject results: ``null_combine`` (default; one
         result per subject), ``corrmean_combine`` (Fisher z average),

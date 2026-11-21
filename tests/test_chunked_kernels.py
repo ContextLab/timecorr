@@ -55,14 +55,28 @@ def as_array_function(fn):
 
 
 def run(f, *args, **kwargs):
-    """``f(*args, **kwargs)`` and its warning texts (or the exception)."""
+    """``f(*args, **kwargs)`` and its warning texts; an exception propagates
+    (a valid case must succeed: two equal crashes are not an equality)."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
-        try:
-            out = f(*args, **kwargs)
-        except Exception as err:  # compared as text below
-            out = f"{type(err).__name__}: {err}"
+        out = f(*args, **kwargs)
     return out, [str(w.message) for w in caught]
+
+
+def zero_kernel(T, fn, params, options):
+    """True when the options leave the kernel without any weight (for
+    example the delta kernel without its diagonal): an invalid input, which
+    ``timecorr`` refuses."""
+    shape = {k: v for k, v in options.items() if k != "events"}
+    return not np.any(_shaped_kernel(T, fn, params, **shape).dense())
+
+
+def run_invalid(f, *args, **kwargs):
+    """The exception of ``f(*args, **kwargs)`` as text, for an input that is
+    invalid on purpose (both kernel forms must refuse it alike)."""
+    with pytest.raises(Exception) as err:
+        f(*args, **kwargs)
+    return f"{err.type.__name__}: {err.value}"
 
 
 def assert_identical(x, y):
@@ -162,6 +176,11 @@ def test_timecorr_equals_the_array_kernel(fn, params, cfun, subjects, subjects_n
     for data in (subjects, subjects_nan):
         for options in OPTIONS:
             kw = dict(weights_params=params, cfun=cfun, **options)
+            if zero_kernel(400, fn, params, options):
+                assert (run_invalid(tc.timecorr, data, weights_function=fn, **kw)
+                        == run_invalid(tc.timecorr, data,
+                                       weights_function=as_array_function(fn), **kw))
+                continue
             lazy = run(tc.timecorr, data, weights_function=fn, **kw)
             dense = run(tc.timecorr, data, weights_function=as_array_function(fn), **kw)
             assert_identical(lazy[0], dense[0])
@@ -219,6 +238,14 @@ def test_smoothing_with_a_non_finite_sample(value, row):
 def test_non_integer_exclude_timepoints_is_rounded_for_every_kernel(exclude, subjects):
     # documented: real values are rounded to the nearest integer
     kw = dict(weights_params={"var": 4}, cfun=tc.autofc, exclude_timepoints=exclude)
+    if exclude <= -400:
+        # every timepoint removed: refused alike by both kernel forms
+        assert (run_invalid(tc.timecorr, subjects, weights_function=tc.gaussian_weights,
+                            **kw)
+                == run_invalid(tc.timecorr, subjects,
+                               weights_function=as_array_function(tc.gaussian_weights),
+                               **kw))
+        return
     lazy = run(tc.timecorr, subjects, weights_function=tc.gaussian_weights, **kw)
     dense = run(tc.timecorr, subjects,
                 weights_function=as_array_function(tc.gaussian_weights), **kw)
@@ -547,3 +574,223 @@ def test_heavy_tailed_kernel_at_20000_timepoints_stays_within_its_estimate():
     assert not isinstance(out[0], str), out[0]
     assert peak <= est * 1e9, (peak, est)
     assert peak < T * T * 8 / 20
+
+
+# --------------------------------------- kernel classification of the guards
+
+
+def test_a_custom_cfun_counts_its_t_by_t_kernels():
+    # timecorr passes a correlation function of the user's T x T kernel
+    # arrays (only autofc, isfc and wisfc read a built-in kernel in chunks):
+    # the guard must count them and refuse before anything is computed
+    x = np.random.default_rng(0).normal(size=(10_000, 2))
+    seen = []
+
+    def wrapped(data, weights):
+        seen.append(weights.nbytes)
+        return tc.autofc(data, weights)
+
+    with pytest.raises(MemoryError, match="max_memory_gb=0.1"):
+        tc.features(x, order=1, rfun=None, delta_rfun=None, cfun=wrapped,
+                    max_memory_gb=0.1)
+    assert seen == []
+    # it does receive a T x T array
+    tc.timecorr(x[:2_000], cfun=wrapped)
+    assert seen == [2_000 * 2_000 * 8]
+    est = ho.estimate_memory_gb(2, 1, 10_000, cfun=wrapped)[1]
+    assert est > 3 * 10_000 ** 2 * 8 / 1e9 > ho.estimate_memory_gb(2, 1, 10_000)[1]
+
+
+def test_an_unused_feeding_kernel_is_not_counted():
+    # order 1 without return_delta runs no feeding path: a feeding kernel
+    # function of the user's must not count (the review measured a refusal
+    # at 2.4 GB for a run that needs 0.078 GB)
+    x = np.random.default_rng(1).normal(size=(10_000, 2))
+    custom = as_array_function(tc.gaussian_weights)
+    est = ho.estimate_memory_gb(2, 1, 10_000, delta_weights_function=custom)
+    assert est == ho.estimate_memory_gb(2, 1, 10_000)
+    out = tc.features(x, order=1, rfun=None, delta_rfun=None,
+                      delta_weights_function=custom, delta_weights_params={"var": 25},
+                      max_memory_gb=0.2)
+    assert out[1].shape == (10_000, 3)
+    # with return_delta the feeding path runs and its T x T arrays count
+    assert (ho.estimate_memory_gb(2, 1, 10_000, return_delta=True,
+                                  delta_weights_function=custom)[1]
+            > 3 * 10_000 ** 2 * 8 / 1e9)
+    with pytest.raises(MemoryError):
+        tc.features(x, order=1, rfun=None, delta_rfun=None, return_delta=True,
+                    delta_weights_function=custom, delta_weights_params={"var": 25},
+                    max_memory_gb=0.2)
+
+
+def test_a_streamed_path_is_not_charged_the_other_paths_event_kernels():
+    # per-subject events with a feeding kernel of the user's: the streamed
+    # analysis step reads a built-in kernel and holds no T x T arrays, so a
+    # refusal comes from the feeding step, whose kernels are T x T arrays
+    T = 3_000
+    rng = np.random.default_rng(2)
+    data = [rng.normal(size=(T, 6)) for _ in range(3)]
+    custom = as_array_function(tc.gaussian_weights)
+    with pytest.raises(MemoryError, match="streamed feeding step"):
+        tc.two_path_step(data, cfun=tc.autofc, rfun=tc.WeightedStrength(signed=True),
+                         delta_rfun=tc.WeightedStrength(signed=True),
+                         events=[[1000], [1500], [2000]],
+                         delta_weights_function=custom,
+                         delta_weights_params={"var": 25}, max_memory_gb=0.15)
+
+
+# ----------------------------------------------- kernel objects and options
+
+
+@pytest.mark.parametrize("fn", [tc.uniform_weights, tc.eye_weights],
+                         ids=["uniform", "eye"])
+def test_dense_uniform_and_eye_kernels_allocate_only_their_output(fn):
+    # the T x T output is built directly, without a T x T matrix of lags first
+    T = 2_000
+    out_bytes = T * T * 8
+    peak, w = traced_peak(lambda: fn(T))
+    assert w.shape == (T, T) and w.dtype == np.float64
+    assert peak < 1.1 * out_bytes
+    np.testing.assert_array_equal(w, np.eye(T) if fn is tc.eye_weights
+                                  else np.ones((T, T)))
+
+
+@pytest.mark.parametrize("value", [np.inf, -np.inf, np.nan], ids=["inf", "-inf", "nan"])
+@pytest.mark.parametrize("builtin", [True, False], ids=["builtin", "array"])
+def test_non_finite_exclude_timepoints_is_rejected_for_every_kernel(value, builtin,
+                                                                   subjects):
+    fn = tc.gaussian_weights if builtin else as_array_function(tc.gaussian_weights)
+    with pytest.raises(ValueError, match="exclude_timepoints must be a finite number"):
+        tc.timecorr(subjects, weights_function=fn, weights_params={"var": 4},
+                    cfun=tc.autofc, exclude_timepoints=value)
+
+
+@pytest.mark.parametrize("value", [np.inf, np.nan])
+def test_lag_kernel_rejects_a_non_finite_exclude_when_it_is_made(value):
+    with pytest.raises(ValueError, match="exclude_timepoints must be a finite number"):
+        LagKernel(np.ones(5), exclude=value)
+
+
+def test_lag_kernel_with_events_none_keeps_its_events():
+    k = LagKernel(np.ones(6), labels=[0, 0, 0, 1, 1, 1])
+    kept = k.with_events(None)
+    np.testing.assert_array_equal(kept.dense(), k.dense())
+    assert kept.dense()[0, 5] == 0
+    assert LagKernel(np.ones(6)).with_events(None).labels is None
+
+
+def test_lag_kernel_labels_are_runs_of_consecutive_values():
+    # a label that returns after another starts a new block (the runs that
+    # span(), key() and the boundaries of block_labels assume)
+    k = LagKernel(np.ones(4), labels=[0, 1, 1, 0])
+    expect = np.array([[1, 0, 0, 0], [0, 1, 1, 0], [0, 1, 1, 0], [0, 0, 0, 1.0]])
+    np.testing.assert_array_equal(k.dense(), expect)
+    for t0, t1 in [(0, 4), (1, 3), (3, 4)]:
+        c0, c1 = k.span(t0, t1)
+        np.testing.assert_array_equal(k.block(t0, t1, 0, 4)[:, :c0], 0)
+        np.testing.assert_array_equal(k.block(t0, t1, 0, 4)[:, c1:], 0)
+    # labels of a single block are no restriction, and the same kernel
+    assert LagKernel(np.ones(4), labels=[0, 0, 0, 0]).same_as(LagKernel(np.ones(4)))
+    assert LagKernel(np.ones(4), labels=[2, 2, 5, 5]).same_as(
+        LagKernel(np.ones(4), labels=[0, 0, 1, 1]))
+    with pytest.raises(ValueError, match="length T=4"):
+        LagKernel(np.ones(4), labels=[0, 1])
+
+
+def test_lag_kernel_with_no_timepoints():
+    k = LagKernel(np.ones(0), labels=np.zeros(0, dtype=int))
+    assert k.dense().shape == (0, 0)
+    kept = k.with_events(np.zeros(0, dtype=int))
+    assert kept.dense().shape == (0, 0)
+    assert kept.labels is None or kept.labels.shape == (0,)
+
+
+def test_profiles_square_int32_lags_without_overflow():
+    # int32 d**2 overflows from d = 46,341
+    from timecorr import _kernels as K
+    d = np.array([0, 46_341, 60_000], dtype=np.int32)
+    params = {"var": 1e10, "df": 3, "sigma": 1e5, "scale": 1e5}
+    for profile in (K.gaussian_profile, K.t_profile, K.mexican_hat_profile,
+                    K.laplace_profile):
+        np.testing.assert_array_equal(profile(d, params),
+                                      profile(d.astype(np.int64), params))
+    assert K.lags(3).dtype == np.int64
+
+
+def test_kernel_rows_compute_each_block_once_and_count_it_once():
+    # the blocks _time_slices reads while preparing are kept for the
+    # products, and a block cached under two keys is counted once
+    from timecorr import helpers as H
+    T = 1_000
+    k = _shaped_kernel(T, tc.gaussian_weights, {"var": 25})
+    calls = []
+    block = k.block
+
+    def counted(t0, t1, c0, c1):
+        calls.append((t0, t1, c0, c1))
+        return block(t0, t1, c0, c1)
+
+    k.block = counted
+    rows = H._KernelRows(k)
+    before = len(calls)
+    rows.zero_rows(rows.support < 3)
+    rows.prepare(True)
+    x = np.random.default_rng(0).normal(size=(T, 3))
+    out = {kind: (rows.product(x, kind), rows.row_sum(kind)) for kind in "was"}
+    computed = calls[before:]
+    assert len(computed) == len(set(computed))
+    distinct = {id(v): v.size for v in rows._cache.values()}
+    assert rows._cached == sum(distinct.values())
+    # the same values as the T x T array
+    dense = H._KernelRows(k.dense())
+    dense.zero_rows(dense.support < 3)
+    dense.prepare(True)
+    for kind in "was":
+        np.testing.assert_array_equal(out[kind][0], dense.product(x, kind))
+        np.testing.assert_array_equal(out[kind][1], dense.row_sum(kind))
+
+
+def test_kernel_rows_cache_keys_include_the_zeroed_rows():
+    # interior chunks share a key; rows zeroed in one of them only must not
+    # reach the other through a cached block
+    from timecorr import helpers as H
+    T = 1_000
+    k = _shaped_kernel(T, tc.gaussian_weights, {"var": 25})
+    rows = H._KernelRows(k)
+    mask = np.zeros(T, dtype=bool)
+    mask[300:310] = True
+    rows.zero_rows(mask)
+    rows.prepare(True)
+    w = k.dense()
+    w[mask] = 0
+    x = np.random.default_rng(1).normal(size=(T, 2))
+    for kind, m in (("w", w), ("a", np.abs(w)), ("s", (w != 0) * 1.0)):
+        np.testing.assert_allclose(rows.product(x, kind), m @ x, rtol=1e-12, atol=1e-15)
+        np.testing.assert_allclose(rows.row_sum(kind), m.sum(axis=1), rtol=1e-12)
+
+
+def _messages(f):
+    with warnings.catch_warnings(record=True) as w:
+        warnings.simplefilter("always")
+        out = f()
+    return out, [str(x.message) for x in w]
+
+
+@pytest.mark.parametrize("case", ["constant", "sparse"])
+def test_streamed_static_connectome_warns_as_wcorr_does(case):
+    # the wisfc subject weights computed in blocks (streamed summaries) give
+    # the warnings of the one wcorr call they replace
+    from timecorr import helpers as H
+    rng = np.random.default_rng(5)
+    d = rng.normal(size=(50, 6))
+    if case == "constant":
+        d[:] = 3.0
+    else:
+        d[2:, 4] = np.nan  # two observed samples
+    iu = np.triu_indices(6, 1)
+    whole, expected = _messages(lambda: H._static_connectome(d, iu, None))
+    assert expected
+    for b in (1, 2, 4, 6):
+        blocked, got = _messages(lambda: H._static_connectome(d, iu, b))
+        assert got == expected
+        np.testing.assert_allclose(blocked, whole, rtol=1e-12, atol=1e-15)

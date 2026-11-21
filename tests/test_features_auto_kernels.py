@@ -21,6 +21,7 @@ import pytest
 from scipy.ndimage import gaussian_filter1d
 
 import timecorr as tc
+import timecorr.higher_order as ho
 from timecorr.higher_order import (
     _at_every_timepoint,
     _auto_sd,
@@ -625,3 +626,118 @@ def test_default_return_info_has_the_automatic_kernel_keys():
     assert info[2]["kernel_sd"] == pytest.approx(max(sd2, 10.0))
     assert info[2]["sampling"] == info[3]["sampling"] == stride == 2
 
+
+# third outside review: outputs returned at all T rows within max_memory_gb ---
+
+
+def _sines(T, K):
+    return np.sin(np.arange(T)[:, None] / 500 + np.arange(K)[None, :])
+
+
+def _traced(f):
+    import tracemalloc
+    tracemalloc.start()
+    try:
+        out = f()
+        return tracemalloc.get_traced_memory()[1], out
+    finally:
+        tracemalloc.stop()
+
+
+def _unchunked_interpolation(out, rows, T):
+    """The interpolation of commit e1e49eb, in one piece (full-size index
+    arrays and temporaries): the reference the chunked one must equal."""
+    t = np.arange(T)
+    result = np.empty((T,) + out.shape[1:], dtype=np.result_type(out, np.float64))
+    result[t <= rows[0]] = out[0]
+    result[t >= rows[-1]] = out[-1]
+    inside = (t > rows[0]) & (t < rows[-1])
+    ti = t[inside]
+    i = np.searchsorted(rows, ti, side="right") - 1
+    w = ((ti - rows[i]) / (rows[i + 1] - rows[i])).reshape((-1,) + (1,) * (out.ndim - 1))
+    result[inside] = out[i] * (1 - w) + out[i + 1] * w
+    result[rows] = out
+    return result
+
+
+@pytest.mark.parametrize("chunk", [1, 7, 64, 1000, None])
+def test_chunked_interpolation_equals_the_unchunked_one(chunk):
+    rng = np.random.default_rng(8)
+    T = 3001
+    for rows in (np.arange(3, T, 7), np.arange(0, T, 2), np.array([5, 6, 900, 2999])):
+        out = rng.normal(size=(len(rows), 13))
+        out[rng.random(out.shape) < 0.05] = np.nan
+        got = _at_every_timepoint(out, rows, T, chunk_elements=chunk)
+        np.testing.assert_array_equal(got, _unchunked_interpolation(out, rows, T))
+
+
+def test_interpolation_workspace_is_bounded():
+    # (1000, 666) computed rows to 12,000 timepoints: the result is 64 MB;
+    # the work beside it is a few chunks (the unchunked code held about
+    # three more full-size arrays)
+    out = np.random.default_rng(1).normal(size=(1000, 666))
+    rows = np.arange(0, 12000, 12)
+    peak, got = _traced(lambda: _at_every_timepoint(out, rows, 12000))
+    assert peak < got.nbytes + 8 * 4 * ho._EXPAND_ELEMENTS + 1e6
+
+
+def test_the_returned_outputs_at_every_timepoint_fit_the_budget_of_the_review():
+    # the review's reproduction: order 2 runs on 1000 rows, and the outputs
+    # returned at 12,000 timepoints traced 0.269 GB under max_memory_gb=0.18
+    x = _sines(12000, 8)
+    try:
+        peak, X = _traced(lambda: quiet(tc.features, x, order=2, rfun=None, delta_rfun=None,
+                                        cfun=tc.autofc, max_memory_gb=0.18))
+    except MemoryError as err:
+        assert "at all 12000 timepoints" in str(err)
+    else:
+        assert X[2].shape == (12000, 666)
+        assert peak <= 0.18e9
+
+
+EXPAND_CASES = [
+    ("unreduced", 6000, 8), ("unreduced", 12000, 8),
+    pytest.param("unreduced", 24000, 6, marks=pytest.mark.slow),
+    ("streamed", 6000, 16), ("streamed", 12000, 16),
+    pytest.param("streamed", 24000, 12, marks=pytest.mark.slow),
+]
+
+
+@pytest.mark.parametrize("kind, T, K", EXPAND_CASES)
+def test_thinned_runs_stay_within_the_budget_or_are_refused(kind, T, K):
+    # over a grid of budgets every run either completes with a traced peak
+    # within max_memory_gb, or raises MemoryError before exceeding it; the
+    # refusals of the expansion name the size of the outputs
+    x = _sines(T, K)
+    kw = (dict(rfun=None, delta_rfun=None) if kind == "unreduced" else
+          dict(rfun=tc.WeightedStrength(signed=True), delta_rfun="weighted_strength"))
+    completed, refused_by_expansion = [], 0
+    for budget in (0.02, 0.05, 0.1, 0.15, 0.2, 0.3, 0.5, 1.0, 2.0):
+        try:
+            peak, (X, info) = _traced(lambda: quiet(
+                tc.features, x, order=2, cfun=tc.autofc, max_memory_gb=budget,
+                return_info=True, **kw))
+        except MemoryError as err:
+            if f"at all {T} timepoints" in str(err):
+                refused_by_expansion += 1
+                assert "GB of outputs" in str(err)
+            continue
+        assert peak <= budget * 1e9, (budget, peak)
+        assert [e["sampling"] for e in info if e["path"] == "analysis"][1] > 1
+        assert X[2].shape[0] == T
+        completed.append(budget)
+    assert completed and completed[-1] == 2.0
+
+
+def test_a_run_whose_returned_outputs_do_not_fit_is_refused_naming_their_size():
+    # K 4, order 3, T 48,000, unreduced: orders 2 and 3 run on 1000 rows;
+    # the order-3 output (1540 columns) at all 48,000 timepoints is most of
+    # the memory (0.616 GB of outputs; traced peak 0.633 GB when it ran)
+    x = np.sin(np.arange(48000)[:, None] / 2000 + np.arange(4)[None, :])
+    kw = dict(order=3, rfun=None, delta_rfun=None, cfun=tc.autofc)
+    with pytest.raises(MemoryError, match=r"at all 48000 timepoints needs at least about "
+                                          r"0\.6\d+ GB \(0\.616 GB of outputs at full length"):
+        quiet(tc.features, x, max_memory_gb=0.6, **kw)
+    peak, X = _traced(lambda: quiet(tc.features, x, max_memory_gb=0.7, **kw))
+    assert X[3].shape == (48000, 1540)
+    assert peak <= 0.7e9

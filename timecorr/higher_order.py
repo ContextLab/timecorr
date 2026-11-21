@@ -106,6 +106,10 @@ from .summaries import (
 from .timecorr import _event_kernels, _restricted, _shaped_kernel, timecorr
 
 _BYTES_PER_GB = 1e9
+# outputs computed at fewer timepoints are interpolated to all T timepoints
+# in chunks of rows of at most this many elements (a few such chunks of work
+# space beside the full-length result)
+_EXPAND_ELEMENTS = 2 ** 17
 
 # The feeding kernel used when delta_weights_function is None (read by
 # _feeding_kernel): "gaussian" (gaussian_weights with _DEFAULT_FEEDING_PARAMS
@@ -1460,7 +1464,7 @@ def _auto_params(subjects, analysis, feeding):
     )
 
 
-def _at_every_timepoint(out, rows, T):
+def _at_every_timepoint(out, rows, T, chunk_elements=None):
     """
     An output computed at the timepoints ``rows`` (increasing indices),
     linearly interpolated to all ``T`` timepoints; after the last of
@@ -1468,30 +1472,92 @@ def _at_every_timepoint(out, rows, T):
     row keeps its value exactly, and a timepoint strictly between two
     computed rows is NaN only where one of them is NaN (a NaN row never
     reaches a timepoint where it has no weight).  ``out``: an array or a
-    list of arrays.
+    list of arrays; a list is expanded in place, one array at a time, so
+    each computed array is released once its full-length copy exists.
+
+    The result is written into one preallocated array, ``chunk_elements``
+    (default ``_EXPAND_ELEMENTS``) elements of rows at a time, so the work
+    space beside it is a few such chunks (see ``_expansion_bytes``).
     """
     if isinstance(out, list):
-        return [_at_every_timepoint(o, rows, T) for o in out]
+        for n in range(len(out)):
+            out[n] = _at_every_timepoint(out[n], rows, T, chunk_elements)
+        return out
     out = np.asarray(out)
     rows = np.asarray(rows)
     if len(rows) == T:
         return out
     if len(rows) == 1:
         return np.repeat(out, T, axis=0)
-    t = np.arange(T)
     result = np.empty((T,) + out.shape[1:], dtype=np.result_type(out, np.float64))
+    first, last = int(rows[0]), int(rows[-1])
     # held ends
-    result[t <= rows[0]] = out[0]
-    result[t >= rows[-1]] = out[-1]
+    result[: first + 1] = out[0]
+    result[last:] = out[-1]
     # strictly between two computed rows: both have non-zero weight
-    inside = (t > rows[0]) & (t < rows[-1])
-    ti = t[inside]
-    i = np.searchsorted(rows, ti, side="right") - 1
-    w = ((ti - rows[i]) / (rows[i + 1] - rows[i])).reshape((-1,) + (1,) * (out.ndim - 1))
-    result[inside] = out[i] * (1 - w) + out[i + 1] * w
+    width = max(1, int(np.prod(out.shape[1:], dtype=np.int64)))
+    step = max(1, int(chunk_elements or _EXPAND_ELEMENTS) // width)
+    shape = (-1,) + (1,) * (out.ndim - 1)
+    for a in range(first + 1, last, step):
+        ti = np.arange(a, min(a + step, last))
+        i = np.searchsorted(rows, ti, side="right") - 1
+        w = ((ti - rows[i]) / (rows[i + 1] - rows[i])).reshape(shape)
+        chunk = result[a: a + len(ti)]
+        np.multiply(out[i], 1 - w, out=chunk)
+        chunk += out[i + 1] * w
     # the computed rows themselves, exactly
     result[rows] = out
     return result
+
+
+def _expansion_bytes(outputs, computed_at, T, fits_elements=0):
+    """
+    Peak bytes while ``outputs`` (lists of arrays, one per order, computed at
+    the timepoints ``computed_at``) are returned at all ``T`` timepoints by
+    ``_at_every_timepoint``: every output at full length, the largest
+    computed array not yet released, the interpolation's work space (4
+    chunks) and ``fits_elements`` (the retained ``fits_`` and the formatted
+    data, which the run holds to the end).  Returns (total bytes,
+    bytes of the outputs at full length).
+    """
+    full = largest = 0
+    seen = set()
+    for out, at in zip(outputs, computed_at):
+        for a in _as_list(out):
+            a = np.asarray(a)
+            if id(a) in seen:
+                continue
+            seen.add(id(a))
+            width = a.size // max(1, a.shape[0])
+            full += int(T) * width
+            if len(at) != T:
+                largest = max(largest, a.size)
+    total = 8 * (full + largest + 4 * _EXPAND_ELEMENTS + int(fits_elements))
+    return total, 8 * full
+
+
+def _check_expansion(outputs, computed_at, T, max_memory_gb, fits_elements=0,
+                     lower_bound=False):
+    """MemoryError when returning ``outputs`` at all ``T`` timepoints would
+    need more than ``max_memory_gb`` (see ``_expansion_bytes``)."""
+    if max_memory_gb is None or all(len(at) == T for at in computed_at):
+        return
+    total, full = _expansion_bytes(outputs, computed_at, T, fits_elements)
+    if total / _BYTES_PER_GB > max_memory_gb:
+        raise MemoryError(_expansion_message(T, total, full, max_memory_gb, lower_bound))
+
+
+def _expansion_message(T, total, full, max_memory_gb, lower_bound=False):
+    return (
+        f"Returning the features at all {T} timepoints needs "
+        f"{'at least ' if lower_bound else ''}about {total / _BYTES_PER_GB:.3g} GB "
+        f"({full / _BYTES_PER_GB:.3g} GB of outputs at full length, plus the "
+        "rows being interpolated and the interpolation's work space), more than "
+        f"max_memory_gb={max_memory_gb}. Orders 2 and above were computed at "
+        "fewer timepoints (automatic kernels) and are interpolated to every "
+        "timepoint. Reduce the outputs (rfun, delta_rfun), lower the order, or "
+        "raise max_memory_gb."
+    )
 
 
 def two_path_step(
@@ -2455,7 +2521,13 @@ def features(
     automatic kernels have ``"kernel_sd"`` (in rows of that order's input)
     and ``"sampling"`` (timepoints of the data per row of that order's
     input); an entry without ``"sampling"`` was computed at every
-    timepoint.  With kernel parameters given on either path at any order
+    timepoint.  ``max_memory_gb`` also covers returning the outputs at all T
+    timepoints: each is interpolated into one array, a chunk of rows at a
+    time, and a run whose outputs at full length (with the rows being
+    interpolated and the work space) would not fit raises ``MemoryError``
+    naming their size, before order 1 when the widths are known in advance
+    (unreduced on both paths) and otherwise after the order whose outputs
+    exceed it.  With kernel parameters given on either path at any order
     (also the values the default would choose: ``"kernel_sd"`` times
     ``"sampling"``, in timepoints of the data), with events, or with a
     one-sided kernel (interpolating between computed rows would read rows
@@ -2659,6 +2731,22 @@ def features(
                     f"that fits orders up to {order} is K={fit}. Pass a reducer "
                     "(rfun, delta_rfun), lower the order, or raise max_memory_gb."
                 )
+    if (
+        thin and max_memory_gb is not None and order >= 2
+        and T >= 2 * _AUTO_MIN_ROWS
+        and delta_unreduced and all(analysis_rfun[k] is None for k in orders)
+    ):
+        # the outputs returned at all T timepoints, widths known in advance
+        # (a lower bound: orders 2 and above have at least later_T rows)
+        d, full = K, 0
+        for k in orders:
+            d = d * (d + 1) // 2
+            # X[k], and D[k] (as wide, unreduced) when returned
+            full += S * T * d * (2 if return_delta else 1)
+        # plus the formatted data, which the run holds to the end
+        total = 8 * (full + later_T * d + 4 * _EXPAND_ELEMENTS + S * T * K)
+        if total / _BYTES_PER_GB > max_memory_gb:
+            raise MemoryError(_expansion_message(T, total, 8 * full, max_memory_gb, True))
     if max_memory_gb is not None:
         # streamed steps of later orders are checked before order 1 runs
         _check_streamed_steps(
@@ -2751,10 +2839,21 @@ def features(
                 stride = max(1, min(int(sd // 2), len(rows) // _AUTO_MIN_ROWS))
                 fed_by = [d[::stride] for d in delta]
                 rows = rows[::stride]
+        if thin:
+            # the outputs so far, at all T timepoints: a lower bound of what
+            # returning them needs
+            _check_expansion(
+                X[1:] + D[1:], computed_at[1:] + computed_at[1: len(D)], T,
+                max_memory_gb, _fits_elements(*held_reducers) + S * T * K,
+                lower_bound=k < order,
+            )
 
     if thin:
-        X = [_at_every_timepoint(x, at, T) for x, at in zip(X, computed_at)]
-        D = [_at_every_timepoint(d, at, T) for d, at in zip(D, computed_at)]
+        # release the references to computed arrays, then expand each output
+        # in place (each computed array is released once expanded)
+        x = delta = fed_by = kept = None
+        X[1:] = [_at_every_timepoint(x, at, T) for x, at in zip(X[1:], computed_at[1:])]
+        D[1:] = [_at_every_timepoint(d, at, T) for d, at in zip(D[1:], computed_at[1:])]
     if single:
         X = [x[0] if isinstance(x, list) else x for x in X]
         D = [d[0] for d in D]

@@ -61,8 +61,8 @@ analysis kernel to the previous order's feeding features, and the feeding path
 (named ``delta_*`` in the arguments for historical reasons) gives the features
 passed to the next order. With the defaults both kernels are Gaussians whose
 width is set from each order's input: the feeding kernel's standard deviation
-is 5 autocorrelation widths of the input (at least 5 rows, at most a hundredth
-of its rows) and the analysis kernel's is that or 10 rows, whichever is
+is 5 autocorrelation widths of the input (at most a hundredth of its rows,
+but at least 5 rows, which wins below 500 rows) and the analysis kernel's is that or 10 rows, whichever is
 larger. The feeding path summarizes each subject's correlations with
 ``Communities()``; the analysis path is reduced with PCA at order 1 and with
 ``WeightedStrength(signed=True)`` at orders 2 and above. In the original

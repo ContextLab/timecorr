@@ -802,3 +802,26 @@ def test_no_hint_when_the_feeding_reducer_inherits_a_non_summary():
         tc.features(_hint_subjects(), order=2, max_memory_gb=0.3,
                     rfun="PCA", delta_rfun=None)
     assert HINT not in str(err.value)
+
+
+def test_default_memory_accounting_after_a_fallback():
+    # the default call (automatic kernels and reducers) on 6 noise features,
+    # order 3, T 1500 (below 2000 rows, so every order runs on all rows):
+    # both feeding steps fall back to 6 weighted-strength columns (no null
+    # exceedance at order 1, too few community columns at order 2).  The
+    # smallest budget that completes (bisection from [0, 0.5] GB until the
+    # bounds are adjacent floats, measured at the commit of this test):
+    # 0.084298624 GB; just below it the order-3 streamed analysis step on
+    # the 6 fallback columns raises before it computes anything (measured:
+    # "The streamed analysis step at order 3 needs at least about 0.0843
+    # GB"; the match accepts order 2 or 3, as the fixed-kernel version of
+    # this test does)
+    x = noise(2, (1500, 6), 4)
+    budget = 0.084298624
+    X, info = quiet(tc.features, x, order=3, max_memory_gb=budget, return_info=True)
+    assert X[3][0].shape == (1500, 12)
+    assert [e["fallback"] for e in info if e["path"] == "feeding"] == [
+        "no_null_exceedance", "too_few_community_columns"]
+    assert all("kernel_sd" in e for e in info)
+    with pytest.raises(MemoryError, match=r"at order [23] .*6 input features"):
+        quiet(tc.features, x, order=3, max_memory_gb=budget * (1 - 1e-6))

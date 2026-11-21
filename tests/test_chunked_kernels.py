@@ -72,9 +72,10 @@ def zero_kernel(T, fn, params, options):
 
 
 def run_invalid(f, *args, **kwargs):
-    """The exception of ``f(*args, **kwargs)`` as text, for an input that is
-    invalid on purpose (both kernel forms must refuse it alike)."""
-    with pytest.raises(Exception) as err:
+    """The ``ValueError`` of ``f(*args, **kwargs)`` as text, for an input
+    that is invalid on purpose (a kernel left without any weight: both
+    kernel forms must refuse it alike)."""
+    with pytest.raises(ValueError) as err:
         f(*args, **kwargs)
     return f"{err.type.__name__}: {err.value}"
 
@@ -305,6 +306,29 @@ def _defaults_as_arrays():
     )
 
 
+def assert_same_warnings_but_the_null(lazy, dense, data):
+    """
+    The warnings of a built-in and an array kernel are the same except the
+    shift null's threshold (second outside review, controller ruling: the
+    null of a stationary built-in kernel is evaluated at every 5th
+    timepoint, that of an array at every timepoint; before, this test
+    asserted equal warnings).  Each threshold is the one its rows give,
+    computed independently with ``_shift_null_threshold`` on the order-1
+    feeding step's kernel (the order-1 feeding step is the one that warns).
+    """
+    import re
+    pattern = r"null_threshold=([0-9.]+)"
+    assert [re.sub(pattern, "", w) for w in lazy] == [re.sub(pattern, "", w) for w in dense]
+    got = [sum((re.findall(pattern, w) for w in ws), []) for ws in (lazy, dense)]
+    assert len(got[0]) == len(got[1]) >= 1
+    kernel = ho._step_kernels(300, 2, tc.gaussian_weights, {"var": 25})
+    every_5th = sm._shift_null_threshold(data, kernel, bandwidth=5.0)
+    every = sm._shift_null_threshold(data, kernel, bandwidth=5.0, row_stride=1)
+    assert float(got[0][0]) == pytest.approx(every_5th, abs=5e-6)
+    assert float(got[1][0]) == pytest.approx(every, abs=5e-6)
+    assert every != every_5th
+
+
 @pytest.mark.parametrize("cfun", [tc.isfc, tc.autofc], ids=["isfc", "autofc"])
 def test_features_equal_the_array_kernels(cfun):
     rng = np.random.RandomState(2)
@@ -314,7 +338,7 @@ def test_features_equal_the_array_kernels(cfun):
     dense = run(tc.features, data, order=2, cfun=cfun, return_delta=True,
                 **_defaults_as_arrays())
     assert_identical(lazy[0], dense[0])
-    assert lazy[1] == dense[1]
+    assert_same_warnings_but_the_null(lazy[1], dense[1], data)
     # streamed analysis steps, with per-subject events
     kw = dict(order=2, cfun=cfun, rfun=tc.WeightedStrength(signed=True),
               events=[[100], [150]])
@@ -332,7 +356,7 @@ def test_two_path_step_equals_the_array_kernels():
                weights_params={"var": 100}, delta_weights_params={"var": 25})
     dense = run(tc.two_path_step, data, order=1, cfun=tc.autofc, **_defaults_as_arrays())
     assert_identical(lazy[0], dense[0])
-    assert lazy[1] == dense[1]
+    assert_same_warnings_but_the_null(lazy[1], dense[1], data)
 
 
 def test_decoders_equal_the_array_kernel():
@@ -794,3 +818,28 @@ def test_streamed_static_connectome_warns_as_wcorr_does(case):
         blocked, got = _messages(lambda: H._static_connectome(d, iu, b))
         assert got == expected
         np.testing.assert_allclose(blocked, whole, rtol=1e-12, atol=1e-15)
+
+
+def test_smoothing_is_read_in_chunks_and_not_counted_as_t_by_t():
+    # cfun=None smooths with the kernel a chunk of rows at a time: at T
+    # 10,000 its traced peak is a few MB, and the guard admits it (the
+    # T x T classification claimed 2.4 GB)
+    x = np.random.default_rng(0).normal(size=(10_000, 2))
+    peak, out = traced_peak(lambda: tc.features(x, order=1, rfun=None, delta_rfun=None,
+                                                cfun=None, max_memory_gb=0.1))
+    assert out[1].shape == (10_000, 2)
+    assert peak < 0.05e9
+    assert ho.estimate_memory_gb(2, 1, 10_000, cfun=None) == ho.estimate_memory_gb(2, 1, 10_000)
+
+
+def test_an_unused_feeding_kernel_is_not_counted_in_the_streamed_estimate():
+    custom = as_array_function(tc.gaussian_weights)
+    plain = ho.estimate_memory_gb(4, 1, 10_000, streamed=True)
+    assert ho.estimate_memory_gb(4, 1, 10_000, streamed=True,
+                                 delta_weights_function=custom) == plain
+    # it counts where the feeding path runs: below the last order, or with
+    # return_delta
+    assert ho.estimate_memory_gb(4, 1, 10_000, return_delta=True, streamed=True,
+                                 delta_weights_function=custom)[1] > 3 * 10_000 ** 2 * 8 / 1e9
+    two = ho.estimate_memory_gb(4, 2, 10_000, streamed=True, delta_weights_function=custom)
+    assert two[1] > 3 * 10_000 ** 2 * 8 / 1e9 and two[2] == plain[1]

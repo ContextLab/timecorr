@@ -92,6 +92,10 @@ def test_width_ignores_constant_columns_and_nan_samples():
     w = _autocorrelation_width([x])
     with_constant = np.column_stack([x, np.full(len(x), 3.0)])
     assert _autocorrelation_width([with_constant]) == w
+    # constants whose mean is not exact in binary (see also
+    # test_constant_columns_of_any_value_are_left_out)
+    with_constants = np.column_stack([x, np.full((len(x), 3), 0.1), np.full(len(x), -7.7)])
+    assert _autocorrelation_width([with_constants]) == w
     holes = x.copy()
     holes[::97, 0] = np.nan
     assert _autocorrelation_width([holes]) == pytest.approx(w, rel=0.05)
@@ -315,8 +319,12 @@ def test_features_equal_a_chain_of_steps_at_lower_rates():
             assert len(got) == len(step)
             for g, s in zip(got, step):
                 assert g.shape == (T, s.shape[1])
-                np.testing.assert_allclose(g, _at_every_timepoint(s, rows, T),
-                                           rtol=1e-9, atol=1e-12)
+                # expected: numpy's linear interpolation (ends held), not
+                # the package's helper
+                assert np.isfinite(s).all()
+                expected = np.column_stack(
+                    [np.interp(np.arange(T), rows, s[:, j]) for j in range(s.shape[1])])
+                np.testing.assert_allclose(g, expected, rtol=1e-9, atol=1e-12)
         entries = [e for e in info if e["order"] == k]
         assert [e["path"] for e in entries] == ["analysis", "feeding"]
         assert entries[1]["kernel_sd"] == pytest.approx(sd)
@@ -533,3 +541,87 @@ def test_backward_default_kernels_do_not_read_later_samples():
         for a, b in ((Xe[k], Xp[k]), (De[k], Dp[k])):
             np.testing.assert_allclose(a[:t0], b[:t0], rtol=0, atol=1e-8)
             assert np.abs(a[t0 + 50:] - b[t0 + 50:]).max() > 1e-3
+
+
+# second outside review --------------------------------------------------------
+
+
+@pytest.mark.parametrize("value", [0.1, 1 / 3, -7.7, 1e-300])
+def test_constant_columns_of_any_value_are_left_out(value):
+    # a rounded mean of repeated 0.1 leaves a residual that is the same at
+    # every sample; such a column is constant (the estimator's round-off
+    # rule), not perfectly autocorrelated: 40 of them next to noise changed
+    # the kernel from 5 to 30 rows
+    x = np.random.default_rng(2).normal(size=(3000, 4))
+    y = np.column_stack([x, np.full((3000, 40), value)])
+    assert _auto_sd([x]) == 5.0
+    assert _autocorrelation_width([y]) == _autocorrelation_width([x])
+    assert _auto_sd([y]) == 5.0
+
+
+@pytest.mark.parametrize("scale", [1e-180, 1e-100, 1e100, 1e180])
+def test_width_does_not_depend_on_the_units_of_the_data(scale):
+    x = smooth_noise(4, 3000, 4, 3)
+    w = _autocorrelation_width([x])
+    assert w > 3
+    assert _autocorrelation_width([x * scale]) == pytest.approx(w, rel=1e-9)
+    assert _auto_sd([x * scale]) == pytest.approx(_auto_sd([x]), rel=1e-9)
+
+
+def test_interpolation_keeps_valid_samples_beside_nan():
+    # expected values written by hand: a computed row keeps its value, rows
+    # after the last computed row hold it, and a row between two computed
+    # rows is NaN only when a NaN row has non-zero weight there
+    out = np.array([[1.0], [np.nan], [3.0]])
+    got = _at_every_timepoint(out, np.array([0, 2, 4]), 6).ravel()
+    np.testing.assert_array_equal(got, [1.0, np.nan, np.nan, np.nan, 3.0, 3.0])
+    out = np.array([[np.nan, 2.0], [4.0, 6.0]])
+    got = _at_every_timepoint(out, np.array([0, 4]), 6)
+    np.testing.assert_array_equal(got[:, 0], [np.nan, np.nan, np.nan, np.nan, 4.0, 4.0])
+    np.testing.assert_array_equal(got[:, 1], [2.0, 3.0, 4.0, 5.0, 6.0, 6.0])
+    # one computed row: held everywhere
+    np.testing.assert_array_equal(
+        _at_every_timepoint(np.array([[np.nan, 5.0]]), np.array([0]), 3),
+        [[np.nan, 5.0]] * 3)
+
+
+def test_unreduced_runs_are_checked_with_the_rows_of_each_order():
+    # order 2 of 4000 rows of white noise runs on 2000 rows: an unreduced
+    # call needs about 0.22 GB there, not the 0.41 GB of a step on all 4000
+    x = np.random.default_rng(2).normal(size=(4000, 8))
+    assert estimate_memory_gb(8, 2, 4000)[2] > 0.4
+    assert estimate_memory_gb(36, 1, 2000)[1] < 0.25
+    X = quiet(tc.features, x, order=2, cfun=tc.autofc, rfun=None, delta_rfun=None,
+              max_memory_gb=0.4)
+    assert X[2].shape == (4000, 666)
+    # with the fixed kernels every order runs on all rows: refused up front
+    with pytest.raises(MemoryError, match="Unreduced features at order 2"):
+        quiet(tc.features, x, order=2, cfun=tc.autofc, rfun=None, delta_rfun=None,
+              max_memory_gb=0.4, **FIXED)
+
+
+def test_default_return_info_has_the_automatic_kernel_keys():
+    # the default call (automatic kernels on both paths): every entry has the
+    # kernel's standard deviation and the sampling, with the values the rule
+    # gives for each order's input
+    data, _ = hierarchy(T=3000)
+    (X, D), info = quiet(tc.features, data, order=2, cfun=tc.autofc,
+                         return_delta=True, return_info=True)
+    base = {"order", "path", "requested", "effective", "input_width", "output_width",
+            "kernel_sd", "sampling"}
+    feeding = base | {"n_communities", "n_exceed", "null_threshold", "n_null", "fallback"}
+    assert [(e["order"], e["path"]) for e in info] == [
+        (1, "analysis"), (1, "feeding"), (2, "analysis"), (2, "feeding")]
+    for e in info:
+        assert set(e) == (feeding if e["path"] == "feeding" else base)
+    sd1 = _auto_sd(data)
+    assert info[1]["kernel_sd"] == pytest.approx(sd1)
+    assert info[0]["kernel_sd"] == pytest.approx(max(sd1, 10.0))
+    assert info[0]["sampling"] == info[1]["sampling"] == 1
+    stride = max(1, min(int(sd1 // 2), 3000 // 1000))
+    fed = [d[::stride] for d in quiet(tc.two_path_step, data, cfun=tc.autofc)[1]]
+    sd2 = _auto_sd(fed)
+    assert info[3]["kernel_sd"] == pytest.approx(sd2)
+    assert info[2]["kernel_sd"] == pytest.approx(max(sd2, 10.0))
+    assert info[2]["sampling"] == info[3]["sampling"] == stride == 2
+

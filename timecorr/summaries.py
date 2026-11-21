@@ -1419,8 +1419,9 @@ def _shared_lag_fraction(K, n_lags):
     return Fraction(n * q * (q - 1) + 2 * r * q, K * (K - 1))
 
 
-# The shift null averages the surrogates' squared correlations over every
-# s-th timepoint: s is the largest step at which two rows of the kernel
+# For a stationary built-in kernel (``_stationary``), the shift null
+# averages the surrogates' squared correlations over every s-th timepoint
+# (any other kernel: every timepoint): s is the largest step at which two rows of the kernel
 # still have this normalized overlap (for a Gaussian kernel: its standard
 # deviation, rounded down).  Correlations at timepoints closer than that are
 # estimated from nearly the same samples; measured on 96 noise inputs of 4
@@ -1440,7 +1441,10 @@ def _null_row_stride(kernel):
     ``_NULL_ROW_OVERLAP``, and at most ``T // 8``; 1 when no step does.
     The row is the kernel's as it is (restricted by ``include_timepoints``,
     ``include_zero``, ``exclude_timepoints`` and events), so an array and
-    the equal ``LagKernel`` give the same step.
+    the equal ``LagKernel`` give the same step.  The shift null uses the
+    step only for ``_stationary`` kernels (see ``_null_stride``); the
+    overlaps come from one FFT of the row, so the cost is O(L log L) for a
+    row of L non-zero lags.
     """
     if isinstance(kernel, LagKernel):
         if kernel.empty:
@@ -1458,12 +1462,46 @@ def _null_row_stride(kernel):
     row = np.nan_to_num(row, nan=0.0, posinf=0.0, neginf=0.0)
     row = row[np.flatnonzero(row)[0]: np.flatnonzero(row)[-1] + 1] if row.any() else row
     norm = float(row @ row)
-    stride = 1
-    for d in range(1, min(len(row), T // 8 + 1)):
-        if norm <= 0 or float(row[d:] @ row[:-d]) / norm < _NULL_ROW_OVERLAP:
-            break
-        stride = d
-    return stride
+    last = min(len(row) - 1, T // 8)
+    if norm <= 0 or last < 1:
+        return 1
+    # the overlaps at every step at once, from one FFT of the row (the loop
+    # of dot products it replaces took O(len(row) * stride) operations, T**2
+    # / 8 for the uniform kernel); the FFT's round-off (about 1e-16 of the
+    # norm) is far below the margin of _NULL_ROW_OVERLAP
+    n = 1 << int(2 * len(row) - 1).bit_length()
+    f = np.fft.rfft(row, n)
+    overlap = np.fft.irfft(f * np.conj(f), n)[1: last + 1] / norm
+    below = np.flatnonzero(overlap < _NULL_ROW_OVERLAP)
+    return max(1, int(below[0])) if below.size else int(last)
+
+
+def _stationary(kernel):
+    """
+    True for a ``LagKernel`` whose rows are all the same lag profile, cut
+    only by the ends of the recording: no events, no ``include_timepoints``
+    other than "all", no ``exclude_timepoints``, finite weights.  Only such
+    a kernel's null is evaluated at every s-th timepoint: the rows left out
+    are then shifted copies of the rows kept, so leaving them out does not
+    change which estimator a row gets (rows with fewer than 3 weights, the
+    delta kernel's co-fluctuations).  Arrays, and any other kernel, may have
+    rows that differ (zero rows, single-weight rows): their null is
+    evaluated at every timepoint.
+    """
+    return (
+        isinstance(kernel, LagKernel) and kernel.labels is None
+        and kernel.include == "all" and kernel.exclude is None
+        and kernel._finite and not kernel.empty
+    )
+
+
+def _null_stride(kernels):
+    """The step of the shift null for these kernels: the smallest
+    ``_null_row_stride`` when every kernel is ``_stationary``, else 1."""
+    kernels = kernels if isinstance(kernels, (list, tuple)) else [kernels]
+    if not all(_stationary(k) for k in kernels):
+        return 1
+    return min(_null_row_stride(k) for k in kernels)
 
 
 def _every_nth_row(kernel, stride):
@@ -1500,9 +1538,13 @@ class _EveryNthRow:
             yield i0, i1, c0, c1, None if key is None else key + (self.stride,)
 
     def block(self, i0, i1, c0, c1):
-        """Rows ``i0:i1`` (of the kept rows), columns ``c0:c1`` (a new array)."""
-        t0, t1 = self._rows(i0, i1)
-        return np.ascontiguousarray(self.kernel.block(t0, t1, c0, c1)[:: self.stride])
+        """Rows ``i0:i1`` (of the kept rows), columns ``c0:c1`` (a new array).
+        Only the kept rows are computed, one at a time: the rows between
+        them are never built."""
+        out = np.empty((i1 - i0, c1 - c0))
+        for n, t in enumerate(self.rows[i0:i1]):
+            out[n] = self.kernel.block(int(t), int(t) + 1, c0, c1)[0]
+        return out
 
 
 def _shift_null_threshold(
@@ -1526,10 +1568,11 @@ def _shift_null_threshold(
     size, see ``_rows_per_block``), averaging the squared correlations over
     every ``s``-th timepoint (rows ``s // 2, s // 2 + s, ...``), ``s`` being
     ``row_stride`` or, when that is None, the smallest ``_null_row_stride``
-    of the kernels if every kernel is a ``LagKernel`` and 1 (every
-    timepoint) for kernels given as arrays (``features`` and
-    ``two_path_step`` pass the smallest ``_null_row_stride`` for every kind
-    of kernel); and records the
+    of the kernels if every kernel is ``_stationary`` (a built-in kernel
+    without events, one-sided restriction or ``exclude_timepoints``) and 1
+    (every timepoint) otherwise: for kernels given as arrays, kernel
+    functions of your own and restricted kernels, whose rows can differ
+    (``features`` and ``two_path_step`` pass None); and records the
     largest eigenvalue of ``C = Wbar - median(Wbar over i < j)`` (zero
     diagonal).  Returns the maximum over ``n_null`` repetitions.  Lags are
     drawn per repetition, subject by subject, K at a time.  NumPy's global
@@ -1574,9 +1617,7 @@ def _shift_null_threshold(
     probe = _Units(subjects, kernels, autofc)
     null_kernels = probe.kernels
     if row_stride is None:
-        row_stride = min(
-            _null_row_stride(k) if isinstance(k, LagKernel) else 1 for k in null_kernels
-        )
+        row_stride = _null_stride(null_kernels)
     if row_stride > 1:
         null_kernels = [_every_nth_row(k, int(row_stride)) for k in null_kernels]
     T_out = null_kernels[0].shape[0]
@@ -1651,7 +1692,9 @@ def _streamed_summary(
     bandwidth : float
         Kernel standard deviation for the shift null's lags.  Default: 5.0.
     null_row_stride : int or None
-        ``row_stride`` of ``_shift_null_threshold``.  Default: None.
+        ``row_stride`` of ``_shift_null_threshold`` (None: every s-th
+        timepoint for stationary built-in kernels, every timepoint
+        otherwise, chosen only when the null runs).  Default: None.
 
     Returns
     -------

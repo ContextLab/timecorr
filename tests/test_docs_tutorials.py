@@ -11,6 +11,8 @@ docs/tutorials.rst (nothing is mocked) and check that:
 - each notebook has an "Open in Colab" badge whose URL names its own file,
   and its first code cell installs timecorr when it runs on Google Colab;
 - no notebook has an error output;
+- every relative link in a notebook's text names another tutorial notebook
+  (links to other pages are absolute URLs, which also work on Colab);
 - every public name of the package (listed as in tests/test_api_docs.py)
   is used in a code cell of at least one tutorial: as ``tc.<name>``, imported
   or called (comments and string literals do not count).
@@ -132,6 +134,21 @@ def test_no_error_outputs(name):
         if o.get("output_type") == "error"
     ]
     assert not errors, f"{name}: error outputs in cells {errors}"
+
+
+@pytest.mark.parametrize("name", _notebook_names())
+def test_relative_links_name_tutorial_notebooks(name):
+    # On Colab a relative link resolves next to the notebook on GitHub, so it
+    # works only for another tutorial notebook; other pages need absolute URLs.
+    markdown = "\n".join(
+        _source(c) for c in _load(name)["cells"] if c["cell_type"] == "markdown"
+    )
+    targets = re.findall(r"\]\(([^)\s]+)\)", markdown)
+    relative = [t for t in targets if not re.match(r"[a-z]+:", t) and not t.startswith("#")]
+    notebooks = set(_notebook_names())
+    bad = [t for t in relative if t.split("#")[0][: -len(".ipynb")] not in notebooks
+           or not t.split("#")[0].endswith(".ipynb")]
+    assert not bad, f"{name}: relative links that are not tutorial notebooks: {bad}"
 
 
 def _public_names():

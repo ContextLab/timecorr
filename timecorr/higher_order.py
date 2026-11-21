@@ -1397,8 +1397,11 @@ def _autocorrelation_width(subjects):
     columns = []
     for x in subjects:
         x = np.asarray(x, dtype=float)
-        with np.errstate(invalid="ignore"):
-            top = np.nanmax(np.abs(x), axis=0) if x.shape[0] else np.zeros(x.shape[1])
+        # the largest absolute value of each column, NaN samples left out
+        # (an all-NaN column gives -inf, without numpy's warning of nanmax)
+        a = np.abs(x)
+        top = (np.where(np.isnan(a), -np.inf, a).max(axis=0) if x.shape[0]
+               else np.zeros(x.shape[1]))
         top = np.where(np.isfinite(top) & (top > 0), top, 1.0)
         # z-scores: NaN samples and constant columns give 0
         z = _zscore_columns(x / top)

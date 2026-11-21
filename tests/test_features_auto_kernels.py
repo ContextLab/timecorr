@@ -741,3 +741,15 @@ def test_a_run_whose_returned_outputs_do_not_fit_is_refused_naming_their_size():
     peak, X = _traced(lambda: quiet(tc.features, x, max_memory_gb=0.7, **kw))
     assert X[3].shape == (48000, 1540)
     assert peak <= 0.7e9
+
+
+def test_all_nan_columns_raise_no_warning():
+    # numpy's "All-NaN slice encountered" RuntimeWarning is not raised; the
+    # result is the same (an all-NaN column carries no autocorrelation)
+    x = smooth_noise(4, 3000, 4, 3)
+    with_nan = np.column_stack([x, np.full(3000, np.nan)])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert _auto_sd([np.full((3000, 4), np.nan)]) == 5.0
+        assert _autocorrelation_width([with_nan]) == _autocorrelation_width([x])
+        assert _auto_sd([with_nan]) == _auto_sd([x])

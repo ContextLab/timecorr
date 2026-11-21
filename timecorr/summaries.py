@@ -54,6 +54,9 @@ __all__ = ["WeightedStrength", "Communities"]
 # relative tolerance below which an output column's range over time is
 # round-off (see ``_Summary._warn_constant``)
 _CONSTANT_RTOL = 1e-9
+# a summary column whose range is within this fraction of the largest absolute
+# value of its unit's output is zero up to round-off
+_ZERO_RTOL = 1e-12
 
 def _new_state(K, T, signed):
     """
@@ -607,9 +610,12 @@ class _Summary:
         outputs is constant over time.
 
         A column of one unit's output counts as constant when its range over
-        time is at most ``_CONSTANT_RTOL * max|column|`` with
-        ``_CONSTANT_RTOL = 1e-9`` (relative to the column, so the decision
-        does not depend on its scale).  A nonzero range within that tolerance is
+        time is at most ``_CONSTANT_RTOL * max|column|`` (``_CONSTANT_RTOL =
+        1e-9``) or at most ``_ZERO_RTOL * max|output|`` (``_ZERO_RTOL =
+        1e-12``; the largest absolute value in that unit's output: a column
+        that is zero up to the round-off of the other columns).  Both are
+        relative, so the decision does not depend on the scale of the
+        output.  A nonzero range within that tolerance is
         round-off (for example 1e-13 on values of 3 when nearly identical
         input features give identical summaries), and the column is set to
         its mean exactly, so a later order meets exact zero variance rather
@@ -620,7 +626,9 @@ class _Summary:
             if o.shape[0] == 0:
                 continue
             rng = np.ptp(o, axis=0)
-            tol = _CONSTANT_RTOL * np.max(np.abs(o), axis=0)
+            largest = np.max(np.abs(o), axis=0)
+            tol = np.maximum(_CONSTANT_RTOL * largest,
+                             _ZERO_RTOL * np.max(largest, initial=0.0))
             snap = (rng > 0) & (rng <= tol)
             if snap.any():
                 o[:, snap] = np.mean(o[:, snap], axis=0)

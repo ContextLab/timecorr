@@ -1045,6 +1045,27 @@ def test_constant_column_rule_does_not_depend_on_the_scale(scale):
     np.testing.assert_array_equal(out[:, 1:], kept[:, 1:])
 
 
+@pytest.mark.parametrize("scale", [1e-6, 1.0, 1e6])
+def test_a_column_that_is_zero_up_to_round_off_is_constant(scale):
+    # a column whose values are round-off of the output's scale (1e-17 next
+    # to values of 3) is constant: set to its mean and reported, at any
+    # scale of the output; a small column that really varies (1e-6 of the
+    # others) is kept
+    T = 200
+    rng = np.random.default_rng(0)
+    zero = scale * 1e-17 * rng.standard_normal(T)
+    large = scale * 3 * (1 + 1e-13 * rng.standard_normal(T))
+    small = scale * 1e-6 * rng.standard_normal(T)
+    varying = scale * rng.standard_normal(T)
+    out = np.column_stack([zero, large, small, varying])
+    kept = out.copy()
+    with pytest.warns(UserWarning, match="2 output columns are constant"):
+        tc.WeightedStrength()._warn_constant([out])
+    assert np.ptp(out[:, 0]) == 0 and abs(out[0, 0]) <= scale * 1e-17
+    assert np.ptp(out[:, 1]) == 0
+    np.testing.assert_array_equal(out[:, 2:], kept[:, 2:])
+
+
 # two planted communities of unequal size: centering on the median ---------
 
 

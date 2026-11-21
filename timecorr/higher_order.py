@@ -1420,11 +1420,6 @@ def _auto_params(subjects, analysis, feeding):
     )
 
 
-def _kernel_sd(params):
-    """Standard deviation of a Gaussian kernel with these parameters."""
-    return float(np.sqrt(params["var"]))
-
-
 def _at_every_timepoint(out, rows, T):
     """
     An output computed at the timepoints ``rows`` (increasing indices),
@@ -2575,9 +2570,11 @@ def features(
                     f"that fits orders up to {order} is K={fit}. Pass a reducer "
                     "(rfun, delta_rfun), lower the order, or raise max_memory_gb."
                 )
-    # with both kernels automatic at every order and no events, each order's
-    # feeding features are passed on at a lower rate
-    thin = all(
+    # with both kernels automatic at every order, no events and two-sided
+    # kernels, each order's feeding features are passed on at a lower rate
+    # (with a one-sided kernel, interpolating between the computed rows
+    # would read rows on the side the kernel excludes)
+    thin = include_timepoints == "all" and all(
         auto_analysis[k] and auto_feeding[k] and resolved[k] is None for k in orders
     )
     if max_memory_gb is not None:
@@ -2662,7 +2659,7 @@ def features(
             # order's input, and the timepoints of the data per row
             for entry, params in zip(entries, (analysis_auto, feeding_auto)):
                 if params is not None:
-                    entry["kernel_sd"] = _kernel_sd(params)
+                    entry["kernel_sd"] = _bandwidth(gaussian_weights, params)
                     entry["sampling"] = int(rows[1] - rows[0]) if len(rows) > 1 else 1
             info.extend(entries)
         if delta is not None:
@@ -2670,8 +2667,8 @@ def features(
             if return_delta:
                 D.append(delta)
             if thin:
-                stride = max(1, min(int(_kernel_sd(feeding_auto) // 2),
-                                    len(rows) // _AUTO_MIN_ROWS))
+                sd = _bandwidth(gaussian_weights, feeding_auto)
+                stride = max(1, min(int(sd // 2), len(rows) // _AUTO_MIN_ROWS))
                 fed_by = [d[::stride] for d in delta]
                 rows = rows[::stride]
 

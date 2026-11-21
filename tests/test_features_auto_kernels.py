@@ -478,3 +478,58 @@ def test_default_kernels_follow_the_order2_signal_of_a_long_recording():
     fixed, _ = followed(**FIXED)
     assert default > 0.6
     assert default > fixed + 0.3
+
+
+# one-sided kernels -----------------------------------------------------------
+
+
+@pytest.mark.parametrize("side", ["backward", "pre", "forward", "post"])
+def test_one_sided_kernels_keep_every_timepoint(side):
+    # with a one-sided kernel every order is computed at every timepoint:
+    # interpolating between computed rows would read rows on the excluded
+    # side
+    data, _ = hierarchy(T=3000)
+    (X, D), info = quiet(tc.features, data, order=2, cfun=tc.autofc, return_delta=True,
+                         return_info=True, include_timepoints=side)
+    assert all(e["sampling"] == 1 for e in info)
+    x1, d1 = quiet(tc.two_path_step, data, cfun=tc.autofc, include_timepoints=side)
+    x2, d2 = quiet(tc.two_path_step, d1, cfun=tc.autofc, order=2, include_timepoints=side)
+    assert_same(X[2], x2)
+    assert_same(D[2], d2)
+    # the two-sided default at this length does use the lower rate
+    _, info = quiet(tc.features, data, order=2, cfun=tc.autofc, return_info=True)
+    assert [e["sampling"] for e in info if e["order"] == 2] == [2]
+
+
+def test_backward_default_kernels_do_not_read_later_samples():
+    # unreduced features (nothing is fitted on the whole recording) of white
+    # data with the default kernels and include_timepoints="backward".  The
+    # automatic widths are read from the whole recording, so the property is
+    # stated given the widths: (1) the default call equals the call with the
+    # widths it chose given explicitly, at every timepoint (no interpolation
+    # between computed rows); (2) with those widths, replacing every sample
+    # from t0 on leaves the features before t0 unchanged (to 1e-8: the
+    # estimator centers columns on their overall means,
+    # tests/test_estimator_causality.py)
+    T, t0 = 3000, 2000
+    rng = np.random.default_rng(3)
+    x = rng.standard_normal((T, 3))
+    y = x.copy()
+    y[t0:] = np.random.default_rng(4).standard_normal((T - t0, 3))
+    common = dict(order=2, cfun=tc.autofc, rfun=None, delta_rfun=None, return_delta=True,
+                  include_timepoints="backward")
+    (X, D), info = quiet(tc.features, x, return_info=True, **common)
+    assert all(e["sampling"] == 1 for e in info)
+    sd = {(e["order"], e["path"]): e["kernel_sd"] for e in info}
+    chosen = dict(
+        weights_params={k: gaussian(sd[(k, "analysis")]) for k in (1, 2)},
+        delta_weights_params={k: gaussian(sd[(k, "feeding")]) for k in (1, 2)},
+    )
+    Xe, De = quiet(tc.features, x, **common, **chosen)
+    Xp, Dp = quiet(tc.features, y, **common, **chosen)
+    for k in (1, 2):
+        assert_same(X[k], Xe[k])
+        assert_same(D[k], De[k])
+        for a, b in ((Xe[k], Xp[k]), (De[k], Dp[k])):
+            np.testing.assert_allclose(a[:t0], b[:t0], rtol=0, atol=1e-8)
+            assert np.abs(a[t0 + 50:] - b[t0 + 50:]).max() > 1e-3

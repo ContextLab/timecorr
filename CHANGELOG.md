@@ -20,18 +20,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from an order map (or mapped to None) are automatic too. What changes:
   white data at order 1 keep the earlier kernels (standard deviations 10
   and 5 samples); at orders 2 and above, whose input is smooth, the
-  kernels are wider (10 samples for recordings of up to 1000 timepoints,
-  where `X[2]` on white data is unchanged and `D[2]` differs; wider for
-  longer recordings); autocorrelated data get wider kernels at order 1
-  too. The earlier fixed kernels are requested with
+  kernels can be wider: the feeding kernel is still 5 samples below 500
+  timepoints and at most a hundredth of the recording above (10 samples
+  at 1000 timepoints), and the analysis kernel stays at 10 samples up to
+  1000 timepoints, so there `X[2]` on white data is unchanged and `D[2]`
+  differs from 500 timepoints on; both are wider for longer recordings;
+  autocorrelated data get wider kernels at order 1 too. The earlier fixed kernels are requested with
   `weights_params={"var": 100}, delta_weights_params={"var": 25}`. With
   another kernel function, or with `delta_weights_function=tc.eye_weights`
   (the original pipeline, unchanged), None means the kernel function's own
-  defaults, as before. When no kernel parameters and no events are given,
+  defaults, as before. When no kernel parameters and no events are given
+  and `include_timepoints` is `"all"`,
   each order's feeding features are passed on at every `floor(sd / 2)`-th
   row while at least 1000 rows remain, so later orders of recordings of
   2000 or more timepoints are computed at fewer timepoints; every output is
-  returned at all timepoints by linear interpolation. `return_info=True`
+  returned at all timepoints by linear interpolation (giving any kernel
+  parameter, events or a one-sided kernel makes every order be computed
+  at every timepoint). `return_info=True`
   gives each automatic kernel's `"kernel_sd"` (rows of its order's input)
   and `"sampling"` (timepoints per row). The up-front memory check of
   later orders uses the fewest rows they can have.
@@ -46,9 +51,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (.002 +- .003), with the right number of communities at every order;
   216 nodes in three levels whose timescales grow by factors of 10 and
   7.5 (4, 40, 300 samples), T 12,000, 8 recordings: order-3 features
-  .156 +- .028 (.007 +- .004). Each order's kernel was about 10 times as
-  wide as the previous order's (5, 46 and 526 samples), so structure
-  whose timescales lie closer together than that is not followed. Order 4
+  .156 +- .028 (.007 +- .004). The null controls of these three were
+  -.002 +- .015, -.046 +- .023 and .004 +- .026. On the first three-level
+  design the kernels were 5, 46 and 526 samples wide. The two three-level
+  designs differ in timescale ratios, children per group (4 against 3),
+  nodes per module (4 against 6), number of nodes and length; which
+  difference decides was not measured. Order 4
   was not recovered in the one design tried (162 nodes in four levels with
   3 children per group and 3 nodes per module, timescales 5, 100, 1100
   and 12,000 samples, T 400,000): with the order-1 step replaced by the
@@ -56,11 +64,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   On `simulate_nested` data (T 1000, 12 seeds) `X[2]` is unchanged and the
   decoding score of `D[2]` rises from .199 +- .021 to .560 +- .020
   (control .002 +- .025; its spread over seeds is .086 against .051 with
-  the fixed kernels).
+  the fixed kernels). A limit of a two-hundredth of the rows instead of a
+  hundredth gives the fixed kernels' numbers there and lowers the
+  two-level result above from .775 +- .013 to .717 +- .012 (4 development
+  recordings), so the hundredth is kept.
 - **Constant summary columns: a relative rule.** A summary column counts
   as constant (set to its mean when its range is nonzero, and reported by
   the constant-output warning) when its range over time is at most
-  `1e-9 * max|column|`; the earlier rule, `1e-9 * max(1, max|column|)`,
+  `1e-9 * max|column|`, or at most 1e-12 of the largest absolute value in
+  that unit's output (a column that is zero up to round-off); the earlier
+  rule, `1e-9 * max(1, max|column|)`,
   also treated real variation of columns with values far below 1 as
   round-off (a column of values near 3e-6 varying by 1e-6 of them).
 - **Shift null evaluated at every s-th timepoint.** In `features` and
@@ -73,7 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.002 times the threshold from every timepoint (standard errors .001 to
   .003), and the communities found on 24 structured inputs were the same;
   the default call on 5 subjects of 6000 x 108 took 45 s instead of 81 s
-  (the null: 11 s instead of 44 s). Thresholds, and so community counts
+  (the null: 11 s instead of 44 s; one run each on a shared machine). Thresholds, and so community counts
   near the threshold, can differ from the previous version. Phase
   randomization was compared with the circular shift on the same inputs
   and found the same counts (one worse of 24) and the same rate of false

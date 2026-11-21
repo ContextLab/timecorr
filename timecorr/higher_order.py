@@ -1996,7 +1996,9 @@ def features(
     correlations instead (one column per input feature; see
     ``delta_rfun``), so the feeding width never drops below 4.  To keep the
     community columns of an order whatever their number, give that order's
-    reducer (for example ``delta_rfun={3: "communities"}``).  This also
+    reducer (for example ``delta_rfun={3: "communities"}``); on inputs
+    without structure it then emits two communities about 1 time in 5 (17
+    to 19 of 96 noise inputs had an eigenvalue above the null).  This also
     changes calls that completed before the fallback was added: on 4
     independent noise features (T 100), ``features(x, order=1,
     return_delta=True)`` returned 1 community column in ``D[1]`` and now
@@ -2364,19 +2366,26 @@ def features(
     has standard deviation ``max(sd, 10)`` rows.  A Gaussian kernel of
     standard deviation ``sd`` spans about ``3.5 sd`` rows, so the limit of
     ``T' / 100`` leaves at least about 28 windows that do not overlap in
-    the recording.  When the mean lag-1 autocorrelation of the data is
+    the recording.  On ``simulate_nested`` data (T 1000, 12 seeds) the
+    limit of a hundredth gives ``D[2]`` a decoding score of .560 +- .020
+    with a control of .002 +- .025 whose spread over seeds is .086; a limit
+    of a two-hundredth gives the fixed kernels' .199 +- .021 with a control
+    spread of .051, and on a two-level design of 108 nodes (T 6000, 4
+    recordings) lowers the decoding from ``X[2]`` from .775 +- .013 to
+    .717 +- .012.  When the mean lag-1 autocorrelation of the data is
     below ``exp(-1/2)`` (about 0.61), ``w`` is 1, so the order-1 kernels
     have standard deviations 10 and 5 samples (variances 100 and 25, the
     fixed kernels of earlier versions).  At orders 2 and above the input
-    was itself computed with a Gaussian kernel, whose standard deviation
-    ``sd`` gives it an autocorrelation width of at least about ``sqrt(2)
-    sd``, so each order's kernel is about 7 times as wide as the previous
-    order's or wider, until it reaches the limit: structure of order ``k``
-    can be followed only when it changes more slowly than that, and
-    recordings of up to 1000 timepoints use kernels of at most 10 samples
-    at every order.
+    was itself computed with a kernel and is smoother than the data, so the
+    kernels widen from order to order until they reach the limit (measured
+    on simulated hierarchies with two-sided kernels: 5, 46 and 470 to 526
+    samples at orders 1 to 3, from input widths of 1, 9 and 94 to 105
+    samples).  Recordings of up to 1000 timepoints use kernels of at most
+    10 samples at every order.  The widths are read from the whole
+    recording, also with a one-sided kernel.
 
-    When no kernel parameters and no events are given at any order, the
+    When no kernel parameters and no events are given at any order and
+    ``include_timepoints`` is ``"all"``, the
     feeding features of each order are passed on at every ``s``-th row,
     ``s = max(1, min(floor(sd / 2), T' // 1000))``, so later orders of
     recordings of 2000 or more timepoints are computed at fewer timepoints;
@@ -2386,8 +2395,16 @@ def features(
     computed at every timepoint.  With ``return_info=True``, the entries of
     automatic kernels have ``"kernel_sd"`` (in rows of that order's input)
     and ``"sampling"`` (timepoints of the data per row of that order's
-    input).  With kernel parameters given on either path at any order, or
-    with events, every order is computed at every timepoint.
+    input); an entry without ``"sampling"`` was computed at every
+    timepoint.  With kernel parameters given on either path at any order
+    (also the values the default would choose), with events, or with a
+    one-sided kernel (interpolating between computed rows would read rows
+    on the side the kernel excludes), every order is computed at every
+    timepoint.  That takes longer and changes orders 2 and above slightly:
+    on 2 subjects of 12,000 x 72 at order 3, giving ``weights_params={1:
+    {"var": 100}}`` (the value the default chose) took 15.9 s instead of
+    8.4 s (one run each), and ``X[2]`` and ``X[3]`` differed by at most
+    .021 and .010 (correlations above .9999).
 
     The ``WeightedStrength`` and ``Communities`` objects passed in ``rfun``
     or ``delta_rfun`` (also as order map values) have their ``fits_`` cleared
@@ -2437,7 +2454,8 @@ def features(
     >>> [(e["order"], e["path"], e["kernel_sd"]) for e in info]
     [(1, 'analysis', 10.0), (1, 'feeding', 5.0), (2, 'analysis', 10.0)]
 
-    The same kernels given explicitly:
+    The same kernels given explicitly (these data have fewer than 2000
+    timepoints, so no order is computed at a lower rate either way):
 
     >>> Xe = tc.features(data, order=2, cfun=tc.autofc, weights_params={"var": 100},
     ...                  delta_weights_params={"var": 25})

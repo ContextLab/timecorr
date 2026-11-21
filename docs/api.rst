@@ -115,12 +115,15 @@ data these are the fixed kernels of earlier versions at order 1 (variances 100
 and 25, which can also be given: ``weights_params={"var": 100},
 delta_weights_params={"var": 25}``), and recordings of up to 1000 timepoints
 use kernels of at most 10 samples at every order. When no kernel parameters
-and no events are given, each order's feeding features are passed on at every
+and no events are given and ``include_timepoints`` is ``"all"``, each order's
+feeding features are passed on at every
 ``floor(sd / 2)``-th row while at least 1000 rows remain, so later orders of
 long recordings are computed at fewer timepoints, and every output is returned
 at all timepoints by linear interpolation; ``return_info=True`` gives each
 automatic kernel's ``"kernel_sd"`` (in rows of its order's input) and
-``"sampling"`` (timepoints per row). With another kernel function, or with
+``"sampling"`` (timepoints per row). Giving kernel parameters for any order or
+path, events, or a one-sided kernel makes every order be computed at every
+timepoint. With another kernel function, or with
 ``eye_weights`` on the feeding path, None means that function's own default
 parameters. A dict whose keys are all integers is read as such
 an order map, so the parameters of a custom kernel that are keyed by integers

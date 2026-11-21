@@ -92,6 +92,7 @@ from .events import (
 )
 from .summaries import (
     Communities,
+    _null_row_stride,
     WeightedStrength,
     _block_rows_for,
     _from_name,
@@ -638,6 +639,9 @@ def _run_streamed(subjects, summary, cfun, kernels, *, max_memory_gb, order, pat
         path=path,
         auto_n=auto_n,
         bandwidth=bandwidth,
+        # the shift null at every s-th timepoint, for built-in kernels and
+        # for kernel functions of the user's alike
+        null_row_stride=min(_null_row_stride(k) for k in _as_list(kernels)),
     )
     if not append_fit:
         del summary.fits_[:-1]
@@ -2410,9 +2414,9 @@ def features(
     (a fraction [n q (q - 1) + 2 r q] / [d (d - 1)] of the column pairs,
     d = q n + r) keep their dependence in that surrogate, with one
     ``UserWarning`` per fit; and the summary's ``n_null`` surrogates, whose
-    squared correlations are averaged over every ``s``-th timepoint for a
-    built-in kernel function (``s``: the kernel's standard deviation,
-    rounded down, for ``gaussian_weights``; see ``Communities``).
+    squared correlations are averaged over every ``s``-th timepoint
+    (``s``: the kernel's standard deviation, rounded down, for
+    ``gaussian_weights``; see ``Communities``).
 
     Examples
     --------

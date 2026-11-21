@@ -139,11 +139,10 @@ K > n columns, each lag is used ``K // n`` or ``ceil(K / n)`` times within a
 subject, and columns that share a lag keep their dependence in that surrogate:
 with K = q n + r, a fraction [n q (q - 1) + 2 r q] / [K (K - 1)] of the column
 pairs (1/231 at K = 22, n = 21), and one ``UserWarning`` per fit says so (giving
-the number of communities ``n`` avoids the shift null). With a built-in kernel
-function the surrogates' squared correlations are averaged over every ``s``-th
-timepoint, ``s`` being the largest step at which two rows of the kernel still
-overlap by ``exp(-1/4)`` (the standard deviation, rounded down, for
-``gaussian_weights``). When the
+the number of communities ``n`` avoids the shift null). The surrogates' squared
+correlations are averaged over every ``s``-th timepoint, ``s`` being the largest
+step at which two rows of the kernel still overlap by ``exp(-1/4)`` (the
+standard deviation, rounded down, for ``gaussian_weights``). When the
 communities found at a feeding step would emit fewer than 4 columns (at most
 half its input features; one when the shift null finds no structure), that step
 emits ``WeightedStrength(split=False, signed=False, center=False)`` of the same

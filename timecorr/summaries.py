@@ -943,15 +943,15 @@ class Communities(_Summary):
     them, as for ``uniform_weights`` and for ``eye_weights`` on the
     feeding path.  With events, whole columns
     are shifted across event boundaries while the event masks stay
-    fixed.  With a built-in kernel function, the surrogates' squared
+    fixed.  The surrogates' squared
     correlations are averaged over every ``s``-th timepoint, where ``s`` is
-    the largest step at which two rows of the kernel still overlap by
-    ``exp(-1/4)`` (the standard deviation, rounded down, for
-    ``gaussian_weights``; 1 for ``eye_weights``): correlations at closer
-    timepoints are estimated from nearly the same samples (on 96 noise
-    inputs of 4 sizes the threshold was 1.000 to 1.002 times the threshold
-    from every timepoint, standard errors .001 to .003).  With a kernel
-    function of your own every timepoint is used.  ``C`` is centered on the median over all pairs, as in
+    the largest step at which two rows of the kernel (the row of the middle
+    timepoint and its shifts) still overlap by ``exp(-1/4)`` (the standard
+    deviation, rounded down, for ``gaussian_weights``; 1 for
+    ``eye_weights``): correlations at closer timepoints are estimated from
+    nearly the same samples (on 96 noise inputs of 4 sizes the threshold
+    was 1.000 to 1.002 times the threshold from every timepoint, standard
+    errors .001 to .003).  ``C`` is centered on the median over all pairs, as in
     ``WeightedStrength(center="median")`` (``WeightedStrength`` centers on
     the lower cluster by default): with communities of 18 and 6 nodes and loadings
     0.4 and 0.2 (see ``WeightedStrength``), the
@@ -1372,28 +1372,44 @@ _NULL_ROW_OVERLAP = float(np.exp(-0.25)) * (1 - 1e-6)
 def _null_row_stride(kernel):
     """
     The step ``s`` between the timepoints at which the shift null evaluates
-    a kernel: for a ``LagKernel`` (a built-in kernel function), the largest
-    ``d >= 1`` such that the kernel's row at the middle timepoint (as
-    restricted by ``include_timepoints``, ``include_zero`` and
-    ``exclude_timepoints``; without events), shifted by every step up to
-    ``d``, keeps a normalized overlap ``sum(w[i] w[i + d]) / sum(w**2)`` of
-    at least ``_NULL_ROW_OVERLAP``, and at most ``T // 8``; 1 when no step
-    does.  A kernel given as an array need not depend on the lag only: 1.
+    a kernel: the largest ``d >= 1`` such that the kernel's row at the
+    middle timepoint, shifted by every step up to ``d``, keeps a normalized
+    overlap ``sum(w[i] w[i + d]) / sum(w**2)`` of at least
+    ``_NULL_ROW_OVERLAP``, and at most ``T // 8``; 1 when no step does.
+    The row is the kernel's as it is (restricted by ``include_timepoints``,
+    ``include_zero``, ``exclude_timepoints`` and events), so an array and
+    the equal ``LagKernel`` give the same step.
     """
-    if not isinstance(kernel, LagKernel) or kernel.empty:
-        return 1
-    plain = LagKernel(kernel.profile, kernel.include, kernel.include_zero, kernel.exclude)
-    middle = kernel.T // 2
-    c0, c1 = plain.span(middle, middle + 1)
-    row = np.nan_to_num(plain.block(middle, middle + 1, c0, c1)[0],
-                        nan=0.0, posinf=0.0, neginf=0.0)
+    if isinstance(kernel, LagKernel):
+        if kernel.empty:
+            return 1
+        middle = kernel.T // 2
+        c0, c1 = kernel.span(middle, middle + 1)
+        row = kernel.block(middle, middle + 1, c0, c1)[0]
+        T = kernel.T
+    else:
+        weights = np.asarray(kernel, dtype=np.float64)
+        if weights.ndim != 2 or weights.shape[0] == 0:
+            return 1
+        row = weights[weights.shape[0] // 2]
+        T = weights.shape[1]
+    row = np.nan_to_num(row, nan=0.0, posinf=0.0, neginf=0.0)
+    row = row[np.flatnonzero(row)[0]: np.flatnonzero(row)[-1] + 1] if row.any() else row
     norm = float(row @ row)
     stride = 1
-    for d in range(1, min(len(row), kernel.T // 8 + 1)):
+    for d in range(1, min(len(row), T // 8 + 1)):
         if norm <= 0 or float(row[d:] @ row[:-d]) / norm < _NULL_ROW_OVERLAP:
             break
         stride = d
     return stride
+
+
+def _every_nth_row(kernel, stride):
+    """Every ``stride``-th row of a kernel, starting at row ``stride // 2``:
+    an ``_EveryNthRow`` for a ``LagKernel``, the rows of an array."""
+    if isinstance(kernel, LagKernel):
+        return _EveryNthRow(kernel, stride)
+    return np.ascontiguousarray(kernel[stride // 2:: stride])
 
 
 class _EveryNthRow:
@@ -1428,7 +1444,8 @@ class _EveryNthRow:
 
 
 def _shift_null_threshold(
-    subjects, kernels, n_null=5, bandwidth=5.0, max_block_elements=None
+    subjects, kernels, n_null=5, bandwidth=5.0, max_block_elements=None,
+    row_stride=None,
 ):
     """
     Threshold of the automatic number of communities (``autofc`` steps).
@@ -1445,10 +1462,12 @@ def _shift_null_threshold(
     kernels and ``autofc`` (streamed, in blocks of at most
     ``max_block_elements`` correlations; None: the estimator's default block
     size, see ``_rows_per_block``), averaging the squared correlations over
-    every ``s``-th timepoint when every kernel is a ``LagKernel`` (``s``:
-    the smallest ``_null_row_stride`` of the kernels; rows ``s // 2, s // 2
-    + s, ...``) and over all timepoints for kernels given as arrays; and
-    records the
+    every ``s``-th timepoint (rows ``s // 2, s // 2 + s, ...``), ``s`` being
+    ``row_stride`` or, when that is None, the smallest ``_null_row_stride``
+    of the kernels if every kernel is a ``LagKernel`` and 1 (every
+    timepoint) for kernels given as arrays (``features`` and
+    ``two_path_step`` pass the smallest ``_null_row_stride`` for every kind
+    of kernel); and records the
     largest eigenvalue of ``C = Wbar - median(Wbar over i < j)`` (zero
     diagonal).  Returns the maximum over ``n_null`` repetitions.  Lags are
     drawn per repetition, subject by subject, K at a time.  NumPy's global
@@ -1492,9 +1511,12 @@ def _shift_null_threshold(
     rng = np.random.default_rng(0)
     probe = _Units(subjects, kernels, autofc)
     null_kernels = probe.kernels
-    stride = min(_null_row_stride(k) for k in null_kernels)
-    if stride > 1:
-        null_kernels = [_EveryNthRow(k, stride) for k in null_kernels]
+    if row_stride is None:
+        row_stride = min(
+            _null_row_stride(k) if isinstance(k, LagKernel) else 1 for k in null_kernels
+        )
+    if row_stride > 1:
+        null_kernels = [_every_nth_row(k, int(row_stride)) for k in null_kernels]
     T_out = null_kernels[0].shape[0]
     b = _rows_per_block(max_block_elements, T_out, K, T, probe.has_nan)
     rows = np.arange(T)[:, None]
@@ -1526,6 +1548,7 @@ def _streamed_summary(
     path=None,
     auto_n=False,
     bandwidth=5.0,
+    null_row_stride=None,
 ):
     """
     A summary of the subjects' correlations, computed in row blocks.
@@ -1565,6 +1588,8 @@ def _streamed_summary(
         in ``higher_order`` pass True for ``autofc`` only).  Default: False.
     bandwidth : float
         Kernel standard deviation for the shift null's lags.  Default: 5.0.
+    null_row_stride : int or None
+        ``row_stride`` of ``_shift_null_threshold``.  Default: None.
 
     Returns
     -------
@@ -1605,6 +1630,7 @@ def _streamed_summary(
             n_null=summary.n_null,
             bandwidth=bandwidth,
             max_block_elements=max_block_elements,
+            row_stride=null_row_stride,
         )
     summary._check_fit(K, null_threshold)
 

@@ -2,11 +2,13 @@
 The timepoints at which the shift null of the automatic number of communities
 is evaluated (``summaries._shift_null_threshold``).
 
-For a built-in kernel (a ``LagKernel``), the surrogates' squared correlations
-are averaged over every ``s``-th timepoint, where ``s`` is the largest step at
-which two rows of the kernel still overlap by ``exp(-1/4)`` (less a margin of
-1e-6 for round-off; the standard deviation, rounded down, for a Gaussian); a
-kernel given as an array is evaluated at every timepoint.
+The surrogates' squared correlations are averaged over every ``s``-th
+timepoint, where ``s`` is the largest step at which two rows of the kernel
+still overlap by ``exp(-1/4)`` (less a margin of 1e-6 for round-off; the
+standard deviation, rounded down, for a Gaussian).  ``features`` and
+``two_path_step`` do this for every kernel, built in or a function of your
+own; ``_shift_null_threshold`` called with arrays and no ``row_stride`` uses
+every timepoint.
 
 Everything is computed for real on simulated data; nothing is mocked.
 """
@@ -56,14 +58,45 @@ def test_stride_of_other_kernels():
     backward = lag_kernel(T, params={"var": 100}, include_timepoints="backward")
     assert sm._null_row_stride(backward) == overlap_stride(row)
     assert 1 < sm._null_row_stride(backward) < 10
-    # events do not change the stride
+    # events: the middle row as the events restrict it (here timepoint 200,
+    # 50 timepoints after the boundary: the full row to within round-off)
     with_events = ho._step_kernels(T, 1, tc.gaussian_weights, {"var": 100}, events=[150])
     assert sm._null_row_stride(with_events) == 10
+    at_boundary = ho._step_kernels(T, 1, tc.gaussian_weights, {"var": 100}, events=[200])
+    dense = tc.gaussian_weights(T, {"var": 100})[T // 2].copy()
+    dense[:T // 2] = 0
+    assert sm._null_row_stride(at_boundary) == overlap_stride(dense[T // 2:])
+    assert sm._null_row_stride(at_boundary) < 10
 
 
-def test_an_array_kernel_uses_every_row():
-    assert sm._null_row_stride(tc.gaussian_weights(200, {"var": 25})) == 1
+def test_stride_of_an_array_kernel_is_that_of_the_same_built_in_kernel():
+    assert sm._null_row_stride(tc.gaussian_weights(200, {"var": 25})) == 5
+    assert sm._null_row_stride(tc.gaussian_weights(200, {"var": 100})) == 10
     assert sm._null_row_stride(np.eye(50)) == 1
+    assert sm._null_row_stride(tc.laplace_weights(300, {"scale": 20})) == sm._null_row_stride(
+        lag_kernel(300, tc.laplace_weights, {"scale": 20}))
+
+
+def test_a_kernel_function_of_your_own_gives_the_threshold_of_the_built_in_one():
+    def own(T, params=None):
+        return tc.gaussian_weights(T, {"var": 25})
+
+    rng = np.random.default_rng(5)
+    data = [rng.standard_normal((300, 8)) for _ in range(2)]
+    recorded = []
+    for kernel in (dict(), dict(delta_weights_function=own)):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            (_, info) = tc.features(data, order=1, cfun=tc.autofc, return_delta=True,
+                                    return_info=True, weights_params={"var": 100},
+                                    **kernel)
+        recorded.append([e for e in info if e["path"] == "feeding"][0]["null_threshold"])
+    assert recorded[0] == pytest.approx(recorded[1], rel=1e-12)
+    # and it is the null at every 5th timepoint, also for the array
+    dense = tc.gaussian_weights(300, {"var": 25})
+    assert recorded[1] == pytest.approx(
+        sm._shift_null_threshold(data, dense, bandwidth=5.0, row_stride=5), rel=1e-12)
+    assert recorded[1] != sm._shift_null_threshold(data, dense, bandwidth=5.0)
 
 
 def reference_threshold(data, kernel, n_null, bandwidth, rows):

@@ -116,12 +116,14 @@ def test_first_code_cell_is_the_colab_install_cell(name):
     assert re.search(r"[\"']google\.colab[\"']\s+in\s+sys\.modules", first), (
         f"{name}: the first code cell does not check for Google Colab: {first!r}"
     )
-    # a pip install whose requirement is timecorr (with or without extras,
-    # a version or a git URL)
-    installs = re.findall(r"pip install[^\n|]*", first)
-    assert any(
-        re.search(r"[\s\"']timecorr(\[[^\]]*\])?\s*(>=|==|@|[\"'\s]|$)", line)
-        for line in installs
+    # a pip install (a shell command, or pip's arguments as a list) whose
+    # requirement is timecorr (with or without extras, a version or a git URL),
+    # given on the same line or in a string variable passed to it
+    installs = re.findall(r"pip install[^\n|]*|[\"']pip[\"'],\s*[\"']install[\"'][^\n]*", first)
+    requirement = r"[\s\"']timecorr(\[[^\]]*\])?\s*(>=|==|@|[\"'\s]|$)"
+    assert any(re.search(requirement, line) for line in installs) or (
+        installs
+        and re.search(r"^\s*\w+\s*=\s*" + requirement, first, re.MULTILINE)
     ), f"{name}: the first code cell does not pip install timecorr: {first!r}"
 
 

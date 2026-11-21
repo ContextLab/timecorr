@@ -1280,6 +1280,119 @@ def test_lower_cluster_degenerate_cases():
     np.testing.assert_array_equal(sm._clip_weights(w3), w3)
 
 
+def _exact_best_cuts(x):
+    """Cuts k (lower group x[:k]) of the sorted values x with the largest
+    between-group sum of squares, in exact rational arithmetic (all of them
+    when several tie); only cuts between distinct values."""
+    from fractions import Fraction
+
+    xs = [Fraction(float(v)) for v in np.sort(np.asarray(x, dtype=float))]
+    n, total = len(xs), sum(xs)
+    best, cuts, head = None, [], Fraction(0)
+    for k in range(1, n):
+        head += xs[k - 1]
+        if xs[k] == xs[k - 1]:
+            continue
+        b = Fraction(k * (n - k), n) * ((total - head) / (n - k) - head / k) ** 2
+        if best is None or b > best:
+            best, cuts = b, [k]
+        elif b == best:
+            cuts.append(k)
+    return cuts
+
+
+@pytest.mark.parametrize("base_seed", [0, 1, 2])
+def test_lower_cluster_level_is_scale_invariant(base_seed):
+    # pair weights of delta-kernel co-fluctuations are unbounded; the split
+    # must not depend on the scale (squares of 1e155 overflow, of 1e-165
+    # underflow)
+    if base_seed == 0:
+        base = np.array([1.0, 1.0, 2.0, 2.0, 5.0, 5.0])  # exact best cut 4
+        K = 4
+    else:
+        rng = np.random.default_rng(base_seed)
+        K = 12
+        base = np.sort(rng.gamma(2.0, 1.0, K * (K - 1) // 2))
+        base[-10:] += 6.0
+    (cut,) = _exact_best_cuts(base)
+    expected = base[:cut].mean()
+    for e in [-165, -150, -100, -50, -10, 0, 10, 50, 100, 150, 155]:
+        s = 10.0 ** e
+        x = base * s
+        assert sm._lower_cluster_cut(np.sort(x)) == cut, e
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # no overflow or underflow warning
+            level = sm._center_level(_sym(x, K), "lower_cluster")
+        np.testing.assert_allclose(level / s, expected, rtol=1e-12, atol=0)
+
+
+def test_lower_cluster_split_counts_are_float():
+    # k * (n - k) wraps around in 32-bit integers from K = 432 on
+    # (n = K (K - 1) / 2 = 93096); the counts are float64 whatever the
+    # integer type of n
+    for n in (np.int32(93096), np.int64(93096), 93096, np.int32(2_000_000)):
+        k, rest = sm._split_counts(n)
+        assert k.dtype == np.float64 and rest.dtype == np.float64
+        assert k[0] == 1 and rest[0] == int(n) - 1 and len(k) == int(n) - 1
+        assert np.all(k * rest > 0)
+        mid = int(n) // 2
+        assert k[mid - 1] * rest[mid - 1] == float(mid * (int(n) - mid))
+    # K = 432: two equal groups, the cut between them
+    K = 432
+    n = K * (K - 1) // 2
+    x = np.r_[np.zeros(n // 2), np.ones(n - n // 2)]
+    assert sm._lower_cluster_cut(x) == n // 2
+
+
+def test_lower_cluster_cut_without_cancellation():
+    # many weights tightly clustered on a positive offset: tail sums taken
+    # by subtracting prefix sums (c[-1] - c[k]) lose the cluster structure
+    rng = np.random.default_rng(0)
+    K = 300
+    n = K * (K - 1) // 2
+    x = np.sort(1.0 + rng.integers(0, 50, n) * 1e-14)
+    x[-n // 10:] += 3e-13
+    x = np.sort(x)
+    assert [sm._lower_cluster_cut(x)] == _exact_best_cuts(x)
+    # the outside review's example: K = 1000, all 1.0 but one 1.0 + 1e-12
+    K = 1000
+    n = K * (K - 1) // 2
+    x = np.ones(n)
+    x[-1] = 1.0 + 1e-12
+    assert sm._lower_cluster_cut(x) == n - 1
+    # random clustered data against the exact reference
+    for seed in range(5):
+        rng = np.random.default_rng(100 + seed)
+        n = int(rng.integers(200, 2000))
+        x = np.sort(10.0 + rng.normal(0, 1e-9, n) + (rng.random(n) < 0.3) * 4e-9)
+        assert [sm._lower_cluster_cut(x)] == _exact_best_cuts(x), seed
+
+
+def test_lower_cluster_ties_go_to_the_smallest_cut():
+    # cuts 2 (level 0) and 4 (level 0.25) tie exactly; the tie goes to the
+    # smallest cut, the lower level (the fewest pairs removed)
+    x = np.array([0.0, 0.0, 0.5, 0.5, 1.0, 1.0])
+    assert _exact_best_cuts(x) == [2, 4]
+    assert sm._lower_cluster_cut(x) == 2
+    assert sm._center_level(_sym(x, 4), "lower_cluster") == 0.0
+    # splits within a relative 1e-9 of the best count as tied, so a change
+    # of one unit in the last place does not move the level
+    for i in range(6):
+        for direction in (-np.inf, np.inf):
+            y = x.copy()
+            y[i] = np.nextafter(y[i], direction)
+            if y[i] < 0:
+                continue
+            y = np.sort(y)
+            assert sm._lower_cluster_cut(y) == 2, (i, direction)
+            assert sm._center_level(_sym(y, 4), "lower_cluster") <= 1e-300
+    # a clear preference (beyond 1e-9) is followed: here cut 4 wins
+    y = np.array([0.0, 0.0, 0.5, 0.5, 1.0, 1.0 + 1e-6])
+    assert _exact_best_cuts(y) == [4]
+    assert sm._lower_cluster_cut(y) == 4
+    assert sm._center_level(_sym(y, 4), "lower_cluster") == pytest.approx(0.25)
+
+
 @pytest.mark.parametrize("rule", ["lower_cluster", "median"])
 def test_center_level_needs_finite_weights(rule):
     w = _sym(np.array([0.1, 0.2, np.nan, 0.3, 0.1, 0.2]), 4)
@@ -1358,11 +1471,32 @@ def test_default_centering_keeps_the_small_community(gamma, scale, min_score):
 
 
 @pytest.mark.parametrize(
-    "center", ["mean", "lower", "Median", "lower_cluster", "true", 0.5, None, 1, 0, [True]]
+    "center",
+    ["mean", "lower", "Median", "lower_cluster", "true", 0.5, None, [True],
+     2, -1, np.int64(2), 1.0, 0.0],
 )
 def test_bad_center_raises(center):
     with pytest.raises(ValueError, match="center must be"):
         tc.WeightedStrength(center=center)
+
+
+@pytest.mark.parametrize(
+    "center, expected",
+    [(1, True), (0, False), (np.int64(1), True), (np.int8(0), False),
+     (np.uint8(1), True), (np.True_, True), (np.False_, False)],
+)
+def test_center_accepts_the_integers_0_and_1_and_numpy_bools(nested, center, expected):
+    # center=0 and center=1 worked through bool(center) before the "median"
+    # option; they mean False and True
+    _, _, A = nested
+    ws = tc.WeightedStrength(center=center)
+    assert ws.center is expected
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        got = ws(A)
+        ref = tc.WeightedStrength(center=expected)(A)
+    for a, b in zip(got, ref):
+        np.testing.assert_array_equal(a, b)
 
 
 def test_center_values_are_kept_and_shown():

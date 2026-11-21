@@ -102,15 +102,55 @@ def _mean_r(sum_r, T):
 
 
 def _check_center(center):
-    """``center`` of ``WeightedStrength``: True, False or ``"median"``."""
+    """``center`` of ``WeightedStrength``: True, False or ``"median"``
+    (the integers 1 and 0 and NumPy bools mean True and False)."""
     if isinstance(center, (bool, np.bool_)):
+        return bool(center)
+    if isinstance(center, numbers.Integral) and center in (0, 1):
         return bool(center)
     if isinstance(center, str) and center == "median":
         return center
     raise ValueError(
         f"center must be True (the lower cluster of the pair weights), "
-        f"'median' or False; got {center!r}."
+        f"'median' or False (or 1 or 0); got {center!r}."
     )
+
+
+# Splits whose between-group sum of squares is within this relative distance
+# of the largest are treated as tied (round-off of the sums is far smaller).
+_SPLIT_TIE = 1e-9
+
+
+def _split_counts(n):
+    """Float64 sizes ``k`` and ``n - k`` of the lower and upper groups of the
+    cuts ``k = 1 .. n - 1`` (float, so ``k * (n - k)`` cannot overflow)."""
+    k = np.arange(1, int(n), dtype=np.float64)
+    return k, float(n) - k
+
+
+def _lower_cluster_cut(x):
+    """
+    Cut ``k`` (lower group ``x[:k]``) of the sorted, finite, not all equal
+    values ``x`` that maximizes the between-group sum of squares
+    ``k (n - k) / n (mean(x[k:]) - mean(x[:k]))**2`` over cuts between
+    distinct values.  The values are first mapped to ``[0, 1]`` by
+    ``(x - x[0]) / (x[-1] - x[0])``, which does not change the best cut, so
+    the result does not depend on the scale of ``x`` (no overflow or
+    underflow); upper-group sums are taken from the reversed cumulative sum,
+    not by subtracting prefix sums.  Cuts within a relative ``_SPLIT_TIE`` of
+    the best are tied, and the smallest of them wins.
+    """
+    n = len(x)
+    span = x[-1] - x[0]
+    u = (x - x[0]) / span
+    u[-1] = 1.0
+    k, rest = _split_counts(n)
+    low = np.cumsum(u)[:-1] / k
+    high = np.cumsum(u[::-1])[::-1][1:] / rest
+    between = k * rest / n * (high - low) ** 2
+    between[x[1:] == x[:-1]] = -np.inf
+    top = np.max(between)
+    return int(np.flatnonzero(between >= top * (1 - _SPLIT_TIE))[0]) + 1
 
 
 def _center_level(w, rule):
@@ -120,8 +160,10 @@ def _center_level(w, rule):
     ``rule="median"``: their median.  ``rule="lower_cluster"``: the mean of
     the lower group of the exact two-group split of their sorted values that
     minimizes the total within-group sum of squares (one-dimensional
-    two-means; splits fall between distinct values).  When all values are
-    equal, that value.  The mean is kept within the lower group's range, so
+    two-means; splits fall between distinct values; see
+    ``_lower_cluster_cut`` for the scale-free search and the tie rule).
+    When all values are equal, that value.  The mean is computed on the
+    values mapped to ``[0, 1]`` and kept within the lower group's range, so
     a group of equal values gives exactly that value despite round-off.
     Raises ``ValueError`` for non-finite weights.
     """
@@ -132,16 +174,10 @@ def _center_level(w, rule):
         return float(np.median(x))
     if x[-1] == x[0]:
         return float(x[0])
-    n = len(x)
-    k = np.arange(1, n)
-    c = np.cumsum(x)
-    low = c[:-1] / k
-    high = (c[-1] - c[:-1]) / (n - k)
-    # the between-group sum of squares; its maximum is the least within-group one
-    between = k * (n - k) / n * (high - low) ** 2
-    between[x[1:] == x[:-1]] = -np.inf
-    cut = int(np.argmax(between)) + 1
-    return float(np.clip(np.mean(x[:cut]), x[0], x[cut - 1]))
+    cut = _lower_cluster_cut(x)
+    span = x[-1] - x[0]
+    level = x[0] + span * np.mean((x[:cut] - x[0]) / span)
+    return float(np.clip(level, x[0], x[cut - 1]))
 
 
 def _clip_weights(w, center=True):
@@ -682,7 +718,24 @@ class WeightedStrength(_Summary):
     total squared distance of the weights from their group's mean), and
     ``m`` is the mean of the low group.  With ``center="median"``, ``m`` is
     the median of the pair weights; with ``center=False``, or for K = 2 or 3,
-    ``a_ij = w_ij``.
+    ``a_ij = w_ij``.  ``Communities`` centers its matrix ``C`` on the median
+    of the pair weights, not on the low group's mean.
+
+    The division does not depend on the scale of the weights (they are
+    mapped to [0, 1] before the search), so very large or very small pair
+    weights, such as those of delta-kernel co-fluctuations, give the same
+    division.  Divisions whose separation (between-group sum of squares) is
+    within a relative 1e-9 of the best count as tied, and the tie goes to
+    the division with the smallest low group, the lowest ``m``, which
+    removes the fewest pairs.  ``m`` therefore jumps where the best
+    division changes: a small change of the weights can move it from one
+    group boundary to another.  Measured on 192 pair-weight matrices (the
+    unequal-community benchmark of the Notes on its development seeds 0-7,
+    and the order-2 step of the sustained and global 0.5 cases of
+    ``tests/test_nested_recovery.py`` on seeds 20000-20007): a division
+    whose ``m`` differs from the best one's by more than 1% of the weight
+    range came within a relative 1e-9 of the best separation in none of
+    them, within 1e-3 in 1 and within 1e-2 in 54.
 
     Parameters
     ----------
@@ -708,7 +761,8 @@ class WeightedStrength(_Summary):
         their low group (the "lower cluster", described above) and clipped
         at 0 (``a_ij = max(w_ij - m, 0)``).  ``"median"``: the same with
         ``m`` the median of the pair weights.  False: the weights are used
-        as they are (``a_ij = w_ij``) for any K.  Any other value raises
+        as they are (``a_ij = w_ij``) for any K.  The integers 1 and 0 and
+        NumPy bools mean True and False; any other value raises
         ``ValueError``.  Default: True.
 
     Attributes

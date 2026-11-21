@@ -410,8 +410,10 @@ unit, or ``"mean"``), and ``fits_`` records the fits
 uses the pair weights without centering. With ``center=True``, the default,
 the pair weights are centered on the mean of their lower cluster (the lower
 group of the split of the sorted weights into two groups with the least
-within-group sum of squares) and clipped at 0; with ``center="median"`` they
-are centered on their median. Both give zero
+within-group sum of squares; the split does not depend on the scale of the
+weights, and near ties within a relative 1e-9 go to the smallest lower group)
+and clipped at 0; with ``center="median"`` they are centered on their median.
+``Communities`` centers its matrix ``C`` on the median. Both give zero
 magnitude columns for K >= 4 nodes when the coupling is equal for every pair.
 When more than half the pairs lie within one community, the median is a
 weight of that community, so median centering removes most of its weights

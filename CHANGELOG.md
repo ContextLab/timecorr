@@ -735,7 +735,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lower and an upper group with the least total within-group sum of
   squares, and the lower group's mean is subtracted before clipping at 0;
   `center="median"` subtracts the median instead; `center=False` uses
-  the weights as they are; other values raise `ValueError`.
+  the weights as they are; 1 and 0 mean True and False; other values
+  raise `ValueError`. The split is searched on the weights mapped to
+  [0, 1], so it does not depend on their scale (pair weights of
+  co-fluctuations from 1e-150 to 1e150 give the same split), and splits
+  within a relative 1e-9 of the best are tied, the smallest lower group
+  winning; the level jumps where the best split changes.
   `Communities` centers its matrix `C` on the median. Median centering
   removes every weight of a smaller, more weakly coupled community when
   more than half the pairs lie within one larger community. Measured on

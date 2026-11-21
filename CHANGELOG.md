@@ -277,6 +277,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tutorials. The simulated-domains tutorial (`applications_tutorial.ipynb`)
   is removed.
 
+### Fixed
+
+- **Round-off bounds narrowed to the round-off the library produces.**
+  Fisher z averaging (`corrmean_combine`, `tstat_combine`, the
+  symmetrization of `isfc` and `wisfc`, the streamed summaries) counted
+  every value within 1e-12 of +-1 as +-1, so `tstat_combine` of 1 - 1e-13,
+  0.5 and 0.4 gave NaN (now t = 1.098, p = 0.387) and `corrmean_combine` of
+  1 - 1e-13 and -1 + 9e-13 gave 0 (now 0.49993). Values at most 128 eps
+  (2.8e-14) below +-1 now count as +-1 (values above 1 by at most 1e-12 still
+  do): on outputs of `timecorr` and of the combine functions that are +-1 in
+  exact arithmetic, 1 - |r| reached 79 eps with Accelerate and OpenBLAS.
+  One ulp below 1 still counts as 1, so +1 averaged with -1 + 1 ulp is
+  still 0. The estimator's round-off rule for constant features went from
+  64 eps to 48 eps (sd / rms of the library's constant outputs reached 38
+  eps), so `wcorr` of 0, ..., 4 on an offset of 1e14 (ratio 1.41e-14) is 1
+  again; features on an offset of more than about 9.4e13 local standard
+  deviations count as constant.
+- **Memory guards and kernels of your own.** With a correlation function
+  of your own (`cfun`), which receives T x T kernel arrays, the guards of
+  `features` and `two_path_step` and `estimate_memory_gb` (new keyword
+  `cfun`) count those arrays; before, `features(x, cfun=..., max_memory_gb=0.1)`
+  on 10,000 timepoints ran past its budget. A feeding kernel function of
+  your own counts only at the orders whose feeding path runs: at order 1
+  without `return_delta` the estimate was 2.4 GB for a run that needs 0.078
+  GB. The T x T kernels of per-subject events are charged only to the path
+  whose kernel is a function of your own.
+- `uniform_weights` and `eye_weights` build their T x T output directly
+  (their peak was twice the output, from a T x T matrix of lags).
+- `exclude_timepoints` of inf or NaN raises `ValueError` for every kernel
+  function (built-in kernels accepted it; a function of your own raised
+  `OverflowError`).
+- The chunked kernels: an event restriction of `None` keeps the events a
+  kernel already has; labels that return to an earlier value (such as 0, 1,
+  1, 0) form separate blocks, as the boundaries do; lags are int64 in every
+  profile (int32 lags overflow when squared from 46,341). The estimator's
+  block cache keys include the zeroed and rescaled rows, the blocks read
+  while choosing each chunk's columns are kept, and a block shared by two
+  keys is counted once against the cache limit.
+- `pagerank_centrality_abs` scales each column by its own largest weight
+  (dividing by the matrix's largest weight underflowed a column of 1e-20
+  next to one of 1e308, which gave 0.87 and 0.13 instead of 0.5 and 0.5) and
+  returns an empty array for zero nodes (it raised `ZeroDivisionError`).
+- The streamed `wisfc` subject weights warn about constant or sparse data
+  as the unstreamed computation does.
+
 ## [0.3.0] - 2026-11-17
 
 ### Changed

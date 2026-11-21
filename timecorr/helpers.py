@@ -801,10 +801,16 @@ _VARIANCE_PRODUCT_MIN = 1e-290
 _KERNEL_ROW_MIN = 1e-100
 _KERNEL_ROW_MAX = 1e100
 
-# Relative round-off of a column's samples (a few float64 spacings): a column
-# whose samples agree to within this fraction of their magnitude is constant
-# (see _round_off_variance).
-_ROUND_OFF = 64 * np.finfo(np.float64).eps
+# Relative round-off of a column's samples: a column whose samples agree to
+# within this fraction of their magnitude is constant (see
+# _round_off_variance).  The bound is the round-off this library's own
+# arithmetic produces, with a stated margin: on output columns that are +-1
+# in exact arithmetic (diagonals and pairs of proportional columns, from
+# timecorr with autofc, isfc and wisfc and from corrmean_combine and
+# mean_combine; T 60 to 2000, K 3 and 6, nine built-in kernels as the next
+# order's kernel), the statistic sd / rms of the rule reached 37.95 eps, the
+# same with Accelerate and OpenBLAS.  48 eps is that times 1.26.
+_ROUND_OFF = 48 * np.finfo(np.float64).eps
 
 
 def _round_off_variance(var, s, mean):
@@ -816,16 +822,19 @@ def _round_off_variance(var, s, mean):
     the weighted mean of the raw samples (overall mean included), so
     ``var + s * mean**2`` is the column's weighted mean square
     ``sum |w| x**2``.  Bound: samples ``x = c (1 + d)`` that equal ``c`` up
-    to round-off, ``|d| <= k * eps`` (one rounding gives ``k = 1/2``; a
-    computation that sums n terms gives up to about ``k = n``), have
+    to round-off, ``|d| <= k * eps``, have
     ``var <= sum |w| (c d)**2 <= (k eps)**2 * s c**2``, which is at most
     ``(k eps)**2 / (1 - k eps)**2`` times the mean square: below the bound
-    for ``k`` below 64 (``_ROUND_OFF / eps``).  The variance is compared as
-    a standard deviation with ``hypot``, so neither side overflows or
-    underflows before the comparison; the rule does not depend on the units
-    of the column.  A genuine spread is above it unless it is within
-    ``_ROUND_OFF`` (1.4e-14) of the column's magnitude: an offset of 1e11
-    standard deviations is a relative spread of 1e-11.
+    for ``k`` below 48 (``_ROUND_OFF / eps``).  The largest value of
+    ``sd / rms`` measured on the library's own outputs that are constant in
+    exact arithmetic is 37.95 eps (see ``_ROUND_OFF``).  The variance is
+    compared as a standard deviation with ``hypot``, so neither side
+    overflows or underflows before the comparison; the rule does not depend
+    on the units of the column.  A genuine spread whose ratio of standard
+    deviation to root mean square is at most ``_ROUND_OFF`` (1.07e-14)
+    counts as constant: a column on an offset of more than about 9.4e13
+    standard deviations (``1 / _ROUND_OFF``).  The samples 0, ..., 4 on an
+    offset of 1e14 (ratio 1.41e-14) keep their spread.
     """
     sd = np.sqrt(np.maximum(var, 0.0))
     return sd <= _ROUND_OFF * np.hypot(sd, np.sqrt(s) * np.abs(mean))
@@ -847,8 +856,16 @@ def _zero_variance(var, msq, s, mean):
 # (clipped to +-1), not co-fluctuations.
 _R_TOLERANCE = 1e-12
 # Correlations at least 1 - _UNIT_TOLERANCE in magnitude are +-1 up to
-# round-off in Fisher z averaging (see _correlation_z).
-_UNIT_TOLERANCE = 1e-12
+# round-off in Fisher z averaging (see _correlation_z).  A correlation
+# r = sxy / sqrt(sxx * syy) of exactly proportional columns carries the
+# relative round-off of its three kernel-weighted sums and of the division
+# and square root, a small multiple of eps that grows with the terms
+# summed; measured on the outputs of timecorr (autofc, isfc, wisfc) and of
+# corrmean_combine and mean_combine that are +-1 in exact arithmetic (T 60
+# to 2000, K 3 and 6, nine built-in kernels), 1 - |r| reached 79 eps, the
+# same with Accelerate and OpenBLAS.  128 eps (2.8e-14) is that times 1.6;
+# 1 - 1e-13 (450 eps) is a correlation and keeps its finite z.
+_UNIT_TOLERANCE = 128 * np.finfo(np.float64).eps
 
 
 def _safe_divide(num, den):
@@ -877,8 +894,9 @@ def _zscore_columns(x):
     A column is constant when its standard deviation is at most 1e-10 of its
     largest centered value, or at the round-off level of its root mean
     square (``_round_off_variance``, the estimator's rule with equal
-    weights), so a large constant offset neither zeroes a varying column nor
-    turns a constant one into signal.
+    weights): a varying column is zeroed only on an offset of more than
+    about 9.4e13 of its standard deviations, and a constant one with
+    round-off is not turned into signal.
     """
     valid = ~np.isnan(x)
     n = valid.sum(axis=0)
@@ -1535,19 +1553,25 @@ def wcorr(a, b, weights):
     - A feature is treated as constant at timepoint ``t`` when its
       kernel-weighted variance there is at most 1e-10 times its
       kernel-weighted mean square (after the feature's overall mean is
-      removed), or at most ``(64 eps)**2`` (about 2e-28; ``eps`` is the
+      removed), or at most ``(48 eps)**2`` (about 1.1e-28; ``eps`` is the
       float64 machine epsilon) times the kernel-weighted mean square of its
-      raw samples: samples ``c (1 + d)`` with ``|d|`` below ``64 eps``
-      (about 1.4e-14; for example values equal to 1 up to round-off, at any
-      scale ``c``) are constant.  A constant feature has correlation 0 with every
+      raw samples: samples ``c (1 + d)`` with ``|d|`` below ``48 eps``
+      (about 1.07e-14; for example values equal to 1 up to round-off, at any
+      scale ``c``) are constant.  48 eps covers the round-off of the
+      library's own outputs that are constant in exact arithmetic (at most
+      38 eps measured).  A constant feature has correlation 0 with every
       feature, itself included, at that timepoint, and counts in the
       zero-variance warning as an exactly constant one does.  Both rules
       are relative, so multiplying a feature by a constant does not change
       which entries are set to 0.  This is a numerical limit:
       features whose local variance is below about 1e-10 of their mean square
-      are treated as constant.  A constant offset of the whole series does
-      not matter (the overall mean is removed first; an offset of 1e9
-      standard deviations is tested), but a step much larger than the local
+      are treated as constant.  An offset of the whole series matters only
+      when it is extreme: within a kernel window, a feature whose ratio of
+      kernel-weighted standard deviation to root mean square is at most
+      ``48 eps`` (1.07e-14), that is an offset of more than about 9.4e13
+      local standard deviations, is treated as constant (an offset of 1e9
+      standard deviations is tested, and 0, ..., 4 on an offset of 1e14,
+      a ratio of 1.41e-14, keep correlation 1); a step much larger than the local
       fluctuations within a kernel window does: a unit-variance series that
       jumps by 1e6 or more halfway through is treated as constant on both
       sides of the jump.  Since the 1e-10 rule's mean square is about the
@@ -1698,7 +1722,8 @@ def _fisher_symmetrize(c):
     paper: ``z2r((r2z(C) + r2z(C.T)) / 2)``.
 
     Where one of ``C[i, j]`` and ``C[j, i]`` is +-1 (infinite z; values
-    within 1e-12 of +-1 count as +-1), the result is that sign; where they
+    within round-off of +-1 count as +-1, see ``_correlation_z``), the
+    result is that sign; where they
     are +1 and -1, it is 0.  Entries outside
     [-1, 1] (co-fluctuations from a delta kernel, which are not correlations)
     are averaged without the transform (see ``_fisher_mean``).
@@ -1723,11 +1748,12 @@ def _correlation_z(r):
 
     Values more than ``_R_TOLERANCE`` (1e-12) outside [-1, 1] are not
     correlations (for example co-fluctuations from a delta kernel): they are
-    marked in ``outside`` and their z is 0.  Values within ``_R_TOLERANCE``
-    of +-1, on either side, are +-1 up to round-off and have infinite z, as
+    marked in ``outside`` and their z is 0.  Values above 1 in magnitude by
+    at most ``_R_TOLERANCE``, and values at most ``_UNIT_TOLERANCE`` (128
+    eps, 2.8e-14) below it, are +-1 up to round-off and have infinite z, as
     exact +-1 does; so one ulp below 1 does not turn an infinite z into a
-    finite one (which, averaged with -inf, gives 1 instead of 0).  NaN stays
-    NaN.
+    finite one (which, averaged with -inf, gives 1 instead of 0).  A value
+    further below, such as 1 - 1e-13, keeps its finite z.  NaN stays NaN.
     """
     r = np.asarray(r, dtype=np.float64)
     # no more temporaries of r's size than the previous clip-and-where (the
@@ -1749,9 +1775,9 @@ def _fisher_mean(r, axis):
     Fisher z averaging applies to correlations only.  Where any value along
     ``axis`` lies outside [-1, 1] by more than 1e-12 (for example a
     co-fluctuation from a delta kernel), the values are averaged on the raw
-    scale (plain mean) instead.  Values within 1e-12 of +-1 (above or below)
-    are correlations of +-1 with round-off and have infinite z, as exact
-    +-1 does (``_correlation_z``).  Where only one sign of infinity
+    scale (plain mean) instead.  Values within round-off of +-1 (at most
+    1e-12 above, 2.8e-14 below) are correlations of +-1 and have infinite
+    z, as exact +-1 does (``_correlation_z``).  Where only one sign of infinity
     occurs along ``axis`` the result is that sign (+-1).  Where both +inf and
     -inf occur they are excluded and the finite z values are averaged (0 if
     none remain).  NaN anywhere along ``axis`` gives NaN.  No numpy warnings
@@ -1780,7 +1806,8 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     subjects' data.  When the average is not the subject's own data, the
     cross-correlation matrix ``C`` is symmetrized by averaging the Fisher
     z-transforms of ``C`` and ``C.T`` and inverting (``z2r``) before it is
-    vectorized; an entry of +-1 (within 1e-12) dominates its pair.  NaN samples carry no weight.
+    vectorized; an entry of +-1 (up to round-off, see ``_correlation_z``)
+    dominates its pair.  NaN samples carry no weight.
 
     Parameters
     ----------
@@ -2222,8 +2249,9 @@ def corrmean_combine(corrs):
     Compute the mean element-wise correlation across each matrix in a list.
 
     Correlations are averaged in Fisher z space (``z2r(mean(r2z(r)))``).  An
-    entry of +-1 has infinite z (values within 1e-12 of +-1 count as +-1, so
-    round-off does not make the z finite): where only one sign occurs across
+    entry of +-1 has infinite z (values within round-off of +-1, at most
+    1e-12 above or 2.8e-14 below, count as +-1, so round-off does not make
+    the z finite; 1 - 1e-13 keeps its finite z): where only one sign occurs across
     matrices the mean is that sign; where both +1 and -1 occur they are
     excluded and the remaining values are averaged (0 if none remain).
     Fisher z applies to correlations only: an entry where any matrix has a
@@ -2300,8 +2328,8 @@ def tstat_combine(corrs, return_pvals=False):
     with ``scipy.stats.ttest_1samp``.  Fisher z applies to correlations only:
     an entry where any matrix has a value outside [-1, 1] (for example the
     co-fluctuations of a delta kernel, ``eye_weights``) is tested on the raw
-    values, with no NaN and no warning; values within 1e-12 of +-1 (above or
-    below) are correlations of +-1 with round-off (infinite z).  An entry with the same
+    values, with no NaN and no warning; values within round-off of +-1 (at
+    most 1e-12 above, 2.8e-14 below) are correlations of +-1 (infinite z).  An entry with the same
     value in every matrix (zero variance across subjects, for example the
     diagonal of ``autofc`` results, where every value is 1) has t = +inf or
     -inf with the sign of that value (p = 0), or t = 0 (p = 1) when the value

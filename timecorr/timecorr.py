@@ -366,6 +366,14 @@ def timecorr(
 
     Notes
     -----
+    A feature is treated as constant within a kernel row (correlation 0, see
+    ``wcorr``) when its kernel-weighted variance is at most 1e-10 of its
+    centered mean square, or when its ratio of kernel-weighted standard
+    deviation to root mean square is at most 48 eps (1.07e-14, the
+    round-off this library's own arithmetic produces with a margin): a
+    feature on an offset of more than about 9.4e13 of its local standard
+    deviations counts as constant.
+
     With ``events``, the kernel gives no weight to timepoints outside the
     current block.  This is not statistical independence from the rest of the
     recording: the subject weights of ``wisfc`` and the reductions (``rfun``)

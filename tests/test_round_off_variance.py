@@ -212,14 +212,19 @@ def test_segment_round_off_constant_column():
     assert np.array_equal(np.asarray(a), np.asarray(b))
 
 
-# --- Fisher averaging: a correlation within 1e-12 of +-1 is +-1 -------------
+# --- Fisher averaging: a correlation within round-off of +-1 is +-1 ---------
 
 ONE_ULP_BELOW = np.nextafter(1.0, 0.0)  # 1 - 1.1e-16
+# 100 eps below 1: above the largest round-off measured on the estimator's
+# +-1 outputs (79 eps), within the bound (128 eps).  These tests used
+# 1 - 1e-13 (450 eps) until the bound was narrowed from 1e-12; 1 - 1e-13 is
+# now a correlation (see test_tstat_combine_keeps_a_correlation_1e13_below_one)
+NEAR_ONE = 1 - 100 * np.finfo(np.float64).eps
 
 
-@pytest.mark.parametrize("near", [ONE_ULP_BELOW, 1 - 1e-13, 1 + 1e-13])
+@pytest.mark.parametrize("near", [ONE_ULP_BELOW, NEAR_ONE, 1 + 1e-13])
 def test_fisher_symmetrize_treats_near_unit_correlations_as_unit(near):
-    # {+1, -1} averages to 0; one ulp (or 1e-13) away from -1 must not turn
+    # {+1, -1} averages to 0; one ulp (or 100 eps) away from -1 must not turn
     # that into +1 (z of 1 is infinite, z of 1 - 1e-16 is finite)
     from timecorr.helpers import _fisher_symmetrize
 
@@ -233,7 +238,7 @@ def test_fisher_symmetrize_treats_near_unit_correlations_as_unit(near):
     assert out[0, 1, 0] == 0
 
 
-@pytest.mark.parametrize("near", [ONE_ULP_BELOW, 1 - 1e-13])
+@pytest.mark.parametrize("near", [ONE_ULP_BELOW, NEAR_ONE])
 def test_corrmean_combine_treats_near_unit_correlations_as_unit(near):
     a = [np.array([[1.0, near]]), np.array([[-near, 0.5]])]
     b = [np.array([[1.0, 1.0]]), np.array([[-1.0, 0.5]])]
@@ -241,7 +246,7 @@ def test_corrmean_combine_treats_near_unit_correlations_as_unit(near):
     assert tc.corrmean_combine(a)[0, 1] == 1.0
 
 
-@pytest.mark.parametrize("near", [ONE_ULP_BELOW, 1 - 1e-13])
+@pytest.mark.parametrize("near", [ONE_ULP_BELOW, NEAR_ONE])
 def test_tstat_combine_treats_near_unit_correlations_as_unit(near):
     a = [np.array([[1.0]]), np.array([[near]]), np.array([[1.0]])]
     b = [np.array([[1.0]]), np.array([[1.0]]), np.array([[1.0]])]
@@ -256,3 +261,62 @@ def test_correlations_clearly_below_one_keep_their_z():
     out = tc.corrmean_combine([np.array([[1 - 1e-9]]), np.array([[0.0]])])
     z = np.arctanh(1 - 1e-9) / 2
     assert np.isclose(out[0, 0], np.tanh(z), rtol=1e-12, atol=0)
+
+
+# --- the bounds cover round-off only (outside review, round 1) --------------
+
+
+def test_tstat_combine_keeps_a_correlation_1e13_below_one():
+    # 1 - 1e-13 is about 450 units of round-off below 1: a correlation, not
+    # +-1 with round-off, so it keeps its finite z
+    r = [np.array([[v]]) for v in (1 - 1e-13, 0.5, 0.4)]
+    t, p = tc.tstat_combine(r, return_pvals=True)
+    z = np.arctanh([1 - 1e-13, 0.5, 0.4])
+    expect = z.mean() / (z.std(ddof=1) / np.sqrt(3))
+    assert np.isclose(t[0, 0], expect, rtol=1e-9) and np.isclose(t[0, 0], 1.098403,
+                                                                rtol=1e-6)
+    assert np.isclose(p[0, 0], 0.386596, rtol=1e-5)
+
+
+@pytest.mark.parametrize("values, expect", [
+    ((1 - 1e-13, -1 + 9e-13), 0.4999306166),
+    ((1 - 5e-13, -0.99), 0.999986),
+    ((1 - 5e-13, -(1 - 5e-13), 0.5), 0.181),
+])
+def test_corrmean_combine_averages_correlations_near_one_by_their_z(values, expect):
+    out = tc.corrmean_combine([np.array([[v]]) for v in values])
+    ref = np.tanh(np.mean(np.arctanh(values)))
+    assert np.isclose(out[0, 0], ref, rtol=1e-9, atol=1e-12)
+    assert np.isclose(out[0, 0], expect, rtol=1e-3 if expect == 0.181 else 1e-6)
+
+
+def test_the_unit_tolerance_covers_the_estimators_round_off():
+    # the largest measured 1 - |r| of correlations that are exactly +-1 (see
+    # helpers._UNIT_TOLERANCE) is within the bound, and the one-ulp flip of
+    # {+1, -1 + 1 ulp} to +1 is still removed
+    from timecorr import helpers as H
+    eps = np.finfo(np.float64).eps
+    assert H._UNIT_TOLERANCE >= 79 * eps
+    assert H._UNIT_TOLERANCE < 1e-13
+    near = 1 - H._UNIT_TOLERANCE
+    out = tc.corrmean_combine([np.array([[1.0]]), np.array([[-near]])])
+    assert out[0, 0] == 0.0
+    out = tc.corrmean_combine([np.array([[1.0]]), np.array([[-ONE_ULP_BELOW]])])
+    assert out[0, 0] == 0.0
+
+
+def test_a_large_offset_keeps_its_spread():
+    # samples 0..4 on an offset of 1e14: the relative spread sd / rms is
+    # 1.41e-14 (63.7 eps), which is a genuine spread above the round-off bound
+    x = np.arange(5.0)[:, None] + 1e14
+    w = np.ones((1, 5))
+    assert wcorr(x, x, w)[0, 0, 0] == 1.0
+
+
+def test_round_off_bound_covers_the_measured_round_off():
+    # the zero-variance statistic of output columns that are mathematically
+    # constant reached 38 eps (see helpers._ROUND_OFF); the bound is above it
+    # and below the 1e14-offset example (63.7 eps)
+    from timecorr import helpers as H
+    eps = np.finfo(np.float64).eps
+    assert 38 * eps < H._ROUND_OFF < 63 * eps

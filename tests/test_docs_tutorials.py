@@ -18,6 +18,7 @@ docs/tutorials.rst (nothing is mocked) and check that:
   or called (comments and string literals do not count).
 """
 
+import ast
 import io
 import json
 import os
@@ -116,15 +117,131 @@ def test_first_code_cell_is_the_colab_install_cell(name):
     assert re.search(r"[\"']google\.colab[\"']\s+in\s+sys\.modules", first), (
         f"{name}: the first code cell does not check for Google Colab: {first!r}"
     )
-    # a pip install (a shell command, or pip's arguments as a list) whose
-    # requirement is timecorr (with or without extras, a version or a git URL),
-    # given on the same line or in a string variable passed to it
-    installs = re.findall(r"pip install[^\n|]*|[\"']pip[\"'],\s*[\"']install[\"'][^\n]*", first)
-    requirement = r"[\s\"']timecorr(\[[^\]]*\])?\s*(>=|==|@|[\"'\s]|$)"
-    assert any(re.search(requirement, line) for line in installs) or (
-        installs
-        and re.search(r"^\s*\w+\s*=\s*" + requirement, first, re.MULTILINE)
-    ), f"{name}: the first code cell does not pip install timecorr: {first!r}"
+    assert _installs_timecorr(first), (
+        f"{name}: the first code cell does not pip install timecorr: {first!r}"
+    )
+
+
+# a requirement naming timecorr: with or without extras, a version or a URL
+_TIMECORR_REQUIREMENT = re.compile(r"timecorr(\[[^\]]*\])?\s*(>=|==|~=|<|@|;|$)")
+
+
+def _static_text(node, env):
+    """The text a string expression evaluates to, from literals, f-strings,
+    + and names assigned a string in the cell (None when not static; an
+    f-string field that is not static becomes "\x00")."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Name):
+        return env.get(node.id)
+    if isinstance(node, ast.JoinedStr):
+        parts = []
+        for v in node.values:
+            text = _static_text(v.value if isinstance(v, ast.FormattedValue) else v, env)
+            parts.append("\x00" if text is None else text)
+        return "".join(parts)
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
+        left, right = _static_text(node.left, env), _static_text(node.right, env)
+        return None if left is None or right is None else left + right
+    return None
+
+
+def _pip_requirements(call):
+    """The argument nodes that a call passes to ``pip install`` as
+    requirements: the elements after "pip", "install" of a list argument
+    (options, starting with "-", left out), or the words after "pip install"
+    of a string argument (a shell command)."""
+    out = []
+    for arg in call.args:
+        if isinstance(arg, (ast.List, ast.Tuple)):
+            texts = [_static_text(e, {}) for e in arg.elts]
+            for i in range(len(texts) - 1):
+                if texts[i] == "pip" and texts[i + 1] == "install":
+                    out += [e for e, t in zip(arg.elts[i + 2:], texts[i + 2:])
+                            if not (t or "").startswith("-") and not isinstance(e, ast.Starred)]
+        elif isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+            m = re.search(r"pip install((?:\s+\S+)+)", arg.value)
+            if m:
+                out += [ast.Constant(w) for w in m.group(1).split() if not w.startswith("-")]
+    return out
+
+
+def _installs_timecorr(source):
+    """
+    True when the cell passes a requirement naming timecorr to pip: in an
+    IPython shell line (``!pip install ...``, ``%pip install ...``), in a
+    call whose arguments include pip's ("pip", "install", requirement) or a
+    "pip install requirement" command, directly or through a string
+    variable, or through a parameter of a function of the cell that does
+    so, called with such a requirement.  A string naming timecorr that is
+    not what pip is asked to install does not count.
+    """
+    shell = [line for line in source.splitlines() if line.lstrip().startswith(("!", "%"))]
+    for line in shell:
+        m = re.search(r"pip install((?:\s+\S+)+)", line)
+        if m and any(_TIMECORR_REQUIREMENT.match(w.strip("\"'"))
+                     for w in m.group(1).split() if not w.startswith("-")):
+            return True
+    tree = ast.parse("\n".join("" if line in shell else line for line in source.splitlines()))
+    env = {}
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)):
+            text = _static_text(node.value, env)
+            if text is not None:
+                env[node.targets[0].id] = text
+    requirements = []
+    # functions that pass one of their parameters to pip, by position
+    passes = {}
+    for f in ast.walk(tree):
+        if not isinstance(f, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        params = [a.arg for a in f.args.args]
+        for call in ast.walk(f):
+            if isinstance(call, ast.Call):
+                for r in _pip_requirements(call):
+                    if isinstance(r, ast.Name) and r.id in params:
+                        passes.setdefault(f.name, set()).add(params.index(r.id))
+    for call in ast.walk(tree):
+        if not isinstance(call, ast.Call):
+            continue
+        requirements += _pip_requirements(call)
+        if isinstance(call.func, ast.Name) and call.func.id in passes:
+            requirements += [call.args[i] for i in passes[call.func.id] if i < len(call.args)]
+    texts = [_static_text(r, env) for r in requirements]
+    return any(t is not None and _TIMECORR_REQUIREMENT.match(t.strip()) for t in texts)
+
+
+def test_the_install_checker_needs_timecorr_to_be_what_pip_installs():
+    # the checker itself: a string naming timecorr that pip is not asked to
+    # install does not count
+    unused = (
+        'import subprocess, sys\n'
+        'if "google.colab" in sys.modules:\n'
+        '    PACKAGE = "timecorr"\n'
+        '    subprocess.run([sys.executable, "-m", "pip", "install", "-q", "numpy"])\n'
+    )
+    assert not _installs_timecorr(unused)
+    assert not _installs_timecorr('X = "timecorr"\n!pip install numpy\n')
+    assert not _installs_timecorr('subprocess.run(["pip", "install", "timecorrx"])\n')
+    # what counts: a list, a variable, an f-string through a function, a
+    # shell line, extras, a version and a URL
+    assert _installs_timecorr('subprocess.run(["pip", "install", "timecorr"])\n')
+    assert _installs_timecorr('P = "timecorr[segment]"\n'
+                              'subprocess.run([sys.executable, "-m", "pip", "install", "-q", P])\n')
+    assert _installs_timecorr(
+        'PACKAGE = "timecorr"\n'
+        'def pip_install(requirement):\n'
+        '    return subprocess.run([sys.executable, "-m", "pip", "install", requirement])\n'
+        'pip_install(f"{PACKAGE}>=0.3.0")\n')
+    assert _installs_timecorr("!pip install -q timecorr>=0.3\n")
+    assert _installs_timecorr('os.system("pip install timecorr @ git+https://x")\n')
+    # a function that installs its parameter, called with something else
+    assert not _installs_timecorr(
+        'PACKAGE = "timecorr"\n'
+        'def pip_install(requirement):\n'
+        '    return subprocess.run(["pip", "install", requirement])\n'
+        'pip_install("numpy")\n')
 
 
 @pytest.mark.parametrize("name", _notebook_names())

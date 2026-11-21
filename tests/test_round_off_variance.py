@@ -345,6 +345,12 @@ def test_the_unit_tolerance_covers_the_estimators_round_off(monkeypatch):
     monkeypatch.undo()
     assert unit > 10  # the measurement sees round-off
     assert bound >= unit * eps
+    # and the recorded maximum of the full measurement: 79 eps (outputs of
+    # timecorr with autofc, isfc and wisfc and of corrmean_combine and
+    # mean_combine that are +-1 in exact arithmetic; T 60 to 2000, K 3 and
+    # 6, nine built-in kernels; Accelerate and OpenBLAS alike; see the
+    # comment above helpers._UNIT_TOLERANCE)
+    assert bound >= 79 * eps
     assert bound < 1e-13
     near = 1 - H._UNIT_TOLERANCE
     out = tc.corrmean_combine([np.array([[1.0]]), np.array([[-near]])])
@@ -373,3 +379,8 @@ def test_round_off_bound_covers_the_measured_round_off(monkeypatch):
     monkeypatch.undo()
     assert rule > 5  # the measurement sees round-off
     assert rule * eps < bound < 63 * eps
+    # and the recorded maximum of the full measurement: 37.95 eps (the same
+    # outputs, T 60 to 2000, K 3 and 6, nine built-in kernels as the next
+    # order's kernel; Accelerate and OpenBLAS alike; see the comment above
+    # helpers._ROUND_OFF)
+    assert bound > 37.95 * eps

@@ -290,14 +290,62 @@ def test_corrmean_combine_averages_correlations_near_one_by_their_z(values, expe
     assert np.isclose(out[0, 0], expect, rtol=1e-3 if expect == 0.181 else 1e-6)
 
 
-def test_the_unit_tolerance_covers_the_estimators_round_off():
-    # the largest measured 1 - |r| of correlations that are exactly +-1 (see
-    # helpers._UNIT_TOLERANCE) is within the bound, and the one-ulp flip of
+def _measured_round_off(monkeypatch):
+    """
+    A small version of the measurement behind the two bounds (see
+    helpers._ROUND_OFF and helpers._UNIT_TOLERANCE), regenerated here: with
+    both rules off, on timecorr outputs that are +-1 in exact arithmetic
+    (diagonals, and pairs of proportional columns: column 0 times 4 and
+    column 1 times -0.5, in subjects that are 1, 4 and 2 times one base),
+    the largest 1 - |r| and the largest zero-variance statistic sd / rms of
+    those columns under each kernel as the next order's kernel, in eps.
+    """
+    from timecorr import helpers as H
+
+    monkeypatch.setattr(H, "_UNIT_TOLERANCE", 0.0)
+    monkeypatch.setattr(H, "_ROUND_OFF", 0.0)
+    eps = np.finfo(np.float64).eps
+    kernels = [(tc.gaussian_weights, {"var": 10}), (tc.laplace_weights, {"scale": 20}),
+               (tc.t_weights, None), (tc.boxcar_weights, {"width": 9})]
+    unit = rule = 0.0
+    for T, K in ((60, 6), (200, 3)):
+        base = np.random.default_rng(0).standard_normal((T, K))
+        dup = np.column_stack([base, base[:, :1] * 4, -base[:, 1:2] * 0.5])
+        iu = np.triu_indices(K + 2)
+        cols = [n for n, (i, j) in enumerate(zip(*iu))
+                if i == j or (i, j) in {(0, K), (1, K + 1)}]
+        for wf, wp in kernels:
+            for cfun in (tc.autofc, tc.isfc):
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    out = tc.timecorr([dup * c for c in (1.0, 4.0, 2.0)],
+                                      weights_function=wf, weights_params=wp,
+                                      cfun=cfun, combine=tc.null_combine)
+                for o in out:
+                    x = o[:, cols]
+                    x = x[:, np.isfinite(x).all(axis=0) & (np.abs(x) > 0.5).all(axis=0)]
+                    unit = max(unit, (1 - np.abs(x)).max() / eps)
+                    for nf, npar in kernels:
+                        w = np.abs(nf(T, npar))
+                        m = (w @ x) / w.sum(axis=1, keepdims=True)
+                        var = np.stack([(w * (x[:, j][None, :] - m[:, j][:, None]) ** 2)
+                                        .sum(axis=1) for j in range(x.shape[1])], axis=1)
+                        rule = max(rule, np.sqrt(var / (w @ (x * x))).max() / eps)
+    return unit, rule
+
+
+def test_the_unit_tolerance_covers_the_estimators_round_off(monkeypatch):
+    # the bound covers 1 - |r| of correlations that are exactly +-1, measured
+    # again here (79 eps in the full measurement), and the one-ulp flip of
     # {+1, -1 + 1 ulp} to +1 is still removed
     from timecorr import helpers as H
+    bound = H._UNIT_TOLERANCE
     eps = np.finfo(np.float64).eps
-    assert H._UNIT_TOLERANCE >= 79 * eps
-    assert H._UNIT_TOLERANCE < 1e-13
+    unit, _ = _measured_round_off(monkeypatch)
+    monkeypatch.undo()
+    assert unit > 10  # the measurement sees round-off
+    assert bound >= unit * eps
+    assert bound < 1e-13
     near = 1 - H._UNIT_TOLERANCE
     out = tc.corrmean_combine([np.array([[1.0]]), np.array([[-near]])])
     assert out[0, 0] == 0.0
@@ -313,10 +361,15 @@ def test_a_large_offset_keeps_its_spread():
     assert wcorr(x, x, w)[0, 0, 0] == 1.0
 
 
-def test_round_off_bound_covers_the_measured_round_off():
-    # the zero-variance statistic of output columns that are mathematically
-    # constant reached 38 eps (see helpers._ROUND_OFF); the bound is above it
-    # and below the 1e14-offset example (63.7 eps)
+def test_round_off_bound_covers_the_measured_round_off(monkeypatch):
+    # the zero-variance statistic of output columns that are constant in
+    # exact arithmetic, measured again here (37.95 eps in the full
+    # measurement): the bound is above it and below the 1e14-offset example
+    # (63.7 eps)
     from timecorr import helpers as H
+    bound = H._ROUND_OFF
     eps = np.finfo(np.float64).eps
-    assert 38 * eps < H._ROUND_OFF < 63 * eps
+    _, rule = _measured_round_off(monkeypatch)
+    monkeypatch.undo()
+    assert rule > 5  # the measurement sees round-off
+    assert rule * eps < bound < 63 * eps

@@ -22,8 +22,8 @@ Defaults: ``rfun="auto"`` (``"PCA"`` at order 1,
 counted with a shift null) and Gaussian kernels on both paths whose widths
 are set from each step's input (``weights_params=None``,
 ``delta_weights_params=None``: the feeding kernel's standard deviation is 5
-autocorrelation widths of the input, at least 5 rows and at most a
-hundredth of its rows, and the analysis kernel's is that or 10 rows,
+autocorrelation widths of the input, at most a hundredth of its rows
+but at least 5 rows (which wins below 500 rows), and the analysis kernel's is that or 10 rows,
 whichever is larger; see the Notes of ``features``), so the feeding
 features are kernel-weighted correlations summarized by community.  When no
 kernel parameters and no events are given, ``features`` passes the feeding
@@ -70,6 +70,7 @@ from .helpers import (
     _lag_kernel,
     _wcorr_block_rows,
     _warn_user,
+    _zscore_columns,
     autofc,
     corrmean_combine,
     eye_weights,
@@ -92,7 +93,6 @@ from .events import (
 )
 from .summaries import (
     Communities,
-    _null_row_stride,
     WeightedStrength,
     _block_rows_for,
     _from_name,
@@ -139,10 +139,12 @@ def _dense_analysis(weights_function, cfun=isfc):
     """
     True when an analysis step holds T x T kernel arrays: for a kernel
     function of your own, and for a correlation function of your own, which
-    ``timecorr`` passes T x T arrays (only ``autofc``, ``isfc`` and
-    ``wisfc`` read a built-in kernel in chunks of rows).
+    ``timecorr`` passes T x T arrays (only ``autofc``, ``isfc``, ``wisfc``
+    and the smoothing of ``cfun=None`` read a built-in kernel in chunks of
+    rows).
     """
-    builtin_cfun = any(cfun is f for f in _STREAMED_CFUNS)
+    # cfun=None smooths the data with the kernel, also in chunks of rows
+    builtin_cfun = cfun is None or any(cfun is f for f in _STREAMED_CFUNS)
     return not (_builtin_kernel(weights_function) and builtin_cfun)
 
 
@@ -269,8 +271,9 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
         Number of subjects.  Default: 1.
     return_delta : bool, optional
         Whether the delta path of the last order is computed too (as
-        ``features(..., return_delta=True)`` does).  Not used with
-        ``streamed=True``.  Default: False.
+        ``features(..., return_delta=True)`` does).  With
+        ``streamed=True`` it only decides whether a feeding kernel function
+        of your own counts at the last order.  Default: False.
     streamed : bool, optional
         If True, estimate streamed steps (see above).  Default: False.
     delta_weights_function : function or None, optional
@@ -322,26 +325,32 @@ def estimate_memory_gb(K, order, T, n_subjects=1, return_delta=False, streamed=F
 
 
 def _estimates(K, order, T, n_subjects, return_delta, streamed, kernel_feeding,
-               dense, combine=None, dense_feeding=None):
+               dense, combine=None, dense_feeding=None, later_T=None):
     """``estimate_memory_gb`` with the kernels given by ``kernel_feeding`` and
     ``dense`` (see ``_step_gb``): ``dense`` for the analysis path,
     ``dense_feeding`` (None: the same as ``dense``) for the feeding path,
-    which counts only at the orders where it runs."""
+    which counts only at the orders where it runs (every order but the last,
+    and the last with ``return_delta``, streamed or not).  ``later_T``: the
+    rows of orders 2 and above (None: T)."""
     K = int(K)
     T = int(T)
     if dense_feeding is None:
         dense_feeding = dense
-    if streamed:
-        step = 8 * _streamed_peak_elements(
-            T, K, n_subjects, 1, dense or dense_feeding) / _BYTES_PER_GB
-        return [0.0] + [step] * int(order)
     estimates = [0.0]
     d = K
     for k in range(1, int(order) + 1):
+        rows = T if k == 1 or later_T is None else int(later_T)
         both_paths = k < order or return_delta
+        dense_k = dense or (both_paths and dense_feeding)
+        if streamed:
+            estimates.append(
+                8 * _streamed_peak_elements(rows, K, n_subjects, 1, dense_k)
+                / _BYTES_PER_GB
+            )
+            continue
         estimates.append(
-            _step_gb(d, T, n_subjects, 2 if both_paths else 1, kernel_feeding,
-                     dense or (both_paths and dense_feeding), combine)
+            _step_gb(d, rows, n_subjects, 2 if both_paths else 1, kernel_feeding,
+                     dense_k, combine)
         )
         d = d * (d + 1) // 2
     return estimates
@@ -349,12 +358,12 @@ def _estimates(K, order, T, n_subjects, return_delta, streamed, kernel_feeding,
 
 def _largest_k(order, T, max_memory_gb, n_subjects=1, return_delta=False,
                streamed=False, kernel_feeding=False, dense=False, combine=None,
-               dense_feeding=None):
+               dense_feeding=None, later_T=None):
     """Largest K whose estimates up to ``order`` all fit (0 if none)."""
 
     def fits(k):
         est = _estimates(k, order, T, n_subjects, return_delta, streamed,
-                         kernel_feeding, dense, combine, dense_feeding)
+                         kernel_feeding, dense, combine, dense_feeding, later_T)
         return max(est) <= max_memory_gb
 
     if not fits(1):
@@ -663,9 +672,9 @@ def _run_streamed(subjects, summary, cfun, kernels, *, max_memory_gb, order, pat
         path=path,
         auto_n=auto_n,
         bandwidth=bandwidth,
-        # the shift null at every s-th timepoint, for built-in kernels and
-        # for kernel functions of the user's alike
-        null_row_stride=min(_null_row_stride(k) for k in _as_list(kernels)),
+        # the shift null (when it runs) chooses its timepoints: every s-th
+        # for a stationary built-in kernel, every timepoint otherwise
+        null_row_stride=None,
     )
     if not append_fit:
         del summary.fits_[:-1]
@@ -1370,8 +1379,12 @@ def _autocorrelation_width(subjects):
     autocorrelation, averaged over every column of every subject, first
     falls below ``exp(-1/2)``, linearly interpolated between lags and at
     least 1 (white noise gives 1; a Gaussian autocorrelation with standard
-    deviation w gives w).  Constant columns are left out and NaN samples
-    count as the column's mean.  Lags beyond the largest automatic kernel
+    deviation w gives w).  Constant columns (the estimator's rule,
+    ``helpers._zscore_columns``: constant up to round-off, whatever their
+    value) are left out and NaN samples count as the column's mean.  Each
+    column is divided by its largest absolute value first, so the result
+    does not depend on the units of the data (no square overflows or
+    underflows).  Lags beyond the largest automatic kernel
     are not examined: the result is at most ``T * _AUTO_MAX_FRACTION /
     _AUTO_WIDTHS + 1``.
     """
@@ -1380,11 +1393,14 @@ def _autocorrelation_width(subjects):
     columns = []
     for x in subjects:
         x = np.asarray(x, dtype=float)
-        valid = ~np.isnan(x)
-        mean = np.where(valid, x, 0).sum(axis=0) / np.maximum(valid.sum(axis=0), 1)
-        x = np.where(valid, x - mean, 0)
-        scale = np.sqrt((x * x).sum(axis=0))
-        columns.append(x[:, scale > 0] / scale[scale > 0])
+        with np.errstate(invalid="ignore"):
+            top = np.nanmax(np.abs(x), axis=0) if x.shape[0] else np.zeros(x.shape[1])
+        top = np.where(np.isfinite(top) & (top > 0), top, 1.0)
+        # z-scores: NaN samples and constant columns give 0
+        z = _zscore_columns(x / top)
+        scale = np.sqrt((z * z).sum(axis=0))
+        keep = scale > 0
+        columns.append(z[:, keep] / scale[keep])
     n = sum(c.shape[1] for c in columns)
     last = int(T * _AUTO_MAX_FRACTION / _AUTO_WIDTHS) + 1
     if n == 0:
@@ -1448,19 +1464,34 @@ def _at_every_timepoint(out, rows, T):
     """
     An output computed at the timepoints ``rows`` (increasing indices),
     linearly interpolated to all ``T`` timepoints; after the last of
-    ``rows`` its value is held.  ``out``: an array or a list of arrays.
+    ``rows`` its value is held (before the first, the first).  A computed
+    row keeps its value exactly, and a timepoint strictly between two
+    computed rows is NaN only where one of them is NaN (a NaN row never
+    reaches a timepoint where it has no weight).  ``out``: an array or a
+    list of arrays.
     """
     if isinstance(out, list):
         return [_at_every_timepoint(o, rows, T) for o in out]
     out = np.asarray(out)
+    rows = np.asarray(rows)
     if len(rows) == T:
         return out
     if len(rows) == 1:
         return np.repeat(out, T, axis=0)
     t = np.arange(T)
-    i = np.clip(np.searchsorted(rows, t, side="right") - 1, 0, len(rows) - 2)
-    w = np.clip((t - rows[i]) / (rows[i + 1] - rows[i]), 0.0, 1.0)[:, None]
-    return out[i] * (1 - w) + out[i + 1] * w
+    result = np.empty((T,) + out.shape[1:], dtype=np.result_type(out, np.float64))
+    # held ends
+    result[t <= rows[0]] = out[0]
+    result[t >= rows[-1]] = out[-1]
+    # strictly between two computed rows: both have non-zero weight
+    inside = (t > rows[0]) & (t < rows[-1])
+    ti = t[inside]
+    i = np.searchsorted(rows, ti, side="right") - 1
+    w = ((ti - rows[i]) / (rows[i + 1] - rows[i])).reshape((-1,) + (1,) * (out.ndim - 1))
+    result[inside] = out[i] * (1 - w) + out[i + 1] * w
+    # the computed rows themselves, exactly
+    result[rows] = out
+    return result
 
 
 def two_path_step(
@@ -2006,8 +2037,8 @@ def features(
 
     With the defaults, the kernels of each order are Gaussians whose width
     is set from that order's input: the feeding kernel's standard deviation
-    is 5 autocorrelation widths of the input (at least 5 rows, at most a
-    hundredth of its rows) and the analysis kernel's is that or 10 rows,
+    is 5 autocorrelation widths of the input (at most a hundredth of its
+    rows, but at least 5 rows, which wins below 500 rows) and the analysis kernel's is that or 10 rows,
     whichever is larger (see "Automatic kernels" in the Notes).  Each
     ``D_k`` holds one column per community of that order's input features
     (``Communities()``: the mean squared correlation within the community,
@@ -2425,7 +2456,8 @@ def features(
     and ``"sampling"`` (timepoints of the data per row of that order's
     input); an entry without ``"sampling"`` was computed at every
     timepoint.  With kernel parameters given on either path at any order
-    (also the values the default would choose), with events, or with a
+    (also the values the default would choose: ``"kernel_sd"`` times
+    ``"sampling"``, in timepoints of the data), with events, or with a
     one-sided kernel (interpolating between computed rows would read rows
     on the side the kernel excludes), every order is computed at every
     timepoint.  That takes longer and changes orders 2 and above slightly:
@@ -2594,28 +2626,6 @@ def features(
     else:
         resolved = resolve_events_by_order(events, T, S, order, events_params)
 
-    if delta_unreduced and max_memory_gb is not None:
-        # widths are known in advance: refuse before computing anything
-        estimates = estimate_memory_gb(
-            K, order, T, S, return_delta, delta_weights_function=feeding_function,
-            weights_function=weights_function, combine=combine, cfun=cfun,
-        )
-        for k in range(1, order + 1):
-            if estimates[k] > max_memory_gb:
-                fit = _largest_k(
-                    order, T, max_memory_gb, S, return_delta,
-                    kernel_feeding=feeding_function is not eye_weights,
-                    dense=_dense_analysis(weights_function, cfun),
-                    combine=combine,
-                    dense_feeding=not _builtin_kernel(feeding_function),
-                )
-                raise MemoryError(
-                    f"Unreduced features at order {k} need about {estimates[k]:.3g} GB "
-                    f"(K={K}, T={T}, {S} subject{'s' if S > 1 else ''}), more than "
-                    f"max_memory_gb={max_memory_gb}. The largest number of features "
-                    f"that fits orders up to {order} is K={fit}. Pass a reducer "
-                    "(rfun, delta_rfun), lower the order, or raise max_memory_gb."
-                )
     # with both kernels automatic at every order, no events and two-sided
     # kernels, each order's feeding features are passed on at a lower rate
     # (with a one-sided kernel, interpolating between the computed rows
@@ -2623,14 +2633,38 @@ def features(
     thin = include_timepoints == "all" and all(
         auto_analysis[k] and auto_feeding[k] and resolved[k] is None for k in orders
     )
+    # at a lower rate, orders 2 and above have at least min(T, _AUTO_MIN_ROWS)
+    # rows (how many depends on the data): the checks before order 1 runs
+    # use that, so that a run is refused here only if it cannot fit; each
+    # step is checked again with its actual rows when it runs
+    later_T = min(T, _AUTO_MIN_ROWS) if thin else None
+    if delta_unreduced and max_memory_gb is not None:
+        # widths are known in advance: refuse before computing anything
+        kernels = dict(
+            kernel_feeding=feeding_function is not eye_weights,
+            dense=_dense_analysis(weights_function, cfun),
+            combine=combine,
+            dense_feeding=not _builtin_kernel(feeding_function),
+        )
+        estimates = _estimates(K, order, T, S, return_delta, False,
+                               later_T=later_T, **kernels)
+        for k in range(1, order + 1):
+            if estimates[k] > max_memory_gb:
+                fit = _largest_k(order, T, max_memory_gb, S, return_delta,
+                                 later_T=later_T, **kernels)
+                raise MemoryError(
+                    f"Unreduced features at order {k} need about {estimates[k]:.3g} GB "
+                    f"(K={K}, T={T}, {S} subject{'s' if S > 1 else ''}), more than "
+                    f"max_memory_gb={max_memory_gb}. The largest number of features "
+                    f"that fits orders up to {order} is K={fit}. Pass a reducer "
+                    "(rfun, delta_rfun), lower the order, or raise max_memory_gb."
+                )
     if max_memory_gb is not None:
-        # streamed steps of later orders are checked before order 1 runs; at
-        # a lower rate they have at least min(T, _AUTO_MIN_ROWS) rows
+        # streamed steps of later orders are checked before order 1 runs
         _check_streamed_steps(
             K, T, S, max_memory_gb, analysis_rfun, feeding_rfun, fed, cfun=cfun,
             combine=combine, feeding_function=feeding_function, ndims=ndims,
-            weights_function=weights_function,
-            later_T=min(T, _AUTO_MIN_ROWS) if thin else None,
+            weights_function=weights_function, later_T=later_T,
         )
 
     X = [subjects]

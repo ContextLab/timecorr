@@ -2,8 +2,12 @@
 Defaults of the higher-order pipeline (``features`` and ``two_path_step``).
 
 The defaults are ``rfun="auto"`` (PCA at order 1, signed weighted strength at
-orders >= 2), ``delta_rfun="auto"`` (communities) and a Gaussian feeding kernel
-with variance 25 (standard deviation 5 samples).  The original pipeline is
+orders >= 2), ``delta_rfun="auto"`` (communities) and Gaussian kernels whose
+widths are set from each step's input when their parameters are None
+(``tests/test_features_auto_kernels.py``; on white data of up to 500
+timepoints these are the fixed kernels of variance 100 and 25).  Tests that
+need the fixed kernels where the automatic ones differ give them
+(``FIXED_FEEDING``, ``FIXED_KERNELS``).  The original pipeline is
 ``rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights``
 (pinned by ``tests/test_legacy_pipeline.py``).
 
@@ -24,6 +28,10 @@ EXPLICIT = dict(rfun="auto", delta_rfun="auto",
                 delta_weights_function=tc.gaussian_weights,
                 delta_weights_params={"var": 25})
 SETTINGS = dict(cfun=tc.autofc, weights_params={"var": 100})
+# the fixed kernels (Gaussian, variance 100 and 25 at every order) that were
+# the defaults before kernel parameters of None became automatic
+FIXED_FEEDING = dict(delta_weights_params={"var": 25})
+FIXED_KERNELS = dict(weights_params={"var": 100}, **FIXED_FEEDING)
 
 
 def nested(S=2, T=300, seed=5):
@@ -185,8 +193,11 @@ def test_memory_estimate_counts_the_kernel_feeding_path(cfun):
     finally:
         tracemalloc.stop()
     assert est / 1.25 <= peak <= 1.25 * est, (peak, est)
-    # the guard uses the same estimate
-    with pytest.raises(MemoryError, match="Unreduced features at order 1 need about 0.163 GB"):
+    # the guard uses the same estimate: 0.1795 GB (estimate_memory_gb's
+    # formula: 7 block temporaries of 100 x 200 x 100 elements, plus the
+    # Gaussian feeding path's results and the (S + 1) T d stacked subjects),
+    # printed to 3 significant digits
+    with pytest.raises(MemoryError, match="Unreduced features at order 1 need about 0.18 GB"):
         tc.features(data, order=1, rfun=None, delta_rfun=None, cfun=cfun,
                     weights_params={"var": 100}, return_delta=True,
                     max_memory_gb=(est + eye) / 2)
@@ -251,16 +262,42 @@ def test_alternatives_complete_after_community_compression():
     assert X[3].shape == (100, 4)
 
 
-def test_default_feeding_needs_k_distinct_shift_lags():
-    # T 40, standard deviation 5: L 10, so 21 distinct lags in [10, 30]; 22
-    # features need 22.  The check runs before anything is computed
+def test_default_feeding_runs_with_more_features_than_shift_lags():
+    # T 40, standard deviation 5: L 10, so 21 distinct lags in [10, 30] for
+    # 22 features: the shift null reuses lags (each used once or twice)
+    # and the result is deterministic
     x = [np.random.default_rng(1).normal(size=(40, 22)) for _ in range(2)]
-    with pytest.raises(ValueError, match="distinct lags") as info:
-        tc.features(x, order=1, return_delta=True, weights_params={"var": 10})
-    _alternatives_named(str(info.value))
+    with pytest.warns(UserWarning, match="share a lag"):
+        first = tc.features(x, order=1, return_delta=True, weights_params={"var": 10})
+    again = quiet(tc.features, x, order=1, return_delta=True,
+                  weights_params={"var": 10})
+    for part in (0, 1):
+        for a, b in zip(first[part][1], again[part][1]):
+            np.testing.assert_array_equal(a, b)
+    assert [d.shape[0] for d in first[1][1]] == [40, 40]
     X = quiet(tc.features, [a[:, :21] for a in x], order=1, return_delta=True,
               weights_params={"var": 10})
     assert len(X) == 2
+
+
+def test_defaults_run_with_more_features_than_shift_lags():
+    # 2 subjects, T 120, K 150 (default feeding kernel: L 30, 61 distinct
+    # lags in [30, 90]): this raised ValueError before lags could be reused
+    x = [np.random.default_rng(s).standard_normal((120, 150)) for s in range(2)]
+    with pytest.warns(UserWarning, match="share a lag"):
+        X, D = tc.features(x, order=2, return_delta=True)
+    assert len(X) == 3 and len(D) == 3
+    for k in (1, 2):
+        assert len(X[k]) == 2 and len(D[k]) == 2
+        for a in X[k] + D[k]:
+            assert a.shape[0] == 120 and np.all(np.isfinite(a))
+    # order 1: PCA to as many features as the data have
+    assert all(a.shape == (120, 150) for a in X[1])
+    # order 2: WeightedStrength(signed=True), two columns per feeding column
+    assert all(a.shape == (120, 2 * D[1][0].shape[1]) for a in X[2])
+    X_again = quiet(tc.features, x, order=2)
+    for a, b in zip(X[2], X_again[2]):
+        np.testing.assert_array_equal(a, b)
 
 
 # wave 4, D1: the automatic feeding reducer keeps the width -------------------
@@ -434,13 +471,11 @@ def test_explicit_communities_still_raise_after_compression():
 
 
 @pytest.mark.parametrize("shape, match", [((100, 3), "got 3 features"),
-                                          ((39, 6), "T = 39"),
-                                          ((40, 22), "distinct lags")],
-                         ids=["K3", "T39", "lags"])
+                                          ((39, 6), "T = 39")],
+                         ids=["K3", "T39"])
 def test_original_input_errors_stay(shape, match):
-    # the original input: fewer than 4 features, T < 40, or fewer distinct
-    # shift-null lags than features raise at order 1, before anything is
-    # computed, whenever a feeding step is required
+    # the original input: fewer than 4 features or T < 40 raise at order 1,
+    # before anything is computed, whenever a feeding step is required
     x = noise(2, shape, 2)
     for kw in (dict(order=3), dict(order=2), dict(order=1, return_delta=True)):
         with pytest.raises(ValueError, match=match) as info:
@@ -449,6 +484,23 @@ def test_original_input_errors_stay(shape, match):
         _alternatives_named(str(info.value))
     # without a feeding step, order 1 is unaffected
     assert tc.features(x, order=1, weights_params={"var": 10})[1][0].shape[0] == shape[0]
+
+
+def test_original_input_with_more_features_than_shift_lags_runs():
+    # T 40, 22 features (21 distinct shift-null lags in [10, 30]) raised
+    # at order 1 when lags could not be reused; every order now runs, and
+    # the result is deterministic
+    x = noise(2, (40, 22), 2)
+    for kw in (dict(order=3), dict(order=2), dict(order=1, return_delta=True)):
+        with pytest.warns(UserWarning, match="share a lag"):
+            first = tc.features(x, weights_params={"var": 10}, **kw)
+        again = quiet(tc.features, x, weights_params={"var": 10}, **kw)
+        X = first[0] if kw.get("return_delta") else first
+        X_again = again[0] if kw.get("return_delta") else again
+        for k in range(1, kw["order"] + 1):
+            for a, b in zip(X[k], X_again[k]):
+                assert a.shape[0] == 40
+                np.testing.assert_array_equal(a, b)
 
 
 def test_one_no_exceedance_warning_per_order_not_per_subject():
@@ -480,20 +532,25 @@ def test_prefix_consistency_across_requested_orders():
 
 def test_memory_accounting_after_a_fallback():
     # 6 noise features, order 3: every automatic feeding step keeps 6
-    # columns.  The smallest budget that completes (bisection to 1e-17 GB):
-    # 0.23053376 GB, of which 0.00077 GB are held while the order-3 streamed
-    # analysis step runs on the 6 fallback columns (X_1, X_2 and D_2: 96,000
-    # values, with the fits); just below it, that step raises before it
-    # computes anything (measured: "The streamed analysis step at order 3
-    # needs at least about 0.231 GB"; the match below accepts a MemoryError
+    # columns.  The smallest budget that completes (bisection from [0, 0.5]
+    # GB until the bounds are adjacent floats, with the built-in kernels read
+    # in chunks of rows): 0.090026624 GB, of which 0.00077 GB are held while
+    # the order-3 streamed analysis step runs on the 6 fallback columns (X_1,
+    # X_2 and D_2: 96,000 values, with the fits); just below it, that step
+    # raises before it computes anything (measured: "The streamed analysis
+    # step at order 3 needs at least about 0.09 GB"; the match below accepts a MemoryError
     # at order 2 or 3 on the 6 input features, so it also holds if a change
     # of accounting moves the refusal one order earlier)
+    # FIXED_KERNELS: every order at every timepoint, as measured (with
+    # kernel parameters of None, orders 2 and 3 of a recording of 2000
+    # timepoints are computed at every 2nd timepoint and need less)
     x = noise(2, (2000, 6), 4)
-    budget = 0.23053376
-    X = quiet(tc.features, x, order=3, max_memory_gb=budget)
+    budget = 0.090026624
+    X = quiet(tc.features, x, order=3, max_memory_gb=budget, **FIXED_KERNELS)
     assert X[3][0].shape == (2000, 12)
     with pytest.raises(MemoryError, match=r"at order [23] .*6 input features"):
-        quiet(tc.features, x, order=3, max_memory_gb=budget * (1 - 1e-6))
+        quiet(tc.features, x, order=3, max_memory_gb=budget * (1 - 1e-6),
+              **FIXED_KERNELS)
 
 
 def test_two_nodes_give_identical_weighted_strength_columns():
@@ -542,10 +599,12 @@ def test_return_info_shapes_of_the_return():
 
 
 def test_return_info_content():
+    # FIXED_FEEDING in both calls: entries of automatic kernels also have
+    # "kernel_sd" and "sampling" (tests/test_features_auto_kernels.py)
     data = nested_modules(2, 2, 6)  # 24 nodes in 4 modules
     ws = tc.WeightedStrength(signed=True)
     (X, D), info = quiet(tc.features, data, order=2, return_delta=True,
-                         return_info=True, rfun={2: ws}, **SETTINGS)
+                         return_info=True, rfun={2: ws}, **SETTINGS, **FIXED_FEEDING)
     _no_arrays(info)
     a1, f1, a2, f2 = info
     assert set(a1) == ANALYSIS_KEYS and set(a2) == ANALYSIS_KEYS
@@ -560,7 +619,8 @@ def test_return_info_content():
     assert f2["input_width"] == D[1][0].shape[1] and f2["output_width"] == D[2][0].shape[1]
     # explicit reducers: no automatic-reducer keys
     (_, D), info = quiet(tc.features, data, order=1, return_delta=True, return_info=True,
-                         rfun=None, delta_rfun="weighted_strength", **SETTINGS)
+                         rfun=None, delta_rfun="weighted_strength", **SETTINGS,
+                         **FIXED_FEEDING)
     assert info[0]["requested"] is None and info[0]["effective"] is None
     assert info[0]["output_width"] == 24 * 25 // 2
     assert set(info[1]) == ANALYSIS_KEYS
@@ -646,19 +706,25 @@ def _hint_subjects(K=120, T=600, S=2, seed=0):
     return [rng.standard_normal((T, K)) for _ in range(S)]
 
 
-@pytest.mark.parametrize("frac", [0.3, 0.5, 0.7])
-def test_original_pipeline_memory_error_has_no_hint(frac):
-    # K 120, T 600, 2 subjects: the order-1 step is estimated at 0.552 GB.
+@pytest.mark.parametrize("frac, fits", [(0.3, 59), (0.5, 78), (0.7, 92)])
+def test_original_pipeline_memory_error_has_no_hint(frac, fits):
+    # K 120, T 600, 2 subjects: the order-1 step was estimated at 0.552 GB
+    # (the budgets below stay fractions of that figure).
     # The co-fluctuation feeding step is materialized, so a summary reducer
     # on the analysis path would not make the call fit: no hint, and the
-    # message is the one of commit ad50637 (before wave 4), verbatim.
+    # message is the one of commit ad50637 (before wave 4), verbatim except
+    # for its figures.  The GB figure (and with it the largest K that fits)
+    # was corrected because the earlier estimate was below the measured
+    # peak: this call traces 0.6001 GB with tracemalloc against 0.552 GB
+    # estimated then and 0.620 GB now.  The figures are literals (0.62 GB,
+    # and K = 59, 78 and 92 for the three budgets), so the expectation does
+    # not depend on the code under test.
     budget = 0.552 * frac
     kw = dict(rfun="PCA", delta_rfun=None, delta_weights_function=tc.eye_weights)
     with pytest.raises(MemoryError) as err:
         tc.features(_hint_subjects(), order=2, max_memory_gb=budget, **kw)
-    fits = {0.3: 63, 0.5: 83, 0.7: 98}[frac]
     assert str(err.value) == (
-        "The correlation step at order 1 needs about 0.552 GB (120 input "
+        "The correlation step at order 1 needs about 0.62 GB (120 input "
         f"features, T=600, 2 subjects), more than max_memory_gb={budget}. The "
         f"largest number of input features that fits one step is K={fits}. "
         "Reduce to fewer features (ndims, rfun, delta_rfun) or raise "
@@ -683,10 +749,17 @@ def test_default_call_memory_error_hint_names_order_one_and_works():
     assert X[1][0].shape == (600, 240)
 
 
+# The text of commit ad50637 with its figures corrected: the GB figure
+# (0.515 GB then) and with it the largest K that fits (89 then) were raised
+# because the earlier estimate was below the measured peak (this call,
+# computed without the budget, traces 0.5617 GB with tracemalloc, 0.5675 GB
+# at commit 6b3d23a; the estimate is now 0.583 GB, and K = 84 fits).  The
+# figures are literals, independent of the code under test.  Every other
+# character is that commit's.
 AD50637_SINGLE = (
-    "The correlation step at order 1 needs about 0.515 GB (120 input "
+    "The correlation step at order 1 needs about 0.583 GB (120 input "
     "features, T=600, 1 subject), more than max_memory_gb=0.3. The largest "
-    "number of input features that fits one step is K=89. Reduce to fewer "
+    "number of input features that fits one step is K=84. Reduce to fewer "
     "features (ndims, rfun, delta_rfun) or raise max_memory_gb."
 )
 
@@ -694,7 +767,8 @@ AD50637_SINGLE = (
 @pytest.mark.parametrize("order, return_delta", [(1, False), (1, True), (2, False), (2, True)])
 def test_original_pipeline_single_subject_memory_error_is_unchanged(order, return_delta):
     # one (600, 120) subject, max_memory_gb=0.3: the text that commit ad50637
-    # (before wave 4) raised for each of these calls, verbatim; at order=1
+    # (before wave 4) raised for each of these calls, verbatim except for
+    # the corrected figures (see AD50637_SINGLE); at order=1
     # without return_delta the step runs without the feeding path
     x = np.random.default_rng(0).standard_normal((600, 120))
     with pytest.raises(MemoryError) as err:
@@ -728,3 +802,26 @@ def test_no_hint_when_the_feeding_reducer_inherits_a_non_summary():
         tc.features(_hint_subjects(), order=2, max_memory_gb=0.3,
                     rfun="PCA", delta_rfun=None)
     assert HINT not in str(err.value)
+
+
+def test_default_memory_accounting_after_a_fallback():
+    # the default call (automatic kernels and reducers) on 6 noise features,
+    # order 3, T 1500 (below 2000 rows, so every order runs on all rows):
+    # both feeding steps fall back to 6 weighted-strength columns (no null
+    # exceedance at order 1, too few community columns at order 2).  The
+    # smallest budget that completes (bisection from [0, 0.5] GB until the
+    # bounds are adjacent floats, measured at the commit of this test):
+    # 0.084298624 GB; just below it the order-3 streamed analysis step on
+    # the 6 fallback columns raises before it computes anything (measured:
+    # "The streamed analysis step at order 3 needs at least about 0.0843
+    # GB"; the match accepts order 2 or 3, as the fixed-kernel version of
+    # this test does)
+    x = noise(2, (1500, 6), 4)
+    budget = 0.084298624
+    X, info = quiet(tc.features, x, order=3, max_memory_gb=budget, return_info=True)
+    assert X[3][0].shape == (1500, 12)
+    assert [e["fallback"] for e in info if e["path"] == "feeding"] == [
+        "no_null_exceedance", "too_few_community_columns"]
+    assert all("kernel_sd" in e for e in info)
+    with pytest.raises(MemoryError, match=r"at order [23] .*6 input features"):
+        quiet(tc.features, x, order=3, max_memory_gb=budget * (1 - 1e-6))

@@ -331,7 +331,8 @@ def timepoint_decoder(
         step whose estimate is larger raises ``MemoryError`` before it
         allocates (unreduced features grow from ``d`` to ``d(d+1)/2`` per
         order).  With per-subject events, the kernels of the distinct event
-        sets (one T x T array each) are not included in the estimate.  None
+        sets (one T x T array each for a kernel function of your own) are
+        not included in the estimate.  None
         checks nothing.  Default: 4.0.
     events : None, dict, array-like, or list
         Restricts the analysis kernel of orders ``k >= 1`` to events
@@ -523,7 +524,8 @@ def weighted_timepoint_decoder(
         As in ``timepoint_decoder`` (``weights_fun`` is an alias of
         ``weights_function``; ``max_memory_gb`` defaults to 4.0; with
         per-subject events, the kernels of the distinct event sets, one T x T
-        array each, are not included in its estimate).
+        array each for a kernel function of your own, are not included in
+        its estimate).
     events : None, dict, array-like, or list
         Restricts the analysis kernel of orders ``k >= 1`` to events
         (keyword-only; see ``features``: boundaries shared by all subjects,
@@ -864,8 +866,9 @@ def weighted_timepoint_decoder_ec(
         array per subject, for ``k = 0, ..., max(level - 1, 0)``.
     nfolds, level, optimize_levels, cfun, weights_function, weights_params, combine, rfun, opt_init, weights_fun, max_memory_gb
         As in ``weighted_timepoint_decoder`` (with per-subject events, the
-        kernels of the distinct event sets, one T x T array each, are not
-        included in the ``max_memory_gb`` estimate).
+        kernels of the distinct event sets, one T x T array each for a
+        kernel function of your own, are not included in the
+        ``max_memory_gb`` estimate).
     events : None, dict, array-like, or list
         Restricts the analysis kernel of orders ``k >= 1`` to events
         (keyword-only; see ``features``: boundaries shared by all subjects,

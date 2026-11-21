@@ -556,14 +556,27 @@ def test_streamed_feeding_counts_the_unreduced_analysis_results():
 
 
 def test_shift_null_on_the_eye_path_is_checked_before_computing():
-    data = noise(S=2, T=2000, K=10)
-    need, held = _held_sizes()
+    # The budget lets the materialized analysis step, whose kernel function
+    # is the user's (T x T arrays, estimate_memory_gb(..., weights_function=)),
+    # run and leaves too little for the shift null (one streamed row per
+    # block on the eye kernel, read in chunks, while the co-fluctuations are
+    # held).  T is 1,000 (the controller accepted the change from T 2,000):
+    # at T 2,000 the analysis step alone is estimated at 0.118 GB, more than
+    # the shift null's 0.095 GB, so no budget lets the first run and stops
+    # the second there.
+    T = 1000
+    data = noise(S=2, T=T, K=10)
+    need, held = _held_sizes(T=T)
     calls = []
+    kernel = recording_kernel(calls)
+    analysis = estimate_memory_gb(10, 1, T, 2, weights_function=kernel)[1]
+    budget = (analysis + need + held) / 2
+    assert analysis < budget < need + held
     common = dict(order=1, cfun=tc.autofc, rfun="PCA", return_delta=True,
-                  delta_rfun=tc.Communities(), weights_function=recording_kernel(calls),
+                  delta_rfun=tc.Communities(), weights_function=kernel,
                   delta_weights_function=tc.eye_weights)
     with pytest.raises(MemoryError, match="shift null of the feeding step"):
-        tc.features(data, max_memory_gb=need + held / 2, **common)
+        tc.features(data, max_memory_gb=budget, **common)
     # the analysis kernel was not built, so no correlation was computed
     assert calls == []
     with warnings.catch_warnings():
@@ -722,12 +735,19 @@ def test_n_null_reaches_the_shift_null_of_the_feeding_path(feeding):
     assert thresholds[0] <= thresholds[1]
 
 
-def test_too_few_shift_lags_for_the_features_raises():
-    # T 40 gives 21 distinct lags in [10, 30]; 24 features need 24
+def test_more_features_than_shift_lags_runs():
+    # T 40 gives 21 distinct lags in [10, 30] for 24 features: the shift
+    # null reuses lags (each used once or twice); deterministic
     data, _ = nested(T=40)
-    with pytest.raises(ValueError, match="too short for the shift null"):
-        quiet(tc.features, data, order=1, cfun=tc.autofc, weights_params=WIDE,
-              rfun="PCA", delta_rfun=tc.Communities(), return_delta=True, **FEED)
+    runs = []
+    for _ in range(2):
+        with pytest.warns(UserWarning, match="share a lag"):
+            runs.append(tc.features(data, order=1, cfun=tc.autofc, weights_params=WIDE,
+                                    rfun="PCA", delta_rfun=tc.Communities(),
+                                    return_delta=True, **FEED))
+    for a, b in zip(runs[0][1][1], runs[1][1][1]):
+        assert a.shape[0] == 40 and np.all(np.isfinite(a))
+        np.testing.assert_array_equal(a, b)
 
 
 # review item 1: what the pipeline itself holds in a streamed step -----------
@@ -964,8 +984,11 @@ def test_retained_fits_are_enforced_by_the_budget():
 
 def test_materialized_step_input_is_not_counted_twice():
     # order 2 of the original pipeline on 2 x (80, 10): the step estimate
-    # (0.0007104 GB) already counts its input D_1; with X_1 retained
-    # (1.28e-5 GB) the run needs 0.0007232 GB
+    # (0.0010496 GB) already counts its input D_1; with X_1 retained
+    # (1.28e-5 GB) the run needs 0.0010624 GB.  The step estimate is
+    # (80 * 10**2 + 2 * 80 * 55 + 3 * 2 * 80 * 10 + 3 * 80**2 + 3 * 80 * 10
+    #  + max(7 * 10 * 80 * 10, 11 * 10**2 * 80)) * 8 / 1e9: the Fisher z
+    # temporaries of two subjects are larger than the 7 estimator blocks
     rng = np.random.default_rng(0)
     data = [rng.normal(size=(80, 10)) for _ in range(2)]
     common = dict(order=2, rfun="PCA", delta_rfun=None,
@@ -973,8 +996,8 @@ def test_materialized_step_input_is_not_counted_twice():
     # PCA keeps 10 columns, so step 2 is a one-output step on 10 inputs
     step = estimate_memory_gb(10, 1, 80, 2, delta_weights_function=tc.eye_weights)[1]
     x1 = 2 * 80 * 10 * 8 / 1e9
-    assert step == pytest.approx(0.0007104) and x1 == pytest.approx(1.28e-5)
-    X = quiet(tc.features, data, max_memory_gb=0.0007296, **common)
+    assert step == pytest.approx(0.0010496) and x1 == pytest.approx(1.28e-5)
+    X = quiet(tc.features, data, max_memory_gb=0.0010688, **common)
     assert len(X) == 3
     with pytest.raises(MemoryError, match="retained by the run"):
         quiet(tc.features, data, max_memory_gb=step + x1 - 1e-7, **common)
@@ -987,3 +1010,25 @@ def test_views_of_one_array_are_counted_once():
     assert _output_elements([a, a[:5], a[:, :2]]) == 40
     assert _output_elements([a[:5], a[5:]]) == 40
     assert _output_elements([a, np.zeros(3)]) == 43
+
+
+# ------------------------------------------------ PageRank on |r| as a reducer
+
+
+@pytest.mark.parametrize("path", ["rfun", "delta_rfun"])
+def test_abs_pagerank_works_as_a_reducer_in_features(path):
+    data = noise(S=2, T=80, K=5, seed=4)
+    kwargs = {"rfun": "PCA", "delta_rfun": "weighted_strength"}
+    kwargs[path] = "pagerank_centrality_abs"
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        X, D = tc.features(data, order=2, return_delta=True, **kwargs)
+    assert len(X) == 3 and len(D) == 3
+    for k in (1, 2):
+        for x in X[k] + D[k]:
+            assert x.shape == (80, 5) and np.all(np.isfinite(x))
+    # one PageRank value per node, summing to 1
+    pageranked = X[1] + X[2] if path == "rfun" else D[1] + D[2]
+    for x in pageranked:
+        assert np.all(x > 0)
+        np.testing.assert_allclose(x.sum(axis=1), 1.0, rtol=0, atol=1e-12)

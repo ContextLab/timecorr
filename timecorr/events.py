@@ -15,6 +15,8 @@ import numbers
 import numpy as np
 import pandas as pd
 
+from ._kernels import CHUNK, LagKernel
+
 try:  # polars is optional
     import polars as pl
 except ImportError:  # pragma: no cover
@@ -433,6 +435,12 @@ def resolve_events_by_order(events, T, n_subjects, order, events_params=None):
 
 
 # ------------------------------------------------------------------ kernel mask
+_TOO_SHORT = (
+    "the events leave every row of the kernel with fewer than 3 non-zero weights: "
+    "no block is long enough to estimate a correlation"
+)
+
+
 def mask_kernel(weights, boundaries):
     """
     Confine a kernel to blocks.
@@ -469,6 +477,13 @@ def mask_kernel(weights, boundaries):
     """
     if boundaries is None:
         return weights
+    if isinstance(weights, LagKernel):
+        # the kernels of timecorr, features and the decoders: rows computed
+        # when read, so no T x T array is built here either
+        out = weights.with_events(block_labels(boundaries, weights.T))
+        if weights.max_row_support(CHUNK) >= 2 and out.max_row_support(CHUNK) < 3:
+            raise ValueError(_TOO_SHORT)
+        return out
     w = np.asarray(weights)
     if w.ndim != 2 or w.shape[0] != w.shape[1]:
         raise ValueError(f"kernel must be a square T x T array, got shape {w.shape}")
@@ -477,10 +492,7 @@ def mask_kernel(weights, boundaries):
     same = labels[:, None] == labels[None, :]
     out = np.where(same, w, np.zeros((), dtype=w.dtype))
     if np.sum(w != 0, axis=1).max() >= 2 and np.sum(out != 0, axis=1).max() < 3:
-        raise ValueError(
-            "the events leave every row of the kernel with fewer than 3 non-zero weights: "
-            "no block is long enough to estimate a correlation"
-        )
+        raise ValueError(_TOO_SHORT)
     return out
 
 
@@ -573,10 +585,13 @@ class _quiet_hmmlearn:
 
 
 def _zscore_columns(x):
-    """Z-score each feature (constant features become 0)."""
-    sd = x.std(axis=0)
-    sd[sd == 0] = 1.0
-    return (x - x.mean(axis=0)) / sd
+    """
+    Z-score each feature; constant features, including those constant up to
+    round-off, become 0 (the estimator's rule, ``helpers._zscore_columns``).
+    """
+    from .helpers import _zscore_columns as zscore
+
+    return zscore(np.asarray(x, dtype=np.float64))
 
 
 def _finite_model(model):

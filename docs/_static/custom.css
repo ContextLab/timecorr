@@ -1,0 +1,95 @@
+/* ContextLab look: Nunito Sans, lowercase light headings, lab green links. */
+@import url('https://fonts.googleapis.com/css2?family=Nunito+Sans:wght@300;400;600;700&display=swap');
+
+body {
+    font-family: 'Nunito Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI',
+        Helvetica, Arial, sans-serif;
+}
+
+h1, h2, h3, h4, h5, h6,
+.sidebar-brand-text,
+.toc-title {
+    font-family: 'Nunito Sans', sans-serif;
+    text-transform: lowercase;
+    letter-spacing: 0.6px;
+    font-weight: 300;
+}
+
+/* Python names are case-sensitive: an API page's title is the object's dotted
+   name, and inline code in a heading is a name too. */
+section:has(> dl.py) > h1,
+h1 code, h2 code, h3 code, h4 code, h5 code, h6 code {
+    text-transform: none;
+}
+
+.document h1 {
+    font-size: 2.5rem;
+    margin-bottom: 1rem;
+}
+
+a {
+    color: var(--color-brand-content, #007030);
+}
+
+a:hover {
+    color: var(--color-link--hover);
+}
+
+pre {
+    border-radius: 4px;
+}
+
+
+/* Tutorial gallery (nbsphinx nbgallery in tutorials.rst): one card per
+   notebook. Furo's color variables follow the light and dark themes. */
+.nbsphinx-gallery {
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 1rem;
+    margin: 1.5rem 0;
+}
+
+.nbsphinx-gallery > a {
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    overflow: hidden;
+    border: 1px solid var(--color-background-border);
+    border-radius: 8px;
+    background: var(--color-background-secondary);
+    color: var(--color-foreground-primary);
+    text-decoration: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.nbsphinx-gallery > a:hover {
+    border-style: solid;
+    border-color: var(--color-brand-primary);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.12);
+    transform: translateY(-2px);
+    color: var(--color-brand-content);
+}
+
+/* each notebook draws its card's picture at 4:3 on white, so the image area
+   has that shape and stays white in dark mode */
+.nbsphinx-gallery > a > div:first-child {
+    aspect-ratio: 4 / 3;
+    height: auto;
+    margin: 0;
+    padding: 0;
+    align-items: center;
+    background: #ffffff;
+    border-bottom: 1px solid var(--color-background-border);
+}
+
+.nbsphinx-gallery img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
+}
+
+.nbsphinx-gallery > a > div:last-child {
+    padding: 0.6rem 0.8rem 0.8rem;
+    font-weight: 600;
+    font-size: 0.95rem;
+    line-height: 1.3;
+}

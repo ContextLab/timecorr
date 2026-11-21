@@ -20,14 +20,17 @@ the threshold of the automatic number of communities.
 
 import numbers
 import warnings
+from fractions import Fraction
 
 import numpy as np
 from sklearn.cluster import KMeans
 
+from ._kernels import LagKernel
 from .helpers import (
     _WCORR_NAN_PRODUCTS,
     _corr_row_blocks,
     _fisher_mean,
+    _kernel_work_elements,
     _kernels_message,
     _nan_weighted_mean,
     _subject_kernels,
@@ -51,6 +54,9 @@ __all__ = ["WeightedStrength", "Communities"]
 # relative tolerance below which an output column's range over time is
 # round-off (see ``_Summary._warn_constant``)
 _CONSTANT_RTOL = 1e-9
+# a summary column whose range is within this fraction of the largest absolute
+# value of its unit's output is zero up to round-off
+_ZERO_RTOL = 1e-12
 
 def _new_state(K, T, signed):
     """
@@ -95,17 +101,98 @@ def _mean_r(sum_r, T):
     return m
 
 
+def _check_center(center):
+    """``center`` of ``WeightedStrength``: True, False or ``"median"``
+    (the integers 1 and 0 and NumPy bools mean True and False)."""
+    if isinstance(center, (bool, np.bool_)):
+        return bool(center)
+    if isinstance(center, numbers.Integral) and center in (0, 1):
+        return bool(center)
+    if isinstance(center, str) and center == "median":
+        return center
+    raise ValueError(
+        f"center must be True (the lower cluster of the pair weights), "
+        f"'median' or False (or 1 or 0); got {center!r}."
+    )
+
+
+# Splits whose between-group sum of squares is within this relative distance
+# of the largest are treated as tied (round-off of the sums is far smaller).
+_SPLIT_TIE = 1e-9
+
+
+def _split_counts(n):
+    """Float64 sizes ``k`` and ``n - k`` of the lower and upper groups of the
+    cuts ``k = 1 .. n - 1`` (float, so ``k * (n - k)`` cannot overflow)."""
+    k = np.arange(1, int(n), dtype=np.float64)
+    return k, float(n) - k
+
+
+def _lower_cluster_cut(x):
+    """
+    Cut ``k`` (lower group ``x[:k]``) of the sorted, finite, not all equal
+    values ``x`` that maximizes the between-group sum of squares
+    ``k (n - k) / n (mean(x[k:]) - mean(x[:k]))**2`` over cuts between
+    distinct values.  The values are first mapped to ``[0, 1]`` by
+    ``(x - x[0]) / (x[-1] - x[0])``, which does not change the best cut, so
+    the result does not depend on the scale of ``x`` (no overflow or
+    underflow); upper-group sums are taken from the reversed cumulative sum,
+    not by subtracting prefix sums.  Cuts within a relative ``_SPLIT_TIE`` of
+    the best are tied, and the smallest of them wins.
+    """
+    n = len(x)
+    span = x[-1] - x[0]
+    u = (x - x[0]) / span
+    u[-1] = 1.0
+    k, rest = _split_counts(n)
+    low = np.cumsum(u)[:-1] / k
+    high = np.cumsum(u[::-1])[::-1][1:] / rest
+    between = k * rest / n * (high - low) ** 2
+    between[x[1:] == x[:-1]] = -np.inf
+    top = np.max(between)
+    return int(np.flatnonzero(between >= top * (1 - _SPLIT_TIE))[0]) + 1
+
+
+def _center_level(w, rule):
+    """
+    Level ``m`` the pair weights ``w_ij`` (i < j) are centered on.
+
+    ``rule="median"``: their median.  ``rule="lower_cluster"``: the mean of
+    the lower group of the exact two-group split of their sorted values that
+    minimizes the total within-group sum of squares (one-dimensional
+    two-means; splits fall between distinct values; see
+    ``_lower_cluster_cut`` for the scale-free search and the tie rule).
+    When all values are equal, that value.  The mean is computed on the
+    values mapped to ``[0, 1]`` and kept within the lower group's range, so
+    a group of equal values gives exactly that value despite round-off.
+    Raises ``ValueError`` for non-finite weights.
+    """
+    x = np.sort(w[np.triu_indices(w.shape[0], 1)].astype(float))
+    if not np.all(np.isfinite(x)):
+        raise ValueError("The pair weights must be finite to be centered.")
+    if rule == "median":
+        return float(np.median(x))
+    if x[-1] == x[0]:
+        return float(x[0])
+    cut = _lower_cluster_cut(x)
+    span = x[-1] - x[0]
+    level = x[0] + span * np.mean((x[:cut] - x[0]) / span)
+    return float(np.clip(level, x[0], x[cut - 1]))
+
+
 def _clip_weights(w, center=True):
     """
-    Clipped weights ``a_ij = max(w_ij - m, 0)``, ``m`` = median of ``w_ij``
-    over i < j; for K < 4, or with ``center=False``, the weights are returned
-    unclipped.  Zero diagonal.
+    Clipped weights ``a_ij = max(w_ij - m, 0)``: ``m`` = the mean of the
+    lower cluster of the pair weights (``center=True``) or their median
+    (``center="median"``; see ``_center_level``); for K < 4, or with
+    ``center=False``, the weights are returned unclipped.  Zero diagonal.
     """
     K = w.shape[0]
-    if K < 4 or not center:
+    if K < 4 or center is False:
         a = np.array(w, dtype=float)
     else:
-        a = np.maximum(w - np.median(w[np.triu_indices(K, 1)]), 0)
+        rule = "median" if center == "median" else "lower_cluster"
+        a = np.maximum(w - _center_level(w, rule), 0)
     np.fill_diagonal(a, 0)
     return a
 
@@ -411,7 +498,7 @@ class _Summary:
 
     # -- output -------------------------------------------------------------
 
-    def transform(self, corrs):
+    def transform(self, corrs, *, fit_index=None):
         """
         Summarize correlations with the most recent fit.
 
@@ -420,35 +507,118 @@ class _Summary:
         corrs : numpy.ndarray or list of numpy.ndarray
             One (T, K(K+1)/2) array of vectorized correlations per unit, or a
             single array.  K must equal the fit's.
+        fit_index : None, int, "mean", or list, tuple, range or 1-D array of int
+            Which fitted unit's pair weights (and, when signed, mean
+            correlations) each unit uses.  None: with as many units as the
+            fit, unit u uses fitted unit u (matching by position); otherwise
+            every unit uses the mean over the fitted units.  An int ``i``
+            (a Python or NumPy integer, or a 0-d integer array): every unit
+            uses fitted unit ``i``.  ``"mean"``: every unit uses the mean
+            over the fitted units.  A list, tuple, range or 1-D array: unit
+            u uses fitted unit ``fit_index[u]``; it needs one entry per unit
+            (one for a single array), and entries may repeat.  Indices count
+            from 0 and must be below the number of fitted units; bools and
+            floats are not indices.  Default: None.
 
         Returns
         -------
         list of numpy.ndarray or numpy.ndarray
             One (T, c) array per unit (a single array for a single array).
-            With as many units as the fit, unit u uses the fit's weights of
-            unit u; otherwise every unit uses the fit's mean weights.
+
+        Notes
+        -----
+        With ``fit_index=None``, units are matched to the fitted units by
+        position only: when the new batch has as many units as the fit, the
+        unit at position u receives the pair weights (and, when signed, the
+        mean correlations) fitted to the unit at position u, whether or not
+        it is the same subject, and no warning is given.  Pass the units in
+        the order of the fit, or name the fits with ``fit_index`` (for
+        example ``[1, 0]`` for two subjects in the reverse order, or ``0``
+        for a held-out subject summarized with the first subject's fit).
+        The communities (``labels``) are shared by all units either way.
 
         Raises
         ------
         ValueError
-            If the instance was never fitted, K differs from the fit's, or
-            the input has no timepoints or contains NaN or infinite values.
+            If the instance was never fitted, K differs from the fit's, the
+            input has no timepoints or contains NaN or infinite values, or
+            ``fit_index`` is not None, ``"mean"``, an int or a list, tuple,
+            range or 1-D array of ints (bools and floats included), names a
+            fitted unit that does not exist, or (a list, tuple, range or
+            array) does not have one entry per unit.
 
         Warns
         -----
         UserWarning
             Once per call when some output column is constant over time (for
             example when all weights are 0).  A column whose range over time
-            is nonzero but at most ``1e-9 * max(1, max|column|)`` is
+            is nonzero but at most ``1e-9 * max|column|`` is
             round-off: it is set to its mean exactly and counted in the same
             warning.
         """
         name = type(self).__name__
         if not self.fits_:
             raise ValueError(f"{name}: call fit (or the instance itself) before transform.")
-        return self._transform_fit(self.fits_[-1], corrs)
+        return self._transform_fit(self.fits_[-1], corrs, fit_index=fit_index)
 
-    def _transform_fit(self, fit, corrs):
+    def _fitted_units(self, fit_index, n_units, n_fit):
+        """
+        The fitted unit (an index, or None for the mean) each of ``n_units``
+        units uses, from ``fit_index`` (see ``transform``) and the number of
+        fitted units ``n_fit``.
+        """
+        name = type(self).__name__
+        kinds = (
+            "fit_index must be None, 'mean', an int, or a list, tuple, range "
+            "or 1-D array of ints"
+        )
+
+        def check(i, label):
+            if (
+                not isinstance(i, numbers.Integral)
+                or isinstance(i, (bool, np.bool_))
+            ):
+                raise ValueError(f"{name}.transform: {kinds}; got {label}={i!r}.")
+            if not 0 <= i < n_fit:
+                raise ValueError(
+                    f"{name}.transform: {label}={i!r} names no fitted unit; the "
+                    f"fit has {n_fit} fitted unit{'s' if n_fit != 1 else ''} "
+                    f"(indices 0 to {n_fit - 1})."
+                )
+            return int(i)
+
+        if fit_index is None:
+            return list(range(n_units)) if n_units == n_fit else [None] * n_units
+        if isinstance(fit_index, str):
+            if fit_index != "mean":
+                raise ValueError(
+                    f"{name}.transform: {kinds}; got fit_index={fit_index!r}."
+                )
+            return [None] * n_units
+        if isinstance(fit_index, np.ndarray):
+            if fit_index.ndim == 0:  # a 0-d array is a scalar
+                return [check(fit_index[()], "fit_index")] * n_units
+            if fit_index.ndim != 1:
+                raise ValueError(
+                    f"{name}.transform: {kinds}; got an array with "
+                    f"{fit_index.ndim} dimensions."
+                )
+        elif not isinstance(fit_index, (list, tuple, range)):
+            # a scalar; check rejects bools, floats, bytes, sets and the like
+            return [check(fit_index, "fit_index")] * n_units
+        # a list, tuple, range or 1-D array: one entry per unit
+        indices = list(fit_index)
+        if len(indices) != n_units:
+            raise ValueError(
+                f"{name}.transform: fit_index has {len(indices)} entries but "
+                f"the batch has {n_units} unit{'s' if n_units != 1 else ''}; "
+                "give one fitted unit per unit, a single int for all of "
+                "them, or None (by position when the batch has as many "
+                f"units as the fit, {n_fit}; the mean otherwise)."
+            )
+        return [check(i, f"fit_index[{u}]") for u, i in enumerate(indices)]
+
+    def _transform_fit(self, fit, corrs, fit_index=None):
         """``transform`` with the fit record ``fit`` (see ``_auto_emitter``)."""
         name = type(self).__name__
         units, K, single = _as_units(corrs, name)
@@ -457,12 +627,12 @@ class _Summary:
             raise ValueError(
                 f"{name}: the fit has {K_fit} nodes but the correlations have {K} nodes."
             )
-        same = len(units) == len(fit["weights"])
+        chosen = self._fitted_units(fit_index, len(units), len(fit["weights"]))
         c = self._n_columns(fit, K)
         outs = []
         for i, u in enumerate(units):
             R = vec2mat(u)
-            unit = self._unit_params(fit, i if same else None)
+            unit = self._unit_params(fit, chosen[i])
             out = np.zeros((R.shape[2], c))
             self._emit(fit, unit, 0, K, R, out)
             outs.append(out)
@@ -476,8 +646,12 @@ class _Summary:
         outputs is constant over time.
 
         A column of one unit's output counts as constant when its range over
-        time is at most ``_CONSTANT_RTOL * max(1, max|column|)`` with
-        ``_CONSTANT_RTOL = 1e-9``.  A nonzero range within that tolerance is
+        time is at most ``_CONSTANT_RTOL * max|column|`` (``_CONSTANT_RTOL =
+        1e-9``) or at most ``_ZERO_RTOL * max|output|`` (``_ZERO_RTOL =
+        1e-12``; the largest absolute value in that unit's output: a column
+        that is zero up to the round-off of the other columns).  Both are
+        relative, so the decision does not depend on the scale of the
+        output.  A nonzero range within that tolerance is
         round-off (for example 1e-13 on values of 3 when nearly identical
         input features give identical summaries), and the column is set to
         its mean exactly, so a later order meets exact zero variance rather
@@ -488,7 +662,9 @@ class _Summary:
             if o.shape[0] == 0:
                 continue
             rng = np.ptp(o, axis=0)
-            tol = _CONSTANT_RTOL * np.maximum(1.0, np.max(np.abs(o), axis=0))
+            largest = np.max(np.abs(o), axis=0)
+            tol = np.maximum(_CONSTANT_RTOL * largest,
+                             _ZERO_RTOL * np.max(largest, initial=0.0))
             snap = (rng > 0) & (rng <= tol)
             if snap.any():
                 o[:, snap] = np.mean(o[:, snap], axis=0)
@@ -531,10 +707,35 @@ class WeightedStrength(_Summary):
     Weighted strength of each node in squared correlations.
 
     For a unit with off-diagonal correlations ``r_ij(t)``: pair weights
-    ``w_ij = mean_t r_ij(t)**2``; ``m`` = median of ``w_ij`` over i < j;
-    clipped weights ``a_ij = max(w_ij - m, 0)`` (for K = 2 or 3, or with
-    ``center=False``, ``a_ij = w_ij``).  Column i is ``c_i(t) = sum_{j != i}
-    a_ij r_ij(t)**2``.
+    ``w_ij = mean_t r_ij(t)**2``; clipped weights ``a_ij = max(w_ij - m,
+    0)``; column i is ``c_i(t) = sum_{j != i} a_ij r_ij(t)**2``.
+
+    Centering (``center=True``, the default) subtracts the typical weight of
+    the weakly coupled pairs, so that only pairs coupled more strongly than
+    that background count, however many pairs any one community holds: the
+    pair weights (i < j) are sorted and divided at the point that best
+    separates a low group from a high group (the division with the smallest
+    total squared distance of the weights from their group's mean), and
+    ``m`` is the mean of the low group.  With ``center="median"``, ``m`` is
+    the median of the pair weights; with ``center=False``, or for K = 2 or 3,
+    ``a_ij = w_ij``.  ``Communities`` centers its matrix ``C`` on the median
+    of the pair weights, not on the low group's mean.
+
+    The division does not depend on the scale of the weights (they are
+    mapped to [0, 1] before the search), so very large or very small pair
+    weights, such as those of delta-kernel co-fluctuations, give the same
+    division.  Divisions whose separation (between-group sum of squares) is
+    within a relative 1e-9 of the best count as tied, and the tie goes to
+    the division with the smallest low group, the lowest ``m``, which
+    removes the fewest pairs.  ``m`` therefore jumps where the best
+    division changes: a small change of the weights can move it from one
+    group boundary to another.  Measured on 192 pair-weight matrices (the
+    unequal-community benchmark of the Notes on its development seeds 0-7,
+    and the order-2 step of the sustained and global 0.5 cases of
+    ``tests/test_nested_recovery.py`` on seeds 20000-20007): a division
+    whose ``m`` differs from the best one's by more than 1% of the weight
+    range came within a relative 1e-9 of the best separation in none of
+    them, within 1e-3 in 1 and within 1e-2 in 54.
 
     Parameters
     ----------
@@ -555,10 +756,14 @@ class WeightedStrength(_Summary):
         Number of shift-null surrogates when ``features`` or
         ``two_path_step`` count the communities of ``split=True`` with
         ``n=None`` (see ``Communities``); a positive integer.  Default: 5.
-    center : bool
-        If True, the pair weights are centered on their median and clipped
-        at 0 (``a_ij = max(w_ij - m, 0)``) for K >= 4; if False, they are
-        used as they are (``a_ij = w_ij``) for any K.  Default: True.
+    center : True, "median" or False
+        True: for K >= 4 the pair weights are centered on the mean ``m`` of
+        their low group (the "lower cluster", described above) and clipped
+        at 0 (``a_ij = max(w_ij - m, 0)``).  ``"median"``: the same with
+        ``m`` the median of the pair weights.  False: the weights are used
+        as they are (``a_ij = w_ij``) for any K.  The integers 1 and 0 and
+        NumPy bools mean True and False; any other value raises
+        ``ValueError``.  Default: True.
 
     Attributes
     ----------
@@ -580,18 +785,62 @@ class WeightedStrength(_Summary):
     -----
     Output columns: K magnitude columns (2K with ``split``: own, then other),
     then, when signed, K signed columns (2K with ``split``: own, then other).
-    With ``center=True``, coupling that is the same for every pair (all pair
-    weights equal) gives magnitude columns that are 0 at every timepoint for
-    K >= 4, while K < 4 is never centered; ``center=False`` keeps such
-    coupling.  The recovery of the order-2 signal with a global signal
-    added (``tests/test_nested_recovery.py``) was measured with centering;
-    it was not measured with ``center=False``.
+    With ``center=True`` or ``"median"``, coupling that is the same for
+    every pair (all pair weights equal) gives magnitude columns that are 0
+    at every timepoint for K >= 4, while K < 4 is never centered;
+    ``center=False`` keeps such coupling.
+
+    Centering removes the background level of the pair weights (noise and
+    coupling shared by every pair).  The median is taken over all pairs, so
+    when more than half the pairs lie within one community the median is a
+    within-community weight of that community, and median centering
+    removes most of that community's weights and every weight of a more
+    weakly coupled smaller community: with planted communities of 18 and 6
+    nodes (153 of the 276 pairs within the larger one; 2 subjects, T 1000,
+    static coupling, ``autofc`` with the default kernel, seeds 0-2) and
+    loadings 0.4 (larger) and 0.2 (smaller), every median-clipped weight
+    within the smaller community is 0.  In the time-varying setting of the
+    first row of the table below, the lower cluster lies within the range
+    of the between-community weights (34% of them stay above it), so both
+    communities keep their weights.  Benchmark (2
+    subjects, T 1000,
+    ``autofc`` with variance 25; each community's coupling ``rho_g(t)``
+    varies slowly over time; score = correlation between the mean of a
+    community's magnitude columns and ``rho_g(t)**2``, mean over subjects;
+    16 held-out seeds, mean +- standard error):
+
+    ======================================  ==============  ===============
+    planted communities (coupling)          median          lower cluster
+    ======================================  ==============  ===============
+    18 + 6 (0.5, 0.25): small community     .000 +- .000    .425 +- .021
+    18 + 6 (0.5, 0.25): large community     .834 +- .007    .833 +- .007
+    18 + 6 (0.45, 0.25), global 0.2: small  .000 +- .000    .508 +- .017
+    18 + 6 (0.4, 0.4): small community      .639 +- .015    .664 +- .012
+    18 + 6 (0.25, 0.5): large community     .652 +- .015    .655 +- .015
+    16 + 4 + 4 (0.5, 0.25, 0.25): 3rd       .265 +- .030    .279 +- .027
+    ======================================  ==============  ===============
+
+    On the order-2 recovery cases of ``tests/test_nested_recovery.py``
+    (T 1000; sustained, sign-flip and global 0.5, each with communities
+    and weighted strength on the feeding path; same 16 held-out seeds) the
+    lower cluster changed the decode score by -.002 to -.006 (paired
+    standard errors .001 to .002), below the standard error of each score
+    (.022 to .038).  Other rules measured on the development seeds: the
+    lower quartile of the pair weights (also keeps the small community;
+    order-2 scores lower by up to .026 +- .006), the shift-null mean pair
+    weight (a lower small-community score with a global signal: .398 +-
+    .018 versus .508 +- .017 on the held-out seeds), and no centering (order-2 scores lower by up to .346 +- .062
+    with a global signal).
     With K = 2 the two magnitude columns are identical (both are
     ``a_12 r_12(t)**2``), so a following correlation step sees two copies of
     one series; with K = 1 there are no pairs and the column is 0.
     Calling the instance fits to the given units and transforms the same
     units: the weights (and communities) come from the data being summarized.
-    ``fit`` and ``transform`` separate the two.  The summary of a unit
+    ``fit`` and ``transform`` separate the two; ``transform`` matches units
+    to the fitted units by position when their numbers are equal (unit u
+    gets the weights fitted to unit u), and ``transform(...,
+    fit_index=...)`` names the fitted unit of each unit instead (see
+    ``transform``).  The summary of a unit
     returned by a combine function other than ``null_combine`` describes the
     combined correlations.  The correlations must be finite (NaN or infinite
     values, on the diagonal too, raise ``ValueError``).
@@ -615,7 +864,7 @@ class WeightedStrength(_Summary):
     def __init__(self, split=False, signed=False, n=None, n_null=5, center=True):
         super().__init__(n=n, signed=signed, n_null=n_null)
         self.split = bool(split)
-        self.center = bool(center)
+        self.center = _check_center(center)
 
     @property
     def _needs_communities(self):
@@ -624,7 +873,7 @@ class WeightedStrength(_Summary):
     def __repr__(self):
         return (
             f"WeightedStrength(split={self.split}, signed={self.signed}, n={self.n}, "
-            f"n_null={self.n_null}, center={self.center})"
+            f"n_null={self.n_null}, center={self.center!r})"
         )
 
     def _what(self):
@@ -695,7 +944,11 @@ class Communities(_Summary):
         Default: None.
     signed : bool
         If True, as many more columns: ``mean over i != j in g of
-        sign(mean_t r_ij) r_ij(t)``.  Default: False.
+        sign(mean_t r_ij) r_ij(t)``.  Both columns of a community are
+        computed from the same correlations ``r_ij(t)`` within it; on the
+        feeding path of ``features``, the next order's correlations
+        therefore include the correlation between each community's
+        magnitude column and its own signed column.  Default: False.
     n_null : int
         Number of surrogates of the shift null that sets ``null_threshold``
         when ``features`` or ``two_path_step`` count the communities
@@ -733,17 +986,48 @@ class Communities(_Summary):
     default 5; ties make it smaller),
     and any exceedance gives at least two communities; the automatic
     count is a heuristic, and ``n`` can be given instead.  The shift null
-    circularly shifts each column of each subject by its own lag (the K
-    lags of a subject are distinct, drawn without replacement from
-    ``[L, T - L]``; a recording with fewer than K such lags raises
-    ``ValueError`` asking for ``n``).  It assumes that dependence between
+    circularly shifts each column of each subject by a lag from the n
+    integers in ``[L, T - L]``: when K <= n, the K lags of a subject are
+    distinct (drawn without replacement); when K > n, each lag is used
+    ``K // n`` or ``ceil(K / n)`` times within a subject, and columns that
+    share a lag (a fraction [n q (q - 1) + 2 r q] / [K (K - 1)] of the
+    column pairs, K = q n + r: 1/231 at K = 22, n = 21) keep their
+    dependence in that surrogate, and a ``UserWarning`` says so.  It assumes that dependence between
     columns does not survive a relative shift of the sizes drawn; strongly
-    autocorrelated signals can violate this.  With events, whole columns
+    autocorrelated signals can violate this.  In ``features`` and
+    ``two_path_step``, ``L = min(T // 4, max(10, 10 * sd))``, with sd =
+    ``sqrt(params["var"])`` when the step's kernel parameters (or, for
+    None, the kernel function's default parameters) have a ``"var"`` key,
+    and sd = 5 samples otherwise: the width parameters of
+    ``laplace_weights`` (``scale``), ``mexican_hat_weights`` (``sigma``),
+    ``t_weights`` (``df``), ``boxcar_weights`` (``width``) and of custom
+    kernels without ``"var"`` are not read, so ``L = min(T // 4, 50)`` for
+    them, as for ``uniform_weights`` and for ``eye_weights`` on the
+    feeding path.  With events, whole columns
     are shifted across event boundaries while the event masks stay
-    fixed.  ``fits_[-1]["n"]`` is the number of communities the
-    clustering found.  Calling the instance fits to the given units and
+    fixed.  The surrogates' squared
+    correlations are averaged over every ``s``-th timepoint, where ``s`` is
+    the largest step at which two rows of the kernel (the row of the middle
+    timepoint and its shifts) still overlap by ``exp(-1/4)`` (the standard
+    deviation, rounded down, for ``gaussian_weights``; 1 for
+    ``eye_weights``): correlations at closer timepoints are estimated from
+    nearly the same samples (on 96 noise inputs of 4 sizes the threshold
+    was 1.000 to 1.002 times the threshold from every timepoint, standard
+    errors .001 to .003).  ``C`` is centered on the median over all pairs, as in
+    ``WeightedStrength(center="median")`` (``WeightedStrength`` centers on
+    the lower cluster by default): with communities of 18 and 6 nodes and loadings
+    0.4 and 0.2 (see ``WeightedStrength``), the
+    automatic count found 6 to 8 communities (adjusted Rand index 0.39 to
+    0.90 against the two planted ones) at seeds 0-2, and 2 with equal
+    loadings at seeds 0, 1 and 3 (3 at seed 2).  ``fits_[-1]["n"]`` is the
+    number of communities the clustering found.  Calling the instance fits to the given units and
     transforms the same units; the communities come from the data being
-    summarized.  ``fit`` and ``transform`` separate the two.  The
+    summarized.  ``fit`` and ``transform`` separate the two; with
+    ``signed=True``, ``transform`` matches units to the fitted units by
+    position when their numbers are equal (unit u gets the signs of the
+    mean correlations fitted to unit u), and ``transform(...,
+    fit_index=...)`` names the fitted unit of each unit instead (see
+    ``transform``).  The
     correlations must be finite (NaN or infinite values, on the diagonal
     too, raise ``ValueError``).
 
@@ -879,40 +1163,55 @@ def _auto_emitter(summary, fit, K, order=None):
 _PEAK_PER_BLOCK = 32  # times b * K * T: block arrays and estimator temporaries
 _PEAK_PER_DATA = 16  # times T * K: the estimator's per-feature terms
 _PEAK_PER_SUBJECT = 6  # times T * K per subject: stacked data, references, outputs
-_PEAK_PER_KERNEL = 7  # times T * T: kernel copies of both orientations
+_PEAK_PER_KERNEL = 7  # times T * T: kernel copies of both orientations (arrays)
 _PEAK_PER_UNIT_PAIRS = 6  # times K * K per subject: accumulators and fitted weights
 _FISHER_CHUNKS = 16  # the Fisher average of a block runs on 1/16 of it at a time
 
 
-def _streamed_peak_elements(T, K, S, b):
+def _streamed_kernel_elements(T, dense=False):
+    """
+    Float64 elements the kernels of a streamed step hold while both
+    orientations are read: ``7 T**2`` for arrays (``dense``), and for a
+    ``LagKernel`` at most that and two kernels' worth of
+    ``helpers._kernel_work_elements``.
+    """
+    T = int(T)
+    dense_elements = _PEAK_PER_KERNEL * T * T
+    if dense:
+        return dense_elements
+    return min(dense_elements, 2 * _kernel_work_elements(T, dense_elements))
+
+
+def _streamed_peak_elements(T, K, S, b, dense=False):
     """
     Number of float64 elements a streamed step holds at its peak, for S
     subjects of T timepoints and K features and row blocks of b rows:
     ``32 b K T`` (the block, its other orientation and the estimator's
     temporaries) ``+ 16 T K`` (the estimator's per-feature terms) ``+ 6 S T
-    K`` (stacked data, references, outputs of up to 4K columns) ``+ 7 T**2``
-    (kernel copies of both orientations) ``+ 6 S K**2`` (accumulators and
-    fitted weights).  The coefficients are measured with ``tracemalloc``
-    (autofc and isfc, with and without NaN samples), with margin; the
-    caller's inputs (data and kernels) are not included.
+    K`` (stacked data, references, outputs of up to 4K columns) ``+`` the
+    kernels (``_streamed_kernel_elements``: ``7 T**2`` for T x T arrays,
+    ``dense``; linear in T for the built-in kernels at large T) ``+ 6 S
+    K**2`` (accumulators and fitted weights).  The coefficients are measured
+    with ``tracemalloc`` (autofc and isfc, with and without NaN samples),
+    with margin; the caller's inputs (data and kernels) are not included.
     """
     T, K, S, b = int(T), int(K), int(S), int(b)
     return (
         _PEAK_PER_BLOCK * b * K * T
         + _PEAK_PER_DATA * T * K
         + _PEAK_PER_SUBJECT * S * T * K
-        + _PEAK_PER_KERNEL * T * T
+        + _streamed_kernel_elements(T, dense)
         + _PEAK_PER_UNIT_PAIRS * S * K * K
     )
 
 
-def _block_rows_for(T, K, S, max_bytes):
+def _block_rows_for(T, K, S, max_bytes, dense=False):
     """
     The largest number of rows per block b (at most K) whose peak
-    (``8 * _streamed_peak_elements(T, K, S, b)`` bytes) fits in
+    (``8 * _streamed_peak_elements(T, K, S, b, dense)`` bytes) fits in
     ``max_bytes``; 0 if one row does not fit.
     """
-    fixed = 8 * _streamed_peak_elements(T, K, S, 0)
+    fixed = 8 * _streamed_peak_elements(T, K, S, 0, dense)
     per_row = 8 * _PEAK_PER_BLOCK * int(K) * int(T)
     if max_bytes < fixed + per_row:
         return 0
@@ -1016,7 +1315,10 @@ class _Units:
         S = len(self.subjects)
         if grouping is None:
             self.kernels, self.group_of = _subject_kernels(kernels, S)
-            self.kernels = [np.asarray(k, dtype=np.float64) for k in self.kernels]
+            self.kernels = [
+                k if isinstance(k, LagKernel) else np.asarray(k, dtype=np.float64)
+                for k in self.kernels
+            ]
         else:
             # (kernels, group_of) of another _Units with the same subjects' kernels
             self.kernels, self.group_of = grouping
@@ -1024,8 +1326,13 @@ class _Units:
             self.weights = None
             self.stacked = None
         else:
-            given = 1 - np.eye(S) if self.kind == "isfc" else None
-            self.weights = _subject_weight_matrix(self.subjects, given)
+            # wisfc's default weights correlate the subjects' static
+            # correlation matrices: computed on the first call of blocks(),
+            # in that call's blocks of rows, so they fit the step's budget
+            self.weights = (
+                _subject_weight_matrix(self.subjects, 1 - np.eye(S))
+                if self.kind == "isfc" else None
+            )
             self.stacked = np.stack(self.subjects, axis=2)
         self._mean = _nan_weighted_mean
 
@@ -1039,6 +1346,8 @@ class _Units:
         a = self.subjects[s]
         if self.kind == "auto":
             return _unit_row_blocks(a, a, self.kernel(s), True, b)
+        if self.weights is None:
+            self.weights = _subject_weight_matrix(self.subjects, None, rows_per_block=b)
         ref = self._mean(self.stacked, self.weights[s, :])
         symmetric = bool(np.array_equal(a, ref, equal_nan=True))
         return _unit_row_blocks(a, ref, self.kernel(s), symmetric, b)
@@ -1069,35 +1378,201 @@ def _accumulate_units(units, K, T_out, signed, b, masks=None):
 
 def _shift_lags(rng, T, K, L):
     """
-    K distinct circular lags drawn without replacement from the integers in
-    ``[L, T - L]`` with the generator ``rng``.  Raise ``ValueError`` when
-    there are fewer than K such integers.
+    K circular lags from the n integers in ``[L, T - L]``, drawn with the
+    generator ``rng``.
+
+    When K <= n: K distinct lags drawn without replacement
+    (``L + rng.choice(n, K, replace=False)``).  When K > n: a random
+    permutation of the n lags is repeated, truncated to K and shuffled with
+    the same generator, so each lag is used ``K // n`` or ``ceil(K / n)``
+    times.  Columns that share a lag keep their dependence under that
+    surrogate: with K = q n + r > n, a fraction
+    [n q (q - 1) + 2 r q] / [K (K - 1)] of the column pairs share a lag
+    (``_shared_lag_fraction``; below 1 / n, and near it only when K is much
+    larger than n).  Raise ``ValueError`` when there is no lag (n < 1).
     """
     n_lags = int(T) - 2 * int(L) + 1
-    if n_lags < K:
+    K = int(K)
+    if n_lags < 1:
         raise ValueError(
-            f"the recording is too short for the shift null with this many "
-            f"columns: T = {T} gives {max(n_lags, 0)} distinct lags in "
-            f"[{L}, {T - L}] for K = {K} columns; give the number of "
-            "communities n."
+            f"the recording is too short for the shift null: T = {T} gives "
+            f"no lag in [{L}, {T - L}]; give the number of communities n."
         )
-    return int(L) + rng.choice(n_lags, size=int(K), replace=False)
+    if K <= n_lags:
+        return int(L) + rng.choice(n_lags, size=K, replace=False)
+    lags = np.tile(rng.permutation(n_lags), -(-K // n_lags))[:K]
+    rng.shuffle(lags)
+    return int(L) + lags
+
+
+def _shared_lag_fraction(K, n_lags):
+    """
+    The fraction of the K (K - 1) / 2 column pairs that share a lag in each
+    draw of ``_shift_lags`` with ``n_lags`` lags: with K = q n + r (n the
+    number of lags), r lags are used q + 1 times and n - r lags q times, so
+    the fraction is [n q (q - 1) + 2 r q] / [K (K - 1)] (0 when K <= n).
+    """
+    K, n = int(K), int(n_lags)
+    if K < 2:
+        return Fraction(0)
+    q, r = divmod(K, n)
+    return Fraction(n * q * (q - 1) + 2 * r * q, K * (K - 1))
+
+
+# For a stationary built-in kernel (``_stationary``), the shift null
+# averages the surrogates' squared correlations over every s-th timepoint
+# (any other kernel: every timepoint): s is the largest step at which two rows of the kernel
+# still have this normalized overlap (for a Gaussian kernel: its standard
+# deviation, rounded down).  Correlations at timepoints closer than that are
+# estimated from nearly the same samples; measured on 96 noise inputs of 4
+# sizes, the threshold from every s-th timepoint was 1.000 to 1.002 times
+# the threshold from every timepoint (s.e. .001 to .003).  The level
+# is exp(-1/4), the overlap of two Gaussian rows one standard deviation
+# apart, less a margin for round-off.
+_NULL_ROW_OVERLAP = float(np.exp(-0.25)) * (1 - 1e-6)
+
+
+def _null_row_stride(kernel):
+    """
+    The step ``s`` between the timepoints at which the shift null evaluates
+    a kernel: the largest ``d >= 1`` such that the kernel's row at the
+    middle timepoint, shifted by every step up to ``d``, keeps a normalized
+    overlap ``sum(w[i] w[i + d]) / sum(w**2)`` of at least
+    ``_NULL_ROW_OVERLAP``, and at most ``T // 8``; 1 when no step does.
+    The row is the kernel's as it is (restricted by ``include_timepoints``,
+    ``include_zero``, ``exclude_timepoints`` and events), so an array and
+    the equal ``LagKernel`` give the same step.  The shift null uses the
+    step only for ``_stationary`` kernels (see ``_null_stride``); the
+    overlaps come from one FFT of the row, so the cost is O(L log L) for a
+    row of L non-zero lags.
+    """
+    if isinstance(kernel, LagKernel):
+        if kernel.empty:
+            return 1
+        middle = kernel.T // 2
+        c0, c1 = kernel.span(middle, middle + 1)
+        row = kernel.block(middle, middle + 1, c0, c1)[0]
+        T = kernel.T
+    else:
+        weights = np.asarray(kernel, dtype=np.float64)
+        if weights.ndim != 2 or weights.shape[0] == 0:
+            return 1
+        row = weights[weights.shape[0] // 2]
+        T = weights.shape[1]
+    row = np.nan_to_num(row, nan=0.0, posinf=0.0, neginf=0.0)
+    row = row[np.flatnonzero(row)[0]: np.flatnonzero(row)[-1] + 1] if row.any() else row
+    norm = float(row @ row)
+    last = min(len(row) - 1, T // 8)
+    if norm <= 0 or last < 1:
+        return 1
+    # the overlaps at every step at once, from one FFT of the row (the loop
+    # of dot products it replaces took O(len(row) * stride) operations, T**2
+    # / 8 for the uniform kernel); the FFT's round-off (about 1e-16 of the
+    # norm) is far below the margin of _NULL_ROW_OVERLAP
+    n = 1 << int(2 * len(row) - 1).bit_length()
+    f = np.fft.rfft(row, n)
+    overlap = np.fft.irfft(f * np.conj(f), n)[1: last + 1] / norm
+    below = np.flatnonzero(overlap < _NULL_ROW_OVERLAP)
+    return max(1, int(below[0])) if below.size else int(last)
+
+
+def _stationary(kernel):
+    """
+    True for a ``LagKernel`` whose rows are all the same lag profile, cut
+    only by the ends of the recording: no events, no ``include_timepoints``
+    other than "all", no ``exclude_timepoints``, finite weights.  Only such
+    a kernel's null is evaluated at every s-th timepoint: the rows left out
+    are then shifted copies of the rows kept, so leaving them out does not
+    change which estimator a row gets (rows with fewer than 3 weights, the
+    delta kernel's co-fluctuations).  Arrays, and any other kernel, may have
+    rows that differ (zero rows, single-weight rows): their null is
+    evaluated at every timepoint.
+    """
+    return (
+        isinstance(kernel, LagKernel) and kernel.labels is None
+        and kernel.include == "all" and kernel.exclude is None
+        and kernel._finite and not kernel.empty
+    )
+
+
+def _null_stride(kernels):
+    """The step of the shift null for these kernels: the smallest
+    ``_null_row_stride`` when every kernel is ``_stationary``, else 1."""
+    kernels = kernels if isinstance(kernels, (list, tuple)) else [kernels]
+    if not all(_stationary(k) for k in kernels):
+        return 1
+    return min(_null_row_stride(k) for k in kernels)
+
+
+def _every_nth_row(kernel, stride):
+    """Every ``stride``-th row of a kernel, starting at row ``stride // 2``:
+    an ``_EveryNthRow`` for a ``LagKernel``, the rows of an array."""
+    if isinstance(kernel, LagKernel):
+        return _EveryNthRow(kernel, stride)
+    return np.ascontiguousarray(kernel[stride // 2:: stride])
+
+
+class _EveryNthRow:
+    """
+    Every ``stride``-th row of a ``LagKernel``, starting at row ``stride //
+    2``, with the interface the estimator reads (``shape``, ``chunks``,
+    ``block``): a (T', T) kernel whose rows are computed chunk by chunk.
+    """
+
+    def __init__(self, kernel, stride):
+        self.kernel = kernel
+        self.stride = int(stride)
+        self.rows = np.arange(self.stride // 2, kernel.shape[0], self.stride)
+        self.shape = (len(self.rows), kernel.shape[1])
+
+    def _rows(self, i0, i1):
+        return int(self.rows[i0]), int(self.rows[i1 - 1]) + 1
+
+    def chunks(self, size):
+        """``(i0, i1, c0, c1, key)`` for consecutive chunks of ``size`` rows."""
+        for i0 in range(0, len(self.rows), size):
+            i1 = min(len(self.rows), i0 + size)
+            t0, t1 = self._rows(i0, i1)
+            c0, c1 = self.kernel.span(t0, t1)
+            key = self.kernel.key(t0, t1)
+            yield i0, i1, c0, c1, None if key is None else key + (self.stride,)
+
+    def block(self, i0, i1, c0, c1):
+        """Rows ``i0:i1`` (of the kept rows), columns ``c0:c1`` (a new array).
+        Only the kept rows are computed, one at a time: the rows between
+        them are never built."""
+        out = np.empty((i1 - i0, c1 - c0))
+        for n, t in enumerate(self.rows[i0:i1]):
+            out[n] = self.kernel.block(int(t), int(t) + 1, c0, c1)[0]
+        return out
 
 
 def _shift_null_threshold(
-    subjects, kernels, n_null=5, bandwidth=5.0, max_block_elements=None
+    subjects, kernels, n_null=5, bandwidth=5.0, max_block_elements=None,
+    row_stride=None,
 ):
     """
     Threshold of the automatic number of communities (``autofc`` steps).
 
     Each repetition circularly shifts every column of every subject's data by
-    a lag drawn with ``numpy.random.default_rng(0)`` from the integers in
+    a lag drawn with ``numpy.random.default_rng(0)`` from the n integers in
     ``[L, T - L]``, ``L = min(T // 4, max(10, 10 * bandwidth))``, without
-    replacement within a subject (``_shift_lags``: the K columns of a subject
-    get K distinct lags); computes the subjects' pair weights ``w`` with the given
+    replacement within a subject when K <= n (``_shift_lags``: the K columns
+    of a subject get K distinct lags); when K > n, each lag is used
+    ``K // n`` or ``ceil(K / n)`` times within a subject, and columns that
+    share a lag (a fraction [n q (q - 1) + 2 r q] / [K (K - 1)] of the
+    column pairs, K = q n + r) keep their dependence in that surrogate, and
+    one ``UserWarning`` per call says so; computes the subjects' pair weights ``w`` with the given
     kernels and ``autofc`` (streamed, in blocks of at most
     ``max_block_elements`` correlations; None: the estimator's default block
-    size, see ``_rows_per_block``); and records the
+    size, see ``_rows_per_block``), averaging the squared correlations over
+    every ``s``-th timepoint (rows ``s // 2, s // 2 + s, ...``), ``s`` being
+    ``row_stride`` or, when that is None, the smallest ``_null_row_stride``
+    of the kernels if every kernel is ``_stationary`` (a built-in kernel
+    without events, one-sided restriction or ``exclude_timepoints``) and 1
+    (every timepoint) otherwise: for kernels given as arrays, kernel
+    functions of your own and restricted kernels, whose rows can differ
+    (``features`` and ``two_path_step`` pass None); and records the
     largest eigenvalue of ``C = Wbar - median(Wbar over i < j)`` (zero
     diagonal).  Returns the maximum over ``n_null`` repetitions.  Lags are
     drawn per repetition, subject by subject, K at a time.  NumPy's global
@@ -1113,9 +1588,7 @@ def _shift_null_threshold(
     Raises
     ------
     ValueError
-        If T < 40, if ``[L, T - L]`` holds fewer than K integers (the
-        recording is too short for the shift null with this many columns),
-        or for inputs ``autofc`` rejects.
+        If T < 40, or for inputs ``autofc`` rejects.
     """
     subjects = _as_subjects(subjects)
     T, K = subjects[0].shape
@@ -1126,11 +1599,28 @@ def _shift_null_threshold(
         )
     L = int(min(T // 4, max(10, 10 * float(bandwidth))))
     n_null = _check_n_null(n_null)
-    if T - 2 * L + 1 < K:
-        _shift_lags(None, T, K, L)  # raises the ValueError that asks for n
+    n_lags = T - 2 * L + 1
+    if 1 <= n_lags < K:
+        fraction = _shared_lag_fraction(K, n_lags)
+        warnings.warn(
+            f"The shift null has more columns (K = {K} columns) than "
+            f"distinct lags ({n_lags} distinct lags in [{L}, {T - L}] at "
+            f"T = {T}): each lag is used {K // n_lags} or "
+            f"{-(-K // n_lags)} times within a subject, and the columns that "
+            f"share a lag ({fraction} = {float(fraction):.3g} of the column "
+            "pairs) keep their dependence in the surrogates.  To avoid this, "
+            "give the number of communities n.",
+            UserWarning,
+            stacklevel=2,
+        )
     rng = np.random.default_rng(0)
     probe = _Units(subjects, kernels, autofc)
-    T_out = probe.kernels[0].shape[0]
+    null_kernels = probe.kernels
+    if row_stride is None:
+        row_stride = _null_stride(null_kernels)
+    if row_stride > 1:
+        null_kernels = [_every_nth_row(k, int(row_stride)) for k in null_kernels]
+    T_out = null_kernels[0].shape[0]
     b = _rows_per_block(max_block_elements, T_out, K, T, probe.has_nan)
     rows = np.arange(T)[:, None]
     cols = np.arange(K)
@@ -1141,7 +1631,7 @@ def _shift_null_threshold(
             lags = _shift_lags(rng, T, K, L)
             shifted.append(x[(rows - lags[None, :]) % T, cols])
         units = _Units(
-            shifted, kernels, autofc, grouping=(probe.kernels, probe.group_of)
+            shifted, kernels, autofc, grouping=(null_kernels, probe.group_of)
         )
         states = _accumulate_units(units, K, T_out, False, b)
         del units, shifted
@@ -1161,6 +1651,7 @@ def _streamed_summary(
     path=None,
     auto_n=False,
     bandwidth=5.0,
+    null_row_stride=None,
 ):
     """
     A summary of the subjects' correlations, computed in row blocks.
@@ -1200,6 +1691,10 @@ def _streamed_summary(
         in ``higher_order`` pass True for ``autofc`` only).  Default: False.
     bandwidth : float
         Kernel standard deviation for the shift null's lags.  Default: 5.0.
+    null_row_stride : int or None
+        ``row_stride`` of ``_shift_null_threshold`` (None: every s-th
+        timepoint for stationary built-in kernels, every timepoint
+        otherwise, chosen only when the null runs).  Default: None.
 
     Returns
     -------
@@ -1240,6 +1735,7 @@ def _streamed_summary(
             n_null=summary.n_null,
             bandwidth=bandwidth,
             max_block_elements=max_block_elements,
+            row_stride=null_row_stride,
         )
     summary._check_fit(K, null_threshold)
 

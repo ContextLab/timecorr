@@ -240,6 +240,27 @@ def test_zero_variance_window_gives_zero():
     assert np.all(np.diag(out[:, :, 50]) == 1.0)
 
 
+@pytest.mark.parametrize("nan", [False, True])
+def test_tiny_scale_features_give_scale_invariant_correlations(nan):
+    # Features scaled by 1e-130 have kernel-weighted variances near 1e-260,
+    # whose product underflows to 0 in float64; the correlations must still
+    # equal those of the unscaled features, without a RuntimeWarning.
+    rng = _rng(31)
+    T = 60
+    x = rng.randn(T, 4)
+    x[:, 1] += x[:, 0]
+    if nan:
+        x[5, 2] = np.nan
+    w = gaussian_weights(T, {"var": 30})
+    tiny = x * 1e-130
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        auto = wcorr(tiny, tiny, w)
+        cross = wcorr(tiny, tiny[:, 1:], w)
+    assert np.allclose(auto, wcorr(x, x, w), atol=1e-10, rtol=0)
+    assert np.allclose(cross, wcorr(x, x[:, 1:], w), atol=1e-10, rtol=0)
+
+
 def test_constant_feature_everywhere():
     rng = _rng(12)
     x = rng.randn(30, 3)
@@ -1214,3 +1235,66 @@ class TestCorrRowBlocks:
         a = _iterator_data(self.T, self.K)["random"]
         with pytest.raises(ValueError, match="symmetric"):
             _corr_row_blocks(a, a[:, :3], gaussian_weights(self.T), True)
+
+
+# Variances whose product underflows: rows whose only weights are tiny (for
+# example the far tail of a narrow Gaussian next to NaN samples) used to give
+# a zero denominator, a RuntimeWarning and r = +-1 (or NaN).
+@pytest.mark.parametrize("with_nan", [False, True])
+def test_tiny_weights_give_the_weighted_correlation(with_nan):
+    rng = np.random.RandomState(11)
+    T = 12
+    a = rng.randn(T, 3)
+    if with_nan:
+        a[0, 2] = np.nan
+    w = np.zeros((2, T))
+    w[0, 3:9] = 1e-170  # products of the variances underflow to 0
+    w[1, 3:9] = 1.0  # the same row at ordinary scale
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = tc.wcorr(a, a, w)
+    assert np.all(np.isfinite(out))
+    np.testing.assert_allclose(out[:, :, 0], out[:, :, 1], rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(out[:, :, 1], np.corrcoef(a[3:9].T), rtol=1e-12, atol=1e-12)
+
+
+# Variance products that are subnormal (inaccurate but non-zero) or overflow,
+# and kernel rows at extreme scales: each correlation equals that of the
+# well-scaled equivalent.
+@pytest.mark.parametrize("with_nan", [False, True])
+@pytest.mark.parametrize("scale", [1e-162, 1e160, 1e-300, 1e300])
+def test_extreme_kernel_row_scales_give_the_well_scaled_correlation(scale, with_nan):
+    rng = np.random.RandomState(11)
+    T = 12
+    a = rng.randn(T, 3)
+    if with_nan:
+        a[0, 2] = np.nan
+    w = np.zeros((2, T))
+    w[0, 3:9] = scale
+    w[1, 3:9] = 1.0  # the same row at ordinary scale
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = tc.wcorr(a, a, w)
+    assert np.all(np.isfinite(out))
+    np.testing.assert_allclose(out[:, :, 0], out[:, :, 1], rtol=1e-9, atol=0)
+    np.testing.assert_allclose(out[:, :, 1], np.corrcoef(a[3:9].T), rtol=1e-12, atol=1e-12)
+
+
+@pytest.mark.parametrize("with_nan", [False, True])
+@pytest.mark.parametrize("scale", [2e-81, 1e80])
+def test_extreme_data_scales_give_the_well_scaled_correlation(scale, with_nan):
+    # variances near 2e-162 (product subnormal) or 5e159 (product overflows)
+    t = np.arange(100)
+    x = np.stack([np.sin(t), np.sin(t), np.cos(0.3 * t) + 0.1 * np.sin(t)], axis=1)
+    if with_nan:
+        x[5, 2] = np.nan
+    w = tc.uniform_weights(100)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = tc.wcorr(x * scale, x * scale, w)
+        mixed = tc.wcorr(x * scale, x, w)
+    expected = tc.wcorr(x, x, w)
+    assert np.all(np.isfinite(out))
+    np.testing.assert_allclose(out, expected, rtol=1e-9, atol=0)
+    np.testing.assert_allclose(mixed, expected, rtol=1e-9, atol=0)
+    np.testing.assert_allclose(out[0, 1], 1.0, rtol=1e-12)

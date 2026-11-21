@@ -4,8 +4,11 @@ import warnings
 
 import numpy as np
 
+from ._kernels import CHUNK, as_kernel, blocks, check_exclude
 from .events import distinct_event_sets, mask_kernel, resolve_events
 from .helpers import (
+    _as_kernel_array,
+    _lag_kernel,
     autofc,
     format_data,
     gaussian_weights,
@@ -27,11 +30,21 @@ def _kernel_smooth(x, weights):
     Row t of ``weights`` is the kernel used at timepoint t.  NaN samples get no
     weight.  Entries with no weighted, observed sample are undefined; they are
     set to 0 and one warning reports how many timepoints were affected.
+    ``weights`` is an array or a ``LagKernel``, read a chunk of rows at a
+    time over the columns where the chunk can have weight.  As in the
+    estimator, an infinite sample enters every row's sums (``0 * inf`` is
+    NaN), so with one every chunk spans all columns.
     """
-    w = np.abs(weights)
     valid = ~np.isnan(x)
-    num = w @ np.where(valid, x, 0.0)
-    den = w @ valid.astype(np.float64)
+    observed = np.where(valid, x, 0.0)
+    valid = valid.astype(np.float64)
+    num = np.zeros(observed.shape)
+    den = np.zeros(observed.shape)
+    full = not np.all(np.isfinite(observed))
+    for t0, t1, c0, c1, _, w in blocks(as_kernel(weights), CHUNK, np.abs, full=full):
+        if c1 > c0:
+            num[t0:t1] = w @ observed[c0:c1]
+            den[t0:t1] = w @ valid[c0:c1]
     out = np.zeros_like(num)
     np.divide(num, den, out=out, where=den > 0)
     undefined = np.any(den <= 0, axis=1)
@@ -63,8 +76,11 @@ def _mask_for_subjects(weights, boundaries, subjects):
 
 
 def _temporal_filter(T, k):
-    """Band of half-width |k| around the diagonal (k >= 0), or its complement."""
-    k = np.round(k)
+    """
+    Band of half-width |k| around the diagonal (k >= 0), or its complement;
+    k is rounded to the nearest integer (as for the built-in kernels).
+    """
+    k = int(check_exclude(k))
     filt = np.eye(T)
     for i in np.arange(1, np.min([np.abs(k) + 1, T])):
         filt = filt + np.eye(T, k=np.abs(i)) + np.eye(T, k=-np.abs(i))
@@ -85,24 +101,33 @@ def _shaped_kernel(
     """
     The T x T kernel of ``timecorr`` before the events restriction:
     ``weights_function(T, weights_params)`` shaped by ``include_timepoints``,
-    ``include_zero`` and ``exclude_timepoints``.
+    ``include_zero`` and ``exclude_timepoints``.  For a built-in kernel
+    function it is a ``LagKernel``, whose rows are computed when they are
+    read (no T x T array); for any other function, the array it returns.
     """
-    weights = weights_function(T, weights_params)
-
+    exclude_timepoints = check_exclude(exclude_timepoints)
     include_timepoints = include_timepoints.lower()
+    sides = {"all": "all", "backward": "backward", "pre": "backward",
+             "forward": "forward", "post": "forward"}
+    if include_timepoints not in sides:
+        raise ValueError(
+            f"Invalid option for include_timepoints: '{include_timepoints}'.  "
+            "Must be one of: 'all', 'backward', 'pre', 'forward', or 'post'."
+        )
+    lazy = _lag_kernel(T, weights_function, weights_params, sides[include_timepoints],
+                       include_zero, exclude_timepoints)
+    if lazy is not None:
+        return lazy
+
+    weights = weights_function(T, weights_params)
     if include_timepoints == "all":
         if not include_zero:
             weights = weights.copy()
             np.fill_diagonal(weights, 0)
     elif include_timepoints in ("backward", "pre"):
         weights = one_sided(weights, "backward", include_zero)
-    elif include_timepoints in ("forward", "post"):
-        weights = one_sided(weights, "forward", include_zero)
     else:
-        raise ValueError(
-            f"Invalid option for include_timepoints: '{include_timepoints}'.  "
-            "Must be one of: 'all', 'backward', 'pre', 'forward', or 'post'."
-        )
+        weights = one_sided(weights, "forward", include_zero)
 
     if not (exclude_timepoints is None):
         weights = np.multiply(_temporal_filter(T, exclude_timepoints), weights)
@@ -182,8 +207,12 @@ def timecorr(
     estimator weights the covariance and variance sums as well as the means;
     it differs from Eq. 4 of Owen, Chang & Manning (2021) and from timecorr
     0.2.0, where the kernel set only the means, so numerical results differ
-    from 0.2.0.  For higher-order correlations computed as in the paper
-    (Fig. 10), see ``timecorr.features``.
+    from 0.2.0.  A feature whose kernel-weighted variance at a timepoint is
+    zero, or zero up to round-off relative to its kernel-weighted mean
+    square (``wcorr`` gives the rule; it does not depend on the units of the
+    data), has correlation 0 with every feature there.  For higher-order
+    correlations computed as in the paper (Fig. 10), see
+    ``timecorr.features``.
 
     Parameters
     ----------
@@ -200,7 +229,13 @@ def timecorr(
         ``t_weights``, ``mexican_hat_weights``, ``boxcar_weights``,
         ``uniform_weights``, ``eye_weights`` (a delta kernel, which gives
         co-fluctuations: products of the z-scored series), or a function of
-        your own with the same signature.
+        your own with the same signature.  The built-in kernel functions are
+        not called: the same weights are computed 128 rows at a time, over
+        the columns where those rows can have weight, so with ``cfun``
+        ``autofc``, ``isfc``, ``wisfc`` or None no T x T array is allocated
+        and memory grows linearly in T (see Notes).  A function of your own
+        is called, and its T x T array is used; a ``cfun`` of your own
+        receives T x T arrays.
     weights_params : dict or None
         Parameters of the kernel, e.g. ``{"var": 100}`` for
         ``gaussian_weights``.  Default: None (the kernel's defaults:
@@ -210,13 +245,19 @@ def timecorr(
         Which timepoints may contribute to the estimate at each timepoint:
         "all" (default), "backward" (alias "pre": only timepoints at or before
         ``t``), or "forward" (alias "post": only timepoints at or after ``t``).
-        Applied to the kernel matrix after it is built (see ``one_sided``).
+        Applied to the kernel after it is built (see ``one_sided``).  The
+        estimator centers each feature on its mean over all timepoints, so
+        an estimate whose kernel-weighted variance is a small fraction (near
+        1e-10, see ``wcorr``) of the mean square of the centered feature can
+        change, by round-off or between 0 and a non-zero value, when
+        timepoints outside its kernel row change; other estimates do not.
     exclude_timepoints : int or None
         Further restricts the kernel by distance from ``t``.  A positive value
         ``x`` keeps only the timepoints at most ``x`` samples from ``t``; a
         negative value ``-x`` removes them (``t`` itself included), keeping
         only timepoints more than ``x`` samples away.  Real values are rounded
-        to the nearest integer.  Default: None (no restriction).
+        to the nearest integer; a non-finite value (inf or NaN) raises
+        ``ValueError``.  Default: None (no restriction).
     combine : function
         Applied to the per-subject results: ``null_combine`` (default; one
         result per subject), ``corrmean_combine`` (Fisher z average),
@@ -241,7 +282,8 @@ def timecorr(
         ``helpers.reduce``): a hypertools / scikit-learn model name such as
         "PCA", "FastICA", "FactorAnalysis" or "IncrementalPCA"; a dict such as
         ``{"model": "PCA", "params": {"whiten": True}}``; a graph measure
-        ("eigenvector_centrality", "pagerank_centrality", "strength"); a
+        ("eigenvector_centrality", "pagerank_centrality",
+        "pagerank_centrality_abs", "strength"); a
         squared-correlation summary (``tc.WeightedStrength``,
         ``tc.Communities``, or the strings "weighted_strength",
         "weighted_strength_split", "communities"); or a callable
@@ -324,6 +366,14 @@ def timecorr(
 
     Notes
     -----
+    A feature is treated as constant within a kernel row (correlation 0, see
+    ``wcorr``) when its kernel-weighted variance is at most 1e-10 of its
+    centered mean square, or when its ratio of kernel-weighted standard
+    deviation to root mean square is at most 48 eps (1.07e-14, the
+    round-off this library's own arithmetic produces with a margin): a
+    feature on an offset of more than about 9.4e13 of its local standard
+    deviations counts as constant.
+
     With ``events``, the kernel gives no weight to timepoints outside the
     current block.  This is not statistical independence from the rest of the
     recording: the subject weights of ``wisfc`` and the reductions (``rfun``)
@@ -338,11 +388,30 @@ def timecorr(
     for ``autofc``); the reference is not restricted by the other subjects'
     events.  Subjects with identical boundaries share one kernel.  ``isfc``,
     ``wisfc`` and ``autofc`` receive the list of per-subject kernels in one
-    call, which holds one T x T kernel per distinct event set in memory.  Any
-    other ``cfun`` is called once per distinct event set with the full data
-    and one kernel (one T x T kernel at a time); it must return a list with
-    one array per subject, and subject s's output is taken from the call made
-    with subject s's kernel.
+    call (with a kernel function of your own, one T x T array per distinct
+    event set is held in memory).  Any other ``cfun`` is called once per
+    distinct event set with the full data and that event set's T x T kernel
+    array (the arrays of all distinct event sets are built before the first
+    call and held until the last); it must return a list with one array per
+    subject, and subject s's output is taken from the call made with subject
+    s's kernel.
+
+    Kernels and memory: with a built-in kernel function and ``cfun`` one of
+    ``isfc``, ``wisfc``, ``autofc`` or None, the kernel is never built as a
+    T x T array.  The estimator reads it 128 rows at a time, each chunk
+    over the columns where its rows have non-zero weight, and keeps at most
+    32 MB of such blocks.  A kernel function of your own is read the same
+    way, from its T x T array, so the correlations of a built-in kernel and
+    of the same kernel as an array are equal.  The smoothed values
+    (``cfun=None``) are computed a chunk of rows at a time too; an infinite
+    sample enters every row's sums, as in the full product.  The time grows
+    linearly in T once T is well above the kernel's span (the
+    largest lag with a non-zero weight in float64: 192 samples for a
+    Gaussian of variance 25, 385 at variance 100, 73,983 for the Laplace
+    kernel at its default scale of 100, 15,823 for the t kernel at its
+    default df of 100); the uniform kernel has weight at every lag, so its
+    time grows with ``T**2`` while its memory still grows linearly.  A
+    custom ``cfun`` receives T x T arrays.
 
     With per-subject events and a cross-subject correlation function (``isfc``,
     ``wisfc``), the timepoints that enter subject s's correlations at time t are those
@@ -403,6 +472,16 @@ def timecorr(
     per_subject = isinstance(kernels, list)
 
     if cfun:
+        if cfun not in _KERNEL_LIST_CFUNS:
+            # a correlation function of the user's receives T x T arrays
+            if per_subject:
+                arrays = {}
+                for k in kernels:  # subjects that share events share one array
+                    if id(k) not in arrays:
+                        arrays[id(k)] = _as_kernel_array(k)
+                kernels = [arrays[id(k)] for k in kernels]
+            else:
+                kernels = _as_kernel_array(kernels)
         if not per_subject or cfun in _KERNEL_LIST_CFUNS:
             corrs = cfun(data, kernels)
         else:

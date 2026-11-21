@@ -338,3 +338,298 @@ def test_reduce_is_deterministic_for_each_model(rfun):
     first = reduce(a, rfun=rfun, ndims=3)
     second = reduce(a, rfun=rfun, ndims=3)
     np.testing.assert_array_equal(first, second)
+
+
+# --- PageRank on signed correlations: ill-posed systems
+
+
+def _previous_pagerank(W, d=0.85):
+    # the package's algorithm at commit 863a412 (scipy LU solve, no checks)
+    from scipy import linalg
+
+    N = len(W)
+    deg = np.sum(W, axis=0)
+    deg[deg == 0] = 1
+    B = np.eye(N) - d * np.dot(W, np.diag(1 / deg))
+    r = linalg.solve(B, (1 - d) * (np.ones((N,)) / N))
+    return r / np.sum(r)
+
+
+def _agy_singular(a):
+    # valid correlation matrix (positive definite for a near 0.054)
+    return np.array([[1, -a, -a], [-a, 1, a], [-a, a, 1]], dtype=float)
+
+
+_AGY_A = (57 - np.sqrt(2841)) / 68
+
+
+def _pagerank_warnings(record):
+    return [
+        str(w.message) for w in record
+        if issubclass(w.category, UserWarning) and "pagerank_centrality" in str(w.message)
+    ]
+
+
+@pytest.mark.parametrize(
+    "M, expected, n_lstsq, n_uniform",
+    [
+        # 2 x 2, off-diagonal -3/37: B is singular, b in its range; the
+        # minimum-norm solution is the symmetric one
+        ((1 + 3 / 37) * np.eye(2) - 3 / 37, [0.5, 0.5], 1, 0),
+        # 3 x 3, off-diagonal -1/19: two-dimensional null space
+        ((1 + 1 / 19) * np.eye(3) - 1 / 19, [1 / 3] * 3, 1, 0),
+        # agy's exactly singular 3 x 3 (|r| about 0.054): inconsistent system,
+        # so the uniform vector
+        (_agy_singular(_AGY_A), [1 / 3] * 3, 0, 1),
+    ],
+)
+def test_pagerank_ill_posed_timepoint_falls_back_and_warns_once(
+    M, expected, n_lstsq, n_uniform
+):
+    K = len(M)
+    assert np.linalg.eigvalsh(M).min() > 0  # a valid correlation matrix
+    V = np.stack([mat2vec(np.eye(K)), mat2vec(M), mat2vec(np.eye(K))])
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        out = reduce(V, rfun="pagerank_centrality")
+    assert out.shape == (3, K) and np.all(np.isfinite(out))
+    np.testing.assert_allclose(out[1], expected, rtol=0, atol=1e-12)
+    # the well-posed timepoints are what the previous algorithm gave
+    for t in (0, 2):
+        assert np.array_equal(out[t], _previous_pagerank(vec2mat(V)[:, :, t]))
+    messages = _pagerank_warnings(record)
+    assert len(messages) == 1
+    message = messages[0]
+    assert "1 of 3 timepoints" in message
+    assert f"{n_lstsq} used the minimum-norm least-squares solution" in message
+    assert f"{n_uniform} the uniform vector" in message
+    assert "not always defined" in message
+
+
+def test_pagerank_one_warning_per_reduce_call_for_lists():
+    bad = _agy_singular(_AGY_A)
+    V1 = np.stack([mat2vec(np.eye(3)), mat2vec(bad)])
+    V2 = np.stack([mat2vec(bad), mat2vec(bad), mat2vec(np.eye(3))])
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        out = reduce([V1, V2], rfun="pagerank_centrality")
+    assert isinstance(out, list) and len(out) == 2
+    messages = _pagerank_warnings(record)
+    assert len(messages) == 1
+    assert "3 of 5 timepoints" in messages[0]
+    assert "0 used the minimum-norm least-squares solution" in messages[0]
+    assert "3 the uniform vector" in messages[0]
+    # a second call warns again (one warning per call, not per session)
+    with warnings.catch_warnings(record=True) as record:
+        warnings.simplefilter("always")
+        reduce(V1, rfun="pagerank_centrality")
+    assert len(_pagerank_warnings(record)) == 1
+
+
+def test_pagerank_well_posed_input_does_not_warn():
+    V = seeded_vectorized_corrs(T=20, K=6)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        reduce(V, rfun="pagerank_centrality")
+
+
+def test_pagerank_well_posed_outputs_unchanged_bit_for_bit():
+    rng = np.random.RandomState(7)
+    mats = [np.corrcoef(rng.randn(6, 10)) for _ in range(25)]
+    mats.append((1 - (-3 / 37)) * np.eye(4)[:4, :4] + (-3 / 37))  # K 4: well posed
+    # badly scaled (a column sum of -2e-12) but well posed: the solve is kept
+    mats.append(_agy_singular(0.5 + 1e-12))
+    for M in mats:
+        V = mat2vec(M)[None]
+        got = reduce(V, rfun="pagerank_centrality")[0]
+        # the matrix as reduce sees it (after vec2mat)
+        assert np.array_equal(got, _previous_pagerank(vec2mat(V)[:, :, 0]))
+
+
+# --- PageRank on non-negative weights |r| ('pagerank_centrality_abs')
+
+
+def _power_iteration_pagerank(A, d=0.85, tol=1e-15, max_iter=10000):
+    # Textbook PageRank by power iteration on the non-negative weights A
+    # (column j gives the out-links of node j, as in the package), uniform
+    # teleportation, and the mass of nodes without links (zero columns)
+    # spread uniformly.  Independent of the package's linear solve.
+    N = A.shape[0]
+    out = A.sum(axis=0)
+    dangling = out == 0
+    P = np.divide(A, out[None, :], out=np.zeros_like(A), where=~dangling[None, :])
+    r = np.full(N, 1.0 / N)
+    for _ in range(max_iter):
+        new = d * (P @ r) + d * r[dangling].sum() / N + (1 - d) / N
+        if np.abs(new - r).sum() < tol:
+            return new
+        r = new
+    raise AssertionError("power iteration did not converge")
+
+
+def _abs_pagerank_reference_series(V):
+    M = vec2mat(V)
+    return np.stack(
+        [_power_iteration_pagerank(np.abs(M[:, :, t])) for t in range(M.shape[2])]
+    )
+
+
+def _signed_test_matrices():
+    rng = np.random.RandomState(11)
+    mats = [
+        (1 + 3 / 37) * np.eye(2) - 3 / 37,       # singular signed system
+        (1 + 1 / 19) * np.eye(3) - 1 / 19,       # two-dimensional null space
+        _agy_singular(_AGY_A),                   # inconsistent signed system
+        _agy_singular(0.5 + 1e-12),              # column sum near zero
+        np.zeros((4, 4)),                        # no links at all
+        np.diag([1.0, 0.0, 2.0, 0.0]),           # isolated nodes
+        np.array([[0, -1, 0], [-1, 0, 0], [0, 0, 0]], dtype=float),
+        1e300 * np.corrcoef(rng.randn(5, 9)),    # large weights
+        1e-300 * np.corrcoef(rng.randn(5, 9)),   # tiny weights
+    ]
+    for K in (3, 6, 12):
+        for _ in range(5):
+            S = rng.uniform(-1, 1, (K, K))
+            mats.append((S + S.T) / 2)           # symmetric, signed, any diagonal
+        mats.append(np.corrcoef(rng.randn(K, K + 2)))
+    return mats
+
+
+def test_abs_pagerank_matches_power_iteration_without_warning():
+    for M in _signed_test_matrices():
+        V = mat2vec(M)[None]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            got = reduce(V, rfun="pagerank_centrality_abs")
+        assert got.shape == (1, len(M)) and np.all(np.isfinite(got))
+        assert np.all(got > 0)
+        np.testing.assert_allclose(got[0].sum(), 1.0, rtol=0, atol=1e-12)
+        np.testing.assert_allclose(
+            got, _abs_pagerank_reference_series(V), rtol=0, atol=1e-12
+        )
+
+
+def test_abs_pagerank_on_seeded_series_and_lists():
+    V = seeded_vectorized_corrs(T=40, K=7)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = reduce([V, -V], rfun="pagerank_centrality_abs")
+    expected = _abs_pagerank_reference_series(V)
+    np.testing.assert_allclose(out[0], expected, rtol=0, atol=1e-12)
+    # the sign of the weights does not matter
+    np.testing.assert_allclose(out[1], expected, rtol=0, atol=1e-12)
+
+
+def test_abs_pagerank_equals_signed_pagerank_on_non_negative_weights():
+    rng = np.random.RandomState(5)
+    for _ in range(10):
+        M = np.abs(np.corrcoef(rng.randn(6, 9)))
+        V = mat2vec(M)[None]
+        np.testing.assert_allclose(
+            reduce(V, rfun="pagerank_centrality_abs"),
+            reduce(V, rfun="pagerank_centrality"),
+            rtol=0, atol=1e-12,
+        )
+
+
+def test_abs_pagerank_differs_from_signed_pagerank_on_signed_weights():
+    V = seeded_vectorized_corrs(T=10, K=5)
+    a = reduce(V, rfun="pagerank_centrality_abs")
+    s = reduce(V, rfun="pagerank_centrality")
+    assert np.abs(a - s).max() > 1e-3
+
+
+def test_abs_pagerank_non_finite_timepoint_gives_nan_row():
+    V = seeded_vectorized_corrs(T=3, K=4)
+    V[1, 2] = np.nan
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = reduce(V, rfun="pagerank_centrality_abs")
+    assert np.all(np.isnan(out[1]))
+    np.testing.assert_allclose(
+        out[[0, 2]], _abs_pagerank_reference_series(V[[0, 2]]), rtol=0, atol=1e-12
+    )
+
+
+def test_abs_pagerank_is_a_graph_measure_not_a_model():
+    from timecorr.helpers import _check_rfun
+
+    _check_rfun("pagerank_centrality_abs")
+    with pytest.raises(ValueError, match="graph measures are given"):
+        _check_rfun({"model": "pagerank_centrality_abs"})
+    with pytest.raises(ValueError, match="ndims"):
+        reduce(seeded_vectorized_corrs(), rfun="pagerank_centrality_abs", ndims=2)
+
+
+GRAPH_MEASURES = (
+    "eigenvector_centrality",
+    "pagerank_centrality",
+    "pagerank_centrality_abs",
+    "strength",
+)
+
+
+def _one_node_expected(measure, w):
+    """Graph measure of the 1 x 1 matrix [[w]]: strength is the row sum w;
+    the unit eigenvector is [1]; PageRank normalized to sum 1 is [1]."""
+    return w if measure == "strength" else 1.0
+
+
+@pytest.mark.parametrize("measure", GRAPH_MEASURES)
+def test_graph_measures_with_one_node(measure):
+    # 1 x 1 matrices with signed, zero and unit weights, and a single timepoint
+    weights = np.array([1.0, 0.3, -0.5, 0.0])
+    V = weights[:, None]  # mat2vec of [[w]] is the one-entry vector [w]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = reduce(V, rfun=measure)
+        single = reduce(V[:1], rfun=measure)
+    assert out.shape == (4, 1)
+    expected = np.array([_one_node_expected(measure, w) for w in weights])
+    np.testing.assert_allclose(out[:, 0], expected, rtol=0, atol=1e-15)
+    assert single.shape == (1, 1)
+    np.testing.assert_allclose(single, out[:1], rtol=0, atol=0)
+
+    # through timecorr: one feature, its correlation with itself is 1
+    x = np.random.default_rng(0).standard_normal((50, 1))
+    got = __import__("timecorr").timecorr(x, rfun=measure)
+    assert got.shape == (50, 1)
+    np.testing.assert_allclose(got[:, 0], _one_node_expected(measure, 1.0), atol=1e-12)
+
+
+@pytest.mark.parametrize("measure", GRAPH_MEASURES)
+def test_graph_measures_with_two_nodes(measure):
+    r = np.array([0.4, -0.6, 0.9])
+    V = np.stack([mat2vec(np.array([[1.0, ri], [ri, 1.0]])) for ri in r])
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        out = reduce(V, rfun=measure)
+        single = reduce(V[:1], rfun=measure)
+    assert out.shape == (3, 2)
+    if measure == "strength":
+        expected = np.column_stack([1 + r, 1 + r])
+    elif measure == "eigenvector_centrality":
+        # eigenvalues 1 +- r; the top eigenvector is (1, sign(r)) / sqrt(2)
+        expected = np.full((3, 2), 1 / np.sqrt(2))
+    else:
+        # a symmetric 2 x 2 network: both nodes get rank 1/2
+        expected = np.full((3, 2), 0.5)
+    np.testing.assert_allclose(out, expected, rtol=0, atol=1e-12)
+    np.testing.assert_allclose(single, out[:1], rtol=0, atol=0)
+
+
+def test_pagerank_abs_scales_each_column_so_small_columns_survive():
+    # dividing by the largest entry of the matrix underflowed the column of
+    # 1e-20 to 0; PageRank depends only on each column's relative weights
+    from timecorr import helpers
+    v = mat2vec(np.array([[1e308, 0.0], [0.0, 1e-20]]))
+    r = helpers.reduce(np.atleast_2d(v), rfun="pagerank_centrality_abs")
+    np.testing.assert_allclose(r, [[0.5, 0.5]], rtol=1e-15)
+    np.testing.assert_allclose(
+        r, helpers.reduce(np.atleast_2d(v), rfun="pagerank_centrality"), rtol=1e-15)
+
+
+def test_pagerank_abs_of_no_nodes_is_empty():
+    from timecorr import helpers
+    out = helpers.reduce(np.zeros((3, 0)), rfun="pagerank_centrality_abs")
+    assert out.shape == (3, 0)

@@ -1,6 +1,5 @@
 # coding: utf-8
 import inspect
-import math
 import numbers
 import os
 import sys
@@ -12,9 +11,22 @@ import numpy as np
 import pandas as pd
 from matplotlib import pyplot as plt
 from scipy import linalg
-from scipy.linalg import toeplitz
-from scipy.special import gamma
 from scipy.stats import ttest_1samp as ttest
+
+from ._kernels import (
+    CHUNK,
+    LagKernel,
+    as_kernel,
+    blocks,
+    boxcar_profile,
+    eye_profile,
+    gaussian_profile,
+    laplace_profile,
+    mexican_hat_profile,
+    t_profile,
+    uniform_profile,
+)
+from ._kernels import lags as _lags
 
 try:  # polars is optional
     import polars as pl
@@ -154,10 +166,7 @@ def gaussian_weights(T, params=gaussian_params, direction=None, include_zero=Tru
     if params is None:
         params = gaussian_params
 
-    c1 = np.divide(1, np.sqrt(2 * math.pi * params["var"]))
-    c2 = np.divide(-1, 2 * params["var"])
-    sqdiffs = toeplitz(np.arange(T) ** 2)
-    return _finish_kernel(c1 * np.exp(c2 * sqdiffs), direction, include_zero)
+    return _finish_kernel(gaussian_profile(_lags(T), params), direction, include_zero)
 
 
 def laplace_weights(T, params=laplace_params, direction=None, include_zero=True):
@@ -207,11 +216,7 @@ def laplace_weights(T, params=laplace_params, direction=None, include_zero=True)
     if params is None:
         params = laplace_params
 
-    absdiffs = toeplitz(np.arange(T))
-    w = np.multiply(
-        np.divide(1, 2 * params["scale"]), np.exp(-np.divide(absdiffs, params["scale"]))
-    )
-    return _finish_kernel(w, direction, include_zero)
+    return _finish_kernel(laplace_profile(_lags(T), params), direction, include_zero)
 
 
 def eye_weights(T, params=eye_params, direction=None, include_zero=True):
@@ -255,7 +260,9 @@ def eye_weights(T, params=eye_params, direction=None, include_zero=True):
     0.0
     """
 
-    return _finish_kernel(np.eye(T), direction, include_zero)
+    # built directly (equal to eye_profile at every lag) without the T x T
+    # matrix of lags
+    return _finish_kernel(np.eye(int(T)), direction, include_zero)
 
 
 def uniform_weights(T, params=uniform_params, direction=None, include_zero=True):
@@ -299,7 +306,9 @@ def uniform_weights(T, params=uniform_params, direction=None, include_zero=True)
      [1. 1. 0.]
      [1. 1. 1.]]
     """
-    return _finish_kernel(np.ones([T, T]), direction, include_zero)
+    # built directly (equal to uniform_profile at every lag) without the
+    # T x T matrix of lags
+    return _finish_kernel(np.ones((int(T), int(T))), direction, include_zero)
 
 
 def t_weights(T, params=t_params, direction=None, include_zero=True):
@@ -356,15 +365,7 @@ def t_weights(T, params=t_params, direction=None, include_zero=True):
     if params is None:
         params = t_params
 
-    c1 = np.divide(
-        gamma((params["df"] + 1) / 2),
-        np.sqrt(params["df"] * math.pi) * gamma(params["df"] / 2),
-    )
-    c2 = np.divide(-(params["df"] + 1), 2)
-
-    sqdiffs = toeplitz(np.arange(T) ** 2)
-    w = np.multiply(c1, np.power(1 + np.divide(sqdiffs, params["df"]), c2))
-    return _finish_kernel(w, direction, include_zero)
+    return _finish_kernel(t_profile(_lags(T), params), direction, include_zero)
 
 
 def mexican_hat_weights(
@@ -417,14 +418,9 @@ def mexican_hat_weights(
     if params is None:
         params = mexican_hat_params
 
-    absdiffs = toeplitz(np.arange(T))
-    sqdiffs = toeplitz(np.arange(T) ** 2)
-
-    a = np.divide(2, np.sqrt(3 * params["sigma"]) * np.power(math.pi, 0.25))
-    b = 1 - np.power(np.divide(absdiffs, params["sigma"]), 2)
-    c = np.exp(-np.divide(sqdiffs, 2 * np.power(params["sigma"], 2)))
-
-    return _finish_kernel(np.multiply(a, np.multiply(b, c)), direction, include_zero)
+    return _finish_kernel(
+        mexican_hat_profile(_lags(T), params), direction, include_zero
+    )
 
 
 def boxcar_weights(T, params=boxcar_params, direction=None, include_zero=True):
@@ -473,8 +469,46 @@ def boxcar_weights(T, params=boxcar_params, direction=None, include_zero=True):
     if params is None:
         params = boxcar_params
 
-    w = np.multiply(toeplitz(np.arange(T)) < params["width"] / 2.0, 1.0)
-    return _finish_kernel(w, direction, include_zero)
+    return _finish_kernel(boxcar_profile(_lags(T), params), direction, include_zero)
+
+
+# The lag profile and default parameters of each built-in kernel function.
+# For these, ``timecorr``, ``features`` and the decoders compute the kernel a
+# chunk of rows at a time (``_kernels.LagKernel``) instead of building the
+# T x T matrix.
+_LAG_PROFILES = {
+    gaussian_weights: (gaussian_profile, gaussian_params),
+    laplace_weights: (laplace_profile, laplace_params),
+    eye_weights: (eye_profile, eye_params),
+    uniform_weights: (uniform_profile, uniform_params),
+    t_weights: (t_profile, t_params),
+    mexican_hat_weights: (mexican_hat_profile, mexican_hat_params),
+    boxcar_weights: (boxcar_profile, boxcar_params),
+}
+
+
+def _lag_kernel(T, weights_function, weights_params, include="all", include_zero=True,
+                exclude=None):
+    """
+    The kernel ``weights_function(T, weights_params)`` restricted by
+    ``include`` ('all', 'backward' or 'forward'), ``include_zero`` and
+    ``exclude`` (``exclude_timepoints``) as a ``LagKernel`` (no T x T
+    array), or None when ``weights_function`` is not a built-in kernel.
+    """
+    try:
+        profile, defaults = _LAG_PROFILES[weights_function]
+    except (KeyError, TypeError):
+        return None
+    params = defaults if weights_params is None else weights_params
+    return LagKernel(profile(np.arange(int(T), dtype=np.int64), params), include,
+                     include_zero, exclude)
+
+
+def _as_kernel_array(weights):
+    """A T x T array for ``weights`` (a ``LagKernel`` is built in full)."""
+    if isinstance(weights, LagKernel):
+        return weights.dense()
+    return weights
 
 
 _PACKAGE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -504,12 +538,21 @@ def _kernel_row_problems(weights):
     r = +-1).  ``low``: the remaining rows whose effective sample size
     ``(sum|w|)**2 / sum(w**2)`` is below 2.
     """
-    w = np.abs(np.nan_to_num(np.asarray(weights, dtype=np.float64), nan=0.0))
-    support = np.count_nonzero(w, axis=1)
+    T_out = _kernel_shape(weights)[0]
+    support = np.zeros(T_out, dtype=np.int64)
+    ess = np.zeros(T_out)
+    for t0, t1, w in _abs_row_chunks(weights):
+        support[t0:t1] = np.count_nonzero(w, axis=1)
+        # scaled by each row's largest weight, so tiny weights do not underflow
+        # (rows whose largest weight is 0 are all 0 and stay so)
+        peak = w.max(axis=1, keepdims=True, initial=0.0)
+        w = np.divide(w, peak, out=np.zeros_like(w), where=peak != 0)
+        total = w.sum(axis=1)
+        np.multiply(w, w, out=w)
+        ess[t0:t1] = _safe_divide(total**2, w.sum(axis=1))
     if np.all(support == 0) or np.all(support == 1):
         return None
     undefined = support < 3
-    ess = _safe_divide(w.sum(axis=1) ** 2, (w**2).sum(axis=1))
     return undefined, ~undefined & (ess < 2)
 
 
@@ -525,7 +568,7 @@ def _estimator_message(weights, cancelled=None, sparse=None):
     where every correlation was set to 0 because the kernel-weighted variances
     there are zero.
     """
-    T = np.shape(weights)[0]
+    T = _kernel_shape(weights)[0]
     parts = []
     problems = _kernel_row_problems(weights)
     if problems is not None:
@@ -717,12 +760,112 @@ _WCORR_BLOCK_ELEMENTS = 2**23
 # block-sized products per row in the estimator's NaN path (one without NaN)
 _WCORR_NAN_PRODUCTS = 10
 
-# Relative round-off of removing a column's mean (a few float64 spacings).
-_ROUND_OFF = 64 * np.finfo(np.float64).eps
+# Time slicing of the estimator's kernel products (see ``_time_slices``): the
+# output timepoints are processed in chunks of ``_kernels.CHUNK`` kernel rows,
+# each against the span of kernel columns where the chunk has non-zero weight.
+# Slicing is used only when the spans cover at most this fraction of the
+# kernel's entries; otherwise the full products are computed.
+_TIME_SLICE_MAX_FRACTION = 0.5
+# Private switch: False always computes the full products.
+_TIME_SLICING = True
+# Kernel blocks the estimator keeps between products (``_KernelRows``), in
+# float64 elements (32 MB); blocks beyond it are computed again when needed.
+_KERNEL_CACHE_ELEMENTS = 2**22
+# Besides those blocks, the estimator holds up to this many blocks of
+# CHUNK rows by up to T columns while it computes a LagKernel's rows
+# (measured with tracemalloc: about 3 at T 3,000 and 20,000).
+_KERNEL_WORK_BLOCKS = 4
+# Private hook for tests: when a list, ``_time_slices`` appends its result.
+_time_slice_log = None
+
+# The PageRank system ``B r = b`` of ``reduce(..., rfun='pagerank_centrality')``
+# is ill-posed for a timepoint when the solve fails, the solution is not
+# finite, its sum is below _PAGERANK_SUM_TOL * max(1, max|r|), its relative
+# residual ||B r - b|| / ||b|| exceeds _PAGERANK_RESIDUAL_TOL, or LAPACK's
+# estimate of the reciprocal 1-norm condition number of B is below
+# _PAGERANK_RCOND (singular to within about 50 units of round-off; the
+# solution is then not unique to working precision).  _PAGERANK_RCOND is
+# also the relative singular-value cutoff of the least-squares fallback.
+_PAGERANK_SUM_TOL = 1e-12
+_PAGERANK_RESIDUAL_TOL = 1e-8
+_PAGERANK_RCOND = 1e-14
+
+# The estimator's denominator is sqrt(var_a * var_b) where that product is
+# finite and at least _VARIANCE_PRODUCT_MIN, and sqrt(var_a) * sqrt(var_b)
+# elsewhere (products that overflow, or are subnormal or nearly so and have
+# lost precision).
+_VARIANCE_PRODUCT_MIN = 1e-290
+# Kernel rows whose largest absolute weight lies outside
+# [_KERNEL_ROW_MIN, _KERNEL_ROW_MAX] are divided by that weight before the
+# moment sums; other rows are used as given.
+_KERNEL_ROW_MIN = 1e-100
+_KERNEL_ROW_MAX = 1e100
+
+# Relative round-off of a column's samples: a column whose samples agree to
+# within this fraction of their magnitude is constant (see
+# _round_off_variance).  The bound is the round-off this library's own
+# arithmetic produces, with a stated margin: on output columns that are +-1
+# in exact arithmetic (diagonals and pairs of proportional columns, from
+# timecorr with autofc, isfc and wisfc and from corrmean_combine and
+# mean_combine; T 60 to 2000, K 3 and 6, nine built-in kernels as the next
+# order's kernel), the statistic sd / rms of the rule reached 37.95 eps, the
+# same with Accelerate and OpenBLAS.  48 eps is that times 1.26.
+_ROUND_OFF = 48 * np.finfo(np.float64).eps
+
+
+def _round_off_variance(var, s, mean):
+    """
+    True where a (kernel-)weighted variance is at the round-off level of its
+    column: ``var <= _ROUND_OFF**2 * (var + s * mean**2)``.
+
+    ``var`` is ``sum |w| (x - mean)**2``, ``s`` is ``sum |w|`` and ``mean``
+    the weighted mean of the raw samples (overall mean included), so
+    ``var + s * mean**2`` is the column's weighted mean square
+    ``sum |w| x**2``.  Bound: samples ``x = c (1 + d)`` that equal ``c`` up
+    to round-off, ``|d| <= k * eps``, have
+    ``var <= sum |w| (c d)**2 <= (k eps)**2 * s c**2``, which is at most
+    ``(k eps)**2 / (1 - k eps)**2`` times the mean square: below the bound
+    for ``k`` below 48 (``_ROUND_OFF / eps``).  The largest value of
+    ``sd / rms`` measured on the library's own outputs that are constant in
+    exact arithmetic is 37.95 eps (see ``_ROUND_OFF``).  The variance is
+    compared as a standard deviation with ``hypot``, so neither side
+    overflows or underflows before the comparison; the rule does not depend
+    on the units of the column.  A genuine spread whose ratio of standard
+    deviation to root mean square is at most ``_ROUND_OFF`` (1.07e-14)
+    counts as constant: a column on an offset of more than about 9.4e13
+    standard deviations (``1 / _ROUND_OFF``).  The samples 0, ..., 4 on an
+    offset of 1e14 (ratio 1.41e-14) keep their spread.
+    """
+    sd = np.sqrt(np.maximum(var, 0.0))
+    return sd <= _ROUND_OFF * np.hypot(sd, np.sqrt(s) * np.abs(mean))
+
+
+def _zero_variance(var, msq, s, mean):
+    """
+    The estimator's zero-variance rule: True where a kernel-weighted variance
+    ``var`` counts as zero.  ``msq`` is the kernel-weighted mean square of the
+    globally centered column, ``s`` the kernel's ``sum |w|`` and ``mean``
+    the kernel-weighted mean of the raw column.  The variance is zero when it
+    is at most ``_ZERO_VARIANCE_TOL`` times ``msq`` (the numerical limit of
+    computing it from centered sums) or at the round-off level of the raw
+    column (``_round_off_variance``).
+    """
+    return (var <= _ZERO_VARIANCE_TOL * msq) | _round_off_variance(var, s, mean)
 
 # Values at most this far outside [-1, 1] are correlations with round-off error
 # (clipped to +-1), not co-fluctuations.
 _R_TOLERANCE = 1e-12
+# Correlations at least 1 - _UNIT_TOLERANCE in magnitude are +-1 up to
+# round-off in Fisher z averaging (see _correlation_z).  A correlation
+# r = sxy / sqrt(sxx * syy) of exactly proportional columns carries the
+# relative round-off of its three kernel-weighted sums and of the division
+# and square root, a small multiple of eps that grows with the terms
+# summed; measured on the outputs of timecorr (autofc, isfc, wisfc) and of
+# corrmean_combine and mean_combine that are +-1 in exact arithmetic (T 60
+# to 2000, K 3 and 6, nine built-in kernels), 1 - |r| reached 79 eps, the
+# same with Accelerate and OpenBLAS.  128 eps (2.8e-14) is that times 1.6;
+# 1 - 1e-13 (450 eps) is a correlation and keeps its finite z.
+_UNIT_TOLERANCE = 128 * np.finfo(np.float64).eps
 
 
 def _safe_divide(num, den):
@@ -732,11 +875,16 @@ def _safe_divide(num, den):
     return out
 
 
-def _nan_center(x):
-    """Subtract each column's mean over its non-NaN samples (0 for all-NaN columns)."""
+def _nan_mean(x):
+    """Each column's mean over its non-NaN samples (0 for all-NaN columns)."""
     valid = ~np.isnan(x)
     total = np.where(valid, x, 0.0).sum(axis=0)
-    return x - _safe_divide(total, valid.sum(axis=0))
+    return _safe_divide(total, valid.sum(axis=0))
+
+
+def _nan_center(x):
+    """Subtract each column's mean over its non-NaN samples (0 for all-NaN columns)."""
+    return x - _nan_mean(x)
 
 
 def _zscore_columns(x):
@@ -744,34 +892,22 @@ def _zscore_columns(x):
     Population z-scores of each column; NaN samples and constant columns give 0.
 
     A column is constant when its standard deviation is at most 1e-10 of its
-    largest centered value, or within the round-off of removing its mean (a
-    few float spacings of its largest raw value), so a large constant offset
-    neither zeroes a varying column nor turns a constant one into signal.
+    largest centered value, or at the round-off level of its root mean
+    square (``_round_off_variance``, the estimator's rule with equal
+    weights): a varying column is zeroed only on an offset of more than
+    about 9.4e13 of its standard deviations, and a constant one with
+    round-off is not turned into signal.
     """
     valid = ~np.isnan(x)
-    magnitude = np.where(valid, np.abs(x), 0.0).max(axis=0)
-    x0 = np.where(valid, _nan_center(x), 0.0)
-    sd = np.sqrt(_safe_divide((x0**2).sum(axis=0), valid.sum(axis=0)))
+    n = valid.sum(axis=0)
+    mean = _nan_mean(x)
+    x0 = np.where(valid, x - mean, 0.0)
+    ss = (x0**2).sum(axis=0)
+    sd = np.sqrt(_safe_divide(ss, n))
     constant = (sd <= _ZERO_VARIANCE_TOL * np.abs(x0).max(axis=0)) | (
-        sd <= _ROUND_OFF * magnitude
+        _round_off_variance(ss, n, mean + _safe_divide(x0.sum(axis=0), n))
     )
     return _safe_divide(x0, np.where(constant, 0.0, sd))
-
-
-def _delta_zscores(a, b, weights):
-    """
-    Z-scored columns of ``a`` and ``b`` at each kernel row's non-zero position
-    (a true delta kernel: one non-zero weight per row), shapes (T', Ka) and
-    (T', Kb).
-    """
-    idx = np.argmax(weights != 0, axis=1)
-    return _zscore_columns(a)[idx], _zscore_columns(b)[idx]
-
-
-def _delta_wcorr(a, b, weights):
-    """Co-fluctuation estimate for a true delta kernel (one non-zero weight per row)."""
-    za, zb = _delta_zscores(a, b, weights)
-    return np.einsum("ti,tj->ijt", za, zb)
 
 
 def _wcorr_block_rows(T, Kb, n_products=1):
@@ -779,12 +915,267 @@ def _wcorr_block_rows(T, Kb, n_products=1):
     return max(1, _WCORR_BLOCK_ELEMENTS // (n_products * T * Kb))
 
 
+def _kernel_work_elements(T, dense_elements):
+    """
+    Float64 elements the estimator holds for one kernel of T timepoints that
+    it reads: for a ``LagKernel``, at most its kept blocks
+    (``_KERNEL_CACHE_ELEMENTS``) plus ``_KERNEL_WORK_BLOCKS`` blocks of
+    ``CHUNK`` x T, and at most ``dense_elements`` (what the same
+    kernel costs as T x T arrays), whichever is smaller.
+    """
+    T = int(T)
+    return min(
+        int(dense_elements),
+        _KERNEL_CACHE_ELEMENTS + _KERNEL_WORK_BLOCKS * CHUNK * T,
+    )
+
+
+def _kernel_shape(weights):
+    """``(T', T)`` of a kernel (an array, or a ``LagKernel``)."""
+    if isinstance(weights, LagKernel):
+        return weights.shape
+    return np.shape(weights)
+
+
+def _abs_row_chunks(weights):
+    """
+    ``(t0, t1, w)`` for consecutive chunks of ``CHUNK`` kernel rows: ``w``
+    holds the absolute weights of rows ``t0:t1`` (NaN as 0) over a span of
+    columns that contains every non-zero weight of the chunk.  Chunks with
+    equal blocks share one array.
+    """
+    def absolute(w):
+        # as np.abs(np.nan_to_num(w, nan=0.0)): NaN 0, +-inf the largest float
+        w = np.abs(w)
+        w[np.isnan(w)] = 0
+        w[np.isinf(w)] = np.finfo(np.float64).max
+        return w
+
+    for t0, t1, _, _, _, w in blocks(as_kernel(weights), CHUNK, absolute):
+        yield t0, t1, w
+
+
+def _without_nan(w):
+    """
+    A kernel block with NaN weights set to 0 (inf kept): ``w`` itself when it
+    has none, otherwise a copy.
+    """
+    nan = np.isnan(w)
+    if not nan.any():
+        return w
+    w = w.copy()
+    w[nan] = 0
+    return w
+
+
+class _KernelRows:
+    """
+    The estimator's working copy of a (T', T) kernel, read in chunks of
+    ``CHUNK`` rows.
+
+    ``weights`` is an array or a ``LagKernel``; both are read through the
+    interface of ``_kernels`` (``as_kernel``): chunks of rows, each with the
+    columns where it can have weight (all columns of an array) and a key
+    shared by chunks with equal blocks.  A ``LagKernel``'s rows are computed
+    chunk by chunk, so no T' x T array is allocated.  Each chunk's products
+    and row sums are computed from a contiguous block of the chunk's rows
+    over the same columns, in the same order, so an array and the equal
+    ``LagKernel`` give the same values.  NaN weights count as 0.
+
+    Use: ``support`` (non-zero weights per row) and ``first_nonzero()`` are
+    available at once; ``zero_rows(mask)`` sets rows to 0; ``prepare(finite)``
+    divides each row whose largest absolute weight is below
+    ``_KERNEL_ROW_MIN`` or above ``_KERNEL_ROW_MAX`` by that weight (a
+    correlation does not depend on the scale of its kernel row, and the
+    moment sums of such rows would underflow or overflow) and chooses the
+    columns of each chunk (``_time_slices``; every column when slicing is
+    off, when ``finite`` is False, or when the spans cover more than
+    ``_TIME_SLICE_MAX_FRACTION`` of the kernel); then ``product(x, kind)``
+    and ``row_sum(kind)`` give ``M @ x`` and ``M.sum(axis=1)`` for ``M`` the
+    kernel (``kind`` "w"), its absolute value ("a") or its support as 0/1
+    ("s").  Blocks are kept between products up to
+    ``_KERNEL_CACHE_ELEMENTS`` elements and computed again beyond that.
+    """
+
+    def __init__(self, weights):
+        self.kernel = as_kernel(weights)
+        self.shape = self.kernel.shape
+        self._chunks = list(self.kernel.chunks(CHUNK))
+        T_out = self.shape[0] if len(self.shape) == 2 else 0
+        self.support = np.zeros(T_out, dtype=np.int64)
+        self._peak = np.zeros(T_out)
+        self._first = np.zeros(T_out, dtype=np.int64)
+        for t0, t1, c0, c1, _, w in blocks(self.kernel, CHUNK, _without_nan):
+            self.support[t0:t1] = np.count_nonzero(w, axis=1)
+            if w.shape[1]:
+                self._peak[t0:t1] = np.maximum(w.max(axis=1), -w.min(axis=1))
+                self._first[t0:t1] = c0 + np.argmax(w != 0, axis=1)
+        self.zero = None
+        self._scale = None
+        self.spans = None
+        self._cache = {}
+        self._cached = 0
+        self._kept = set()
+
+    def first_nonzero(self):
+        """The column of each row's first non-zero weight (0 for an empty row)."""
+        return np.where(self.support > 0, self._first, 0)
+
+    def zero_rows(self, mask):
+        """Set the rows in ``mask`` to 0 (before ``prepare``)."""
+        self.zero = np.asarray(mask, dtype=bool)
+
+    def prepare(self, finite):
+        """Rescale the extreme rows and choose each chunk's columns."""
+        T_out = self.shape[0]
+        T = self.shape[1] if len(self.shape) == 2 else 0
+        peak = self._peak if self.zero is None else np.where(self.zero, 0.0, self._peak)
+        extreme = (
+            (peak > 0) & np.isfinite(peak)
+            & ((peak < _KERNEL_ROW_MIN) | (peak > _KERNEL_ROW_MAX))
+        )
+        self._scale = np.where(extreme, peak, 1.0) if extreme.any() else None
+        # blocks of the rows before zeroing and rescaling are stale; the final
+        # blocks _time_slices reads are kept for the products
+        self._cache = {}
+        self._cached = 0
+        self._kept = set()
+        slices = _time_slices(self, finite) if len(self.shape) == 2 else None
+        if slices is None:
+            slices = [(t0, t1, 0, T) for t0, t1, _, _, _ in self._chunks]
+        self.spans = slices
+
+    # the kernel interface of ``_kernels`` over the prepared rows (NaN
+    # weights 0, rows zeroed and rescaled), read by ``_time_slices``
+    def chunks(self, size):
+        assert size == CHUNK
+        for t0, t1, c0, c1, _ in self._chunks:
+            yield t0, t1, c0, c1, None
+
+    def block(self, t0, t1, c0, c1):
+        assert (t0, t1, c0, c1) == self._chunks[t0 // CHUNK][:4]
+        return self._final(t0 // CHUNK)
+
+    def _keep(self, key, block, shared=False):
+        """Cache ``block`` under ``key`` within ``_KERNEL_CACHE_ELEMENTS``;
+        ``shared``: it is an array already cached, not counted again."""
+        if key is None:
+            return block
+        if shared:
+            self._cache[key] = block
+        elif self._cached + block.size <= _KERNEL_CACHE_ELEMENTS:
+            self._cache[key] = block
+            self._cached += block.size
+            self._kept.add(id(block))  # cached arrays are never dropped
+        return block
+
+    def _row_state(self, t0, t1):
+        """The zeroed rows and scales of rows t0:t1, as part of a cache key."""
+        zero = None if self.zero is None else self.zero[t0:t1].tobytes()
+        scale = None if self._scale is None else self._scale[t0:t1].tobytes()
+        return zero, scale
+
+    def _final(self, i):
+        """
+        Chunk i over its columns: NaN weights 0, the zeroed rows 0, the
+        extreme rows rescaled.  Chunks with equal blocks, equal zeroed rows
+        and equal scales share one array (do not modify it).
+        """
+        t0, t1, c0, c1, key = self._chunks[i]
+        zero = None if self.zero is None else self.zero[t0:t1]
+        scale = None if self._scale is None else self._scale[t0:t1]
+        # a chunk without a shared key (at an edge or an event boundary) is
+        # kept under its own index
+        key = ("final", ("chunk", i) if key is None else key) + self._row_state(t0, t1)
+        hit = self._cache.get(key)
+        if hit is not None:
+            return hit
+        w = self.kernel.block(t0, t1, c0, c1)
+        if not w.flags.writeable:
+            w = w.copy()  # a view of an array
+        w[np.isnan(w)] = 0
+        if zero is not None:
+            w[zero] = 0
+        if scale is not None:
+            rows = scale != 1.0
+            if rows.any():
+                w[rows] /= scale[rows, np.newaxis]
+        return self._keep(key, w)
+
+    def _block(self, i, kind):
+        t0, t1, c0, c1 = self.spans[i]
+        key = self._chunks[i][4]
+        # chunks with equal blocks, equal rows zeroed and rescaled (as in
+        # _final) and the same span relative to t0 have equal blocks
+        key = (("chunk", i) if key is None
+               else (key, c0 - t0, c1 - t0) + self._row_state(t0, t1))
+        hit = self._cache.get((key, kind))
+        if hit is not None:
+            return hit
+        if kind == "w":
+            k0, k1 = self._chunks[i][2:4]
+            w = self._final(i)
+            if (c0, c1) == (k0, k1):
+                # the final block itself: counted once, where _final kept it
+                return self._keep((key, kind), w, shared=id(w) in self._kept)
+            elif c0 >= k0 and c1 <= k1:
+                block = np.ascontiguousarray(w[:, c0 - k0 : c1 - k0])
+            else:
+                # every column (no slicing): zeros outside the chunk's columns
+                block = np.zeros((t1 - t0, c1 - c0))
+                lo, hi = max(k0, c0), min(k1, c1)
+                if hi > lo:
+                    block[:, lo - c0 : hi - c0] = w[:, lo - k0 : hi - k0]
+        elif kind == "a":
+            w = self._block(i, "w")
+            if not np.signbit(w).any():
+                # no negative weights (nor -0.0): its own absolute value
+                if (key, "w") in self._cache:
+                    self._cache[(key, "a")] = w
+                return w
+            block = np.abs(w)
+        else:
+            block = (self._block(i, "w") != 0).astype(np.float64)
+        return self._keep((key, kind), block)
+
+    def product(self, x, kind="w"):
+        """``M @ x`` for a (T, n) matrix ``x`` (``M`` as in the class docstring)."""
+        out = np.zeros((self.shape[0], x.shape[1]), dtype=np.result_type(x, np.float64))
+        for i, (t0, t1, c0, c1) in enumerate(self.spans):
+            if c1 > c0:
+                np.matmul(self._block(i, kind), x[c0:c1], out=out[t0:t1])
+        return out
+
+    def row_sum(self, kind="w"):
+        """``M.sum(axis=1)`` (``M`` as in the class docstring)."""
+        out = np.zeros(self.shape[0])
+        for i, (t0, t1, c0, c1) in enumerate(self.spans):
+            if c1 > c0:
+                out[t0:t1] = self._block(i, kind).sum(axis=1)
+        return out
+
+
+def _delta_zscores(a, b, rows):
+    """
+    Z-scored columns of ``a`` and ``b`` at each kernel row's non-zero position
+    (a true delta kernel: one non-zero weight per row; ``rows`` a
+    ``_KernelRows``), shapes (T', Ka) and (T', Kb).
+    """
+    idx = rows.first_nonzero()
+    return _zscore_columns(a)[idx], _zscore_columns(b)[idx]
+
+
+def _delta_wcorr(a, b, rows):
+    """Co-fluctuation estimate for a true delta kernel (one non-zero weight per row)."""
+    za, zb = _delta_zscores(a, b, rows)
+    return np.einsum("ti,tj->ijt", za, zb)
+
+
 def _wcorr_inputs(a, b, weights):
     """
-    The estimator's inputs as float arrays: ``a`` and ``b`` as (T, K) matrices
-    and a copy of ``weights`` with NaN weights set to 0.  Returns
-    ``(a, b, weights, support)``, where ``support`` counts each kernel row's
-    non-zero weights.
+    The estimator's inputs: ``a`` and ``b`` as float (T, K) matrices and the
+    kernel as a ``_KernelRows`` (NaN weights count as 0).  Returns
+    ``(a, b, rows)``.
 
     Raises ``ValueError`` if the shapes do not match (T rows in ``a`` and
     ``b``, T columns in ``weights``) or if every row of the kernel is zero.
@@ -795,49 +1186,108 @@ def _wcorr_inputs(a, b, weights):
         a = a[:, np.newaxis]
     if b.ndim == 1:
         b = b[:, np.newaxis]
-    weights = np.array(weights, dtype=np.float64, copy=True)
-    weights[np.isnan(weights)] = 0
-    if a.shape[0] != b.shape[0] or weights.ndim != 2 or weights.shape[1] != a.shape[0]:
+    rows = _KernelRows(weights)
+    if a.shape[0] != b.shape[0] or len(rows.shape) != 2 or rows.shape[1] != a.shape[0]:
         raise ValueError(
             "a and b must have the same number of rows (timepoints) T, and weights "
-            f"must have T columns; got a {a.shape}, b {b.shape}, weights {weights.shape}."
+            f"must have T columns; got a {a.shape}, b {b.shape}, weights {rows.shape}."
         )
 
-    support = np.count_nonzero(weights, axis=1)
-    if np.all(support == 0):
+    if np.all(rows.support == 0):
         raise ValueError(
             "Every row of the kernel is zero; no correlation can be estimated."
         )
-    return a, b, weights, support
+    return a, b, rows
 
 
-def _wcorr_setup(a, b, weights, autocorrelation):
+def _time_slices(weights, finite=True):
     """
-    The terms shared by every block of ``_wcorr_block``: the kernel, the
+    Chunks of a kernel's rows and the span of columns where each has weight,
+    or None when slicing would not save work.
+
+    ``weights`` is a (T', T) kernel without NaN weights: an array, a
+    ``LagKernel``, or the prepared rows of a ``_KernelRows`` (which reads
+    its kernel through the same interface).  The rows are split into
+    consecutive chunks of ``CHUNK`` rows; for each chunk ``(t0, t1, c0,
+    c1)``, every non-zero weight of rows ``t0:t1`` lies in columns ``c0:c1``
+    (``c0 == c1`` when the chunk has no weight).  The bounds are found one
+    chunk at a time, so no T' x T boolean matrix is held.  Returns None when
+    ``_TIME_SLICING`` is False, when ``finite`` is False (the caller's
+    products have non-finite operands, where the full products give
+    ``0 * inf = NaN`` that slicing would skip), when T' or T is 0, or when
+    the spans cover more than ``_TIME_SLICE_MAX_FRACTION`` of the kernel's
+    entries.
+    """
+    kernel = as_kernel(weights)
+    T_out, T = kernel.shape
+    slices = None
+    if _TIME_SLICING and finite and T_out and T:
+        slices, covered = [], 0
+        for t0, t1, c0, _, _, w in blocks(kernel, CHUNK):
+            cols = (w != 0).any(axis=0)
+            if cols.any():
+                s0 = c0 + int(cols.argmax())
+                s1 = c0 + w.shape[1] - int(cols[::-1].argmax())
+            else:
+                s0 = s1 = 0
+            slices.append((t0, t1, s0, s1))
+            covered += (t1 - t0) * (s1 - s0)
+        if covered > _TIME_SLICE_MAX_FRACTION * T_out * T:
+            slices = None
+    if _time_slice_log is not None:
+        _time_slice_log.append(slices)
+    return slices
+
+
+def _products_finite(a, b):
+    """
+    True when every operand of the estimator's products is finite: the
+    samples of ``a`` and ``b`` (NaN samples excluded), their squares and
+    their cross products.
+    """
+    with np.errstate(over="ignore", invalid="ignore"):
+        peaks = [
+            np.max(np.abs(x), initial=0.0, where=~np.isnan(x)) if x.size else 0.0
+            for x in (a, b)
+        ]
+        bounds = (peaks[0], peaks[1], peaks[0] * peaks[0], peaks[1] * peaks[1],
+                  peaks[0] * peaks[1])
+    return bool(np.all(np.isfinite(bounds)))
+
+
+def _wcorr_setup(a, b, rows, autocorrelation):
+    """
+    The terms shared by every block of ``_wcorr_block``: the kernel (a
+    ``_KernelRows``, prepared here: rescaled rows and time slices), the
     centered data and, without NaN samples, each feature's kernel-weighted
     moments (computed once; with ``autocorrelation`` those of ``a`` serve for
     ``b`` too).  Returns a dict.
     """
-    W = weights
-    A = np.abs(W)
-    a = _nan_center(a)
-    b = _nan_center(b)
-    state = {"T": a.shape[0], "W": W, "A": A, "a": a, "b": b}
-    state["active"] = A.sum(axis=1) > 0
+    finite = _products_finite(a, b)  # an infinite sample makes its column NaN
+    # the overall means are kept: with the kernel-weighted means of the
+    # centered columns they give the raw ones, which the round-off rule needs
+    ca = _nan_mean(a)
+    cb = _nan_mean(b)
+    a = a - ca
+    b = b - cb
+    rows.prepare(finite and _products_finite(a, b))
+    state = {"T": a.shape[0], "rows": rows, "a": a, "b": b, "ca": ca, "cb": cb}
+    s = rows.row_sum("a")
+    state["active"] = s > 0
     state["has_nan"] = bool(np.isnan(a).any() or np.isnan(b).any())
 
     if not state["has_nan"]:
-        s = A.sum(axis=1)[:, np.newaxis]
-        state["sw"] = W.sum(axis=1)[:, np.newaxis]
+        s = s[:, np.newaxis]
+        state["sw"] = rows.row_sum("w")[:, np.newaxis]
 
-        def moments(x):
-            mean = _safe_divide(A @ x, s)
-            msq = A @ (x**2)
+        def moments(x, center):
+            mean = _safe_divide(rows.product(x, "a"), s)
+            msq = rows.product(x**2, "a")
             var = msq - s * mean**2
-            zero = var <= _ZERO_VARIANCE_TOL * msq
-            return mean, W @ x, np.where(zero, 0.0, var), zero
+            zero = _zero_variance(var, msq, s, mean + center)
+            return mean, rows.product(x, "w"), np.where(zero, 0.0, var), zero
 
-        state["ma"], state["wa"], state["va"], state["za"] = moments(a)
+        state["ma"], state["wa"], state["va"], state["za"] = moments(a, ca)
         if autocorrelation:
             state["mb"], state["wb"], state["vb"], state["zb"] = (
                 state["ma"],
@@ -846,16 +1296,13 @@ def _wcorr_setup(a, b, weights, autocorrelation):
                 state["za"],
             )
         else:
-            state["mb"], state["wb"], state["vb"], state["zb"] = moments(b)
+            state["mb"], state["wb"], state["vb"], state["zb"] = moments(b, cb)
         state["n_products"] = 1
     else:
         state["ok_a"] = ~np.isnan(a)
         state["ok_b"] = ~np.isnan(b)
         state["a0"] = np.where(state["ok_a"], a, 0.0)
         state["b0"] = np.where(state["ok_b"], b, 0.0)
-        # per pair and kernel row: the number of timepoints with non-zero weight
-        # where both features are observed
-        state["support"] = (A > 0).astype(np.float64)
         state["n_products"] = _WCORR_NAN_PRODUCTS
     return state
 
@@ -873,16 +1320,15 @@ def _wcorr_block(state, i0, i1, j0):
     (always False without NaN samples).
     """
     T = state["T"]
-    W = state["W"]
-    A = state["A"]
+    rows = state["rows"]
     Kb = state["b"].shape[1]
-    shape = (W.shape[0], i1 - i0, Kb - j0)
+    shape = (rows.shape[0], i1 - i0, Kb - j0)
 
     if not state["has_nan"]:
         a, b = state["a"], state["b"]
         ma, mb, wa, wb = state["ma"], state["mb"], state["wa"], state["wb"]
         prod = (a[:, i0:i1, np.newaxis] * b[:, np.newaxis, j0:]).reshape(T, -1)
-        cross = (W @ prod).reshape(shape)
+        cross = rows.product(prod, "w").reshape(shape)
         ma_i = ma[:, i0:i1, np.newaxis]
         mb_j = mb[:, np.newaxis, j0:]
         num = (
@@ -906,23 +1352,38 @@ def _wcorr_block(state, i0, i1, j0):
             [t.reshape(T, -1) for t in (pair_ok.astype(float), x, y, x**2, y**2)],
             axis=1,
         )
-        s0, sx, sy, sxx, syy = np.split(A @ terms, 5, axis=1)
-        w0, wx, wy = np.split(W @ terms[:, : 3 * n], 3, axis=1)
-        wxy = W @ (x * y).reshape(T, -1)
+        s0, sx, sy, sxx, syy = np.split(rows.product(terms, "a"), 5, axis=1)
+        w0, wx, wy = np.split(rows.product(terms[:, : 3 * n], "w"), 3, axis=1)
+        wxy = rows.product((x * y).reshape(T, -1), "w")
         mx = _safe_divide(sx, s0)
         my = _safe_divide(sy, s0)
         num = (wxy - mx * wy - my * wx + mx * my * w0).reshape(shape)
         var_a = sxx - s0 * mx**2
         var_b = syy - s0 * my**2
-        zero = (var_a <= _ZERO_VARIANCE_TOL * sxx) | (var_b <= _ZERO_VARIANCE_TOL * syy)
+        pairs = (i1 - i0, Kb - j0)
+        ca = np.broadcast_to(state["ca"][i0:i1, np.newaxis], pairs).reshape(-1)
+        cb = np.broadcast_to(state["cb"][np.newaxis, j0:], pairs).reshape(-1)
+        zero = _zero_variance(var_a, sxx, s0, mx + ca) | _zero_variance(
+            var_b, syy, s0, my + cb
+        )
         var_a, var_b, zero = (v.reshape(shape) for v in (var_a, var_b, zero))
         # two samples always give r = +-1: fewer than 3 is undefined
-        few = (state["support"] @ terms[:, :n]).reshape(shape) < 3
+        few = rows.product(terms[:, :n], "s").reshape(shape) < 3
         few_any = few.reshape(shape[0], -1).any(axis=1)
         undefined = zero | few
 
     zero_all = zero.reshape(shape[0], -1).all(axis=1)
-    den = np.sqrt(np.where(undefined, 1.0, var_a * var_b))
+    with np.errstate(over="ignore", under="ignore"):
+        product = np.where(undefined, 1.0, var_a * var_b)
+    den = np.sqrt(product)
+    extreme = ~(np.isfinite(product) & (product >= _VARIANCE_PRODUCT_MIN)) & ~undefined
+    if extreme.any():
+        # the product of the variances overflowed or is subnormal (or
+        # nearly so): take the square roots first
+        den[extreme] = (
+            np.sqrt(np.broadcast_to(var_a, shape)[extreme])
+            * np.sqrt(np.broadcast_to(var_b, shape)[extreme])
+        )
     r = np.where(undefined, 0.0, np.clip(num / den, -1.0, 1.0))
     return r, undefined, zero_all, few_any
 
@@ -941,7 +1402,7 @@ def _symmetrize_block(r, undefined, offset):
     r[:, :, offset : offset + c] = (square + square.transpose(0, 2, 1)) / 2
 
 
-def _wcorr_blocks(a, b, weights, autocorrelation):
+def _wcorr_blocks(a, b, rows, autocorrelation):
     """
     Kernel-weighted correlations, computed with matrix products over blocks of
     feature pairs.  NaN samples are excluded pairwise (they carry no weight).
@@ -956,8 +1417,8 @@ def _wcorr_blocks(a, b, weights, autocorrelation):
     """
     T, Ka = a.shape
     Kb = b.shape[1]
-    state = _wcorr_setup(a, b, weights, autocorrelation)
-    out = np.zeros([Ka, Kb, weights.shape[0]])
+    state = _wcorr_setup(a, b, rows, autocorrelation)
+    out = np.zeros([Ka, Kb, rows.shape[0]])
     cancelled = state["active"].copy()
     sparse = np.zeros_like(cancelled)
 
@@ -1013,7 +1474,7 @@ def _corr_row_blocks(a, b, weights, symmetric, rows_per_block=None):
     Raises ``ValueError`` as ``_wcorr`` does, and if ``symmetric`` is True but
     ``a`` and ``b`` differ in shape.
     """
-    a, b, weights, support = _wcorr_inputs(a, b, weights)
+    a, b, rows = _wcorr_inputs(a, b, weights)
     if symmetric and a.shape != b.shape:
         raise ValueError(
             "symmetric=True requires a and b of the same shape; "
@@ -1024,21 +1485,21 @@ def _corr_row_blocks(a, b, weights, symmetric, rows_per_block=None):
     T, Ka = a.shape
     Kb = b.shape[1]
 
-    if np.all(support == 1):
-        za, zb = _delta_zscores(a, b, weights)
+    if np.all(rows.support == 1):
+        za, zb = _delta_zscores(a, b, rows)
         step = int(rows_per_block or _wcorr_block_rows(T, Kb))
 
         def delta_blocks():
             for i0 in range(0, Ka, step):
                 i1 = min(Ka, i0 + step)
-                none = np.zeros(weights.shape[0], dtype=bool)
+                none = np.zeros(rows.shape[0], dtype=bool)
                 R = np.einsum("ti,tj->ijt", za[:, i0:i1], zb)
                 yield i0, i1, R, none, none.copy()
 
         return delta_blocks()
 
-    weights[support < 3] = 0
-    state = _wcorr_setup(a, b, weights, symmetric)
+    rows.zero_rows(rows.support < 3)
+    state = _wcorr_setup(a, b, rows, symmetric)
     step = int(rows_per_block or _wcorr_block_rows(T, Kb, state["n_products"]))
     active = state["active"]
 
@@ -1092,15 +1553,34 @@ def wcorr(a, b, weights):
     - A feature is treated as constant at timepoint ``t`` when its
       kernel-weighted variance there is at most 1e-10 times its
       kernel-weighted mean square (after the feature's overall mean is
-      removed).  A constant feature has correlation 0 with every feature,
-      itself included, at that timepoint.  This is a numerical limit:
+      removed), or at most ``(48 eps)**2`` (about 1.1e-28; ``eps`` is the
+      float64 machine epsilon) times the kernel-weighted mean square of its
+      raw samples: samples ``c (1 + d)`` with ``|d|`` below ``48 eps``
+      (about 1.07e-14; for example values equal to 1 up to round-off, at any
+      scale ``c``) are constant.  48 eps covers the round-off of the
+      library's own outputs that are constant in exact arithmetic (at most
+      38 eps measured).  A constant feature has correlation 0 with every
+      feature, itself included, at that timepoint, and counts in the
+      zero-variance warning as an exactly constant one does.  Both rules
+      are relative, so multiplying a feature by a constant does not change
+      which entries are set to 0.  This is a numerical limit:
       features whose local variance is below about 1e-10 of their mean square
-      are treated as constant.  A constant offset of the whole series does
-      not matter (the overall mean is removed first; an offset of 1e9
-      standard deviations is tested), but a step much larger than the local
+      are treated as constant.  An offset of the whole series matters only
+      when it is extreme: within a kernel window, a feature whose ratio of
+      kernel-weighted standard deviation to root mean square is at most
+      ``48 eps`` (1.07e-14), that is an offset of more than about 9.4e13
+      local standard deviations, is treated as constant (an offset of 1e9
+      standard deviations is tested, and 0, ..., 4 on an offset of 1e14,
+      a ratio of 1.41e-14, keep correlation 1); a step much larger than the local
       fluctuations within a kernel window does: a unit-variance series that
       jumps by 1e6 or more halfway through is treated as constant on both
-      sides of the jump.
+      sides of the jump.  Since the 1e-10 rule's mean square is about the
+      overall mean, its decision at ``t`` depends on samples that row ``t``
+      of the kernel does not weight: with a one-sided kernel, an entry near
+      the threshold can differ between a series and a prefix of it (0 in
+      one, up to +-1 in the other).  Entries whose variance is at least
+      1e-3 of that mean square do not depend on those samples (tested to
+      1e-9).
 
     One ``UserWarning`` per call reports, when they occur, how many
     timepoints have fewer than 3 non-zero kernel weights; how many other
@@ -1178,21 +1658,20 @@ def _wcorr(a, b, weights, warn=True, return_cancelled=False):
     has fewer than 3 observed samples (see ``_wcorr_blocks``) are returned too:
     ``(out, (cancelled, sparse))``.
     """
-    a, b, weights, support = _wcorr_inputs(a, b, weights)
-    if np.all(support == 1):
-        out = _delta_wcorr(a, b, weights)
-        none = np.zeros(weights.shape[0], dtype=bool)
+    a, b, rows = _wcorr_inputs(a, b, weights)
+    if np.all(rows.support == 1):
+        out = _delta_wcorr(a, b, rows)
+        none = np.zeros(rows.shape[0], dtype=bool)
         return (out, (none, none.copy())) if return_cancelled else out
 
-    kernel = weights.copy() if warn else None
-    weights[support < 3] = 0
-
+    rows.zero_rows(rows.support < 3)
     autocorrelation = a is b or (
         a.shape == b.shape and np.array_equal(a, b, equal_nan=True)
     )
-    out, cancelled, sparse = _wcorr_blocks(a, b, weights, autocorrelation)
+    out, cancelled, sparse = _wcorr_blocks(a, b, rows, autocorrelation)
+    del rows
     if warn:
-        message = _estimator_message(kernel, cancelled, sparse)
+        message = _estimator_message(weights, cancelled, sparse)
         if message is not None:
             _warn_user(message)
     return (out, (cancelled, sparse)) if return_cancelled else out
@@ -1220,13 +1699,32 @@ def _nan_weighted_mean(x, weights, tol=1e-5):
     return out
 
 
+def _fisher_step(K):
+    """Timepoints per block of ``_fisher_symmetrize`` for K features."""
+    # _fisher_mean makes about ten temporaries of its input's size (which is
+    # twice the block): keep the block small enough that they stay below the
+    # workspace of wcorr's own blocks
+    return max(1, _WCORR_BLOCK_ELEMENTS // (16 * max(1, K * K)))
+
+
+def _fisher_workspace(K, T):
+    """
+    Float64 elements of the temporaries of ``_fisher_symmetrize`` on a
+    (K, K, T) array at their peak: 11 times one block of K x K x step
+    timepoints (measured with tracemalloc: 10.6 times for K 20 to 300).
+    """
+    return 11 * K * K * min(int(T), _fisher_step(K))
+
+
 def _fisher_symmetrize(c):
     """
     Symmetrize a (K, K, T) cross-correlation array as in Eq. 5 of the timecorr
     paper: ``z2r((r2z(C) + r2z(C.T)) / 2)``.
 
-    Where one of ``C[i, j]`` and ``C[j, i]`` is exactly +-1 (infinite z), the
-    result is that sign; where they are +1 and -1, it is 0.  Entries outside
+    Where one of ``C[i, j]`` and ``C[j, i]`` is +-1 (infinite z; values
+    within round-off of +-1 count as +-1, see ``_correlation_z``), the
+    result is that sign; where they
+    are +1 and -1, it is 0.  Entries outside
     [-1, 1] (co-fluctuations from a delta kernel, which are not correlations)
     are averaged without the transform (see ``_fisher_mean``).
 
@@ -1234,17 +1732,40 @@ def _fisher_symmetrize(c):
     at a time, so the temporaries stay at block size rather than the size of
     ``c``.
     """
-    K = c.shape[0]
-    # _fisher_mean makes about ten temporaries of its input's size (which is
-    # twice the block): keep the block small enough that they stay below the
-    # workspace of wcorr's own blocks
-    step = max(1, _WCORR_BLOCK_ELEMENTS // (16 * max(1, K * K)))
+    step = _fisher_step(c.shape[0])
     for t0 in range(0, c.shape[2], step):
         block = c[:, :, t0 : t0 + step]
         block[...] = _fisher_mean(
             np.stack([block, block.transpose(1, 0, 2)]), axis=0
         )
     return c
+
+
+def _correlation_z(r):
+    """
+    ``(z, outside)``: the Fisher z of correlations ``r`` for averaging, and
+    the mask of values that are not correlations.
+
+    Values more than ``_R_TOLERANCE`` (1e-12) outside [-1, 1] are not
+    correlations (for example co-fluctuations from a delta kernel): they are
+    marked in ``outside`` and their z is 0.  Values above 1 in magnitude by
+    at most ``_R_TOLERANCE``, and values at most ``_UNIT_TOLERANCE`` (128
+    eps, 2.8e-14) below it, are +-1 up to round-off and have infinite z, as
+    exact +-1 does; so one ulp below 1 does not turn an infinite z into a
+    finite one (which, averaged with -inf, gives 1 instead of 0).  A value
+    further below, such as 1 - 1e-13, keeps its finite z.  NaN stays NaN.
+    """
+    r = np.asarray(r, dtype=np.float64)
+    # no more temporaries of r's size than the previous clip-and-where (the
+    # memory estimates of corrmean_combine and tstat_combine count them)
+    a = np.abs(r)
+    outside = a > 1 + _R_TOLERANCE
+    unit = a >= 1 - _UNIT_TOLERANCE
+    del a
+    unit &= ~outside
+    c = np.where(outside, 0.0, r)
+    np.copysign(1.0, c, out=c, where=unit)
+    return r2z(c), outside
 
 
 def _fisher_mean(r, axis):
@@ -1254,18 +1775,17 @@ def _fisher_mean(r, axis):
     Fisher z averaging applies to correlations only.  Where any value along
     ``axis`` lies outside [-1, 1] by more than 1e-12 (for example a
     co-fluctuation from a delta kernel), the values are averaged on the raw
-    scale (plain mean) instead; values within 1e-12 of [-1, 1] are
-    correlations with round-off and are clipped to +-1.
-    Values of exactly +-1 have infinite z.  Where only one sign of infinity
+    scale (plain mean) instead.  Values within round-off of +-1 (at most
+    1e-12 above, 2.8e-14 below) are correlations of +-1 and have infinite
+    z, as exact +-1 does (``_correlation_z``).  Where only one sign of infinity
     occurs along ``axis`` the result is that sign (+-1).  Where both +inf and
     -inf occur they are excluded and the finite z values are averaged (0 if
     none remain).  NaN anywhere along ``axis`` gives NaN.  No numpy warnings
     are raised.
     """
     r = np.asarray(r, dtype=np.float64)
-    outside = np.abs(r) > 1 + _R_TOLERANCE
+    z, outside = _correlation_z(r)
     raw = np.any(outside, axis=axis)
-    z = r2z(np.where(outside, 0.0, np.clip(r, -1.0, 1.0)))
     pos = np.any(np.isposinf(z), axis=axis)
     neg = np.any(np.isneginf(z), axis=axis)
     nan = np.any(np.isnan(z), axis=axis)
@@ -1286,7 +1806,8 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     subjects' data.  When the average is not the subject's own data, the
     cross-correlation matrix ``C`` is symmetrized by averaging the Fisher
     z-transforms of ``C`` and ``C.T`` and inverting (``z2r``) before it is
-    vectorized; an entry of exactly +-1 dominates its pair.  NaN samples carry no weight.
+    vectorized; an entry of +-1 (up to round-off, see ``_correlation_z``)
+    dominates its pair.  NaN samples carry no weight.
 
     Parameters
     ----------
@@ -1402,12 +1923,40 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     return corrs
 
 
-def _subject_weight_matrix(data, subject_weights):
+def _static_connectome(d, iu, rows_per_block):
+    """
+    The upper triangle (``iu``) of the static correlation matrix of ``d``
+    (T, K): ``wcorr`` with one uniform kernel row, or, with
+    ``rows_per_block``, computed that many rows at a time (the entries agree
+    with ``wcorr``'s to round-off; the temporaries stay at block size).
+    """
+    static = np.ones([1, d.shape[0]])
+    if rows_per_block is None:
+        return wcorr(d, d, static)[:, :, 0][iu]
+    K = d.shape[1]
+    c = np.empty((K, K))
+    cancelled, sparse = None, None
+    for i0, i1, R, zero_all, few_any in _corr_row_blocks(d, d, static, True,
+                                                         rows_per_block):
+        c[i0:i1] = R[:, :, 0]
+        # the masks of the whole call, and its warning (as wcorr gives)
+        cancelled = zero_all if cancelled is None else cancelled & zero_all
+        sparse = few_any if sparse is None else sparse | few_any
+    if cancelled is not None:
+        message = _estimator_message(static, cancelled, sparse)
+        if message is not None:
+            _warn_user(message)
+    return c[iu]
+
+
+def _subject_weight_matrix(data, subject_weights, rows_per_block=None):
     """
     The S x S subject weights ``wisfc`` uses for a list of S subjects: the
     given matrix, a scalar for every other subject, or (None) the default
     weights from the correlations between the subjects' static correlation
-    matrices (see ``wisfc``).
+    matrices (see ``wisfc``).  ``rows_per_block``: compute the static
+    correlation matrices that many rows at a time (the streamed summaries
+    pass their block size, so the weights fit their memory budget).
     """
     S = len(data)
     if subject_weights is None:
@@ -1419,9 +1968,8 @@ def _subject_weight_matrix(data, subject_weights):
             # between connectomes is defined; weight the other subjects equally
             subject_weights = others
         else:
-            static = np.ones([1, data[0].shape[0]])
             connectomes = np.stack(
-                [wcorr(d, d, static)[:, :, 0][iu] for d in data], axis=1
+                [_static_connectome(d, iu, rows_per_block) for d in data], axis=1
             )
             subject_weights = wcorr(connectomes, connectomes, np.ones([1, len(iu[0])]))[
                 :, :, 0
@@ -1450,7 +1998,7 @@ def _subject_kernels(timepoint_weights, S):
     """
     if not isinstance(timepoint_weights, (list, tuple)):
         return [timepoint_weights], [0] * S
-    two_d = [np.ndim(w) == 2 for w in timepoint_weights]
+    two_d = [isinstance(w, LagKernel) or np.ndim(w) == 2 for w in timepoint_weights]
     if any(two_d) and not all(two_d):
         raise ValueError(
             "timepoint_weights is a list mixing 2-D kernels with items that are not "
@@ -1467,9 +2015,11 @@ def _subject_kernels(timepoint_weights, S):
     kernels, group_of = [], []
     for w in timepoint_weights:
         for g, k in enumerate(kernels):
-            if w is k or (
-                np.shape(w) == np.shape(k) and np.array_equal(w, k, equal_nan=True)
-            ):
+            lazy = isinstance(w, LagKernel) or isinstance(k, LagKernel)
+            if w is k or (w.same_as(k) if isinstance(w, LagKernel) else (
+                not lazy and np.shape(w) == np.shape(k)
+                and np.array_equal(w, k, equal_nan=True)
+            )):
                 break
         else:
             g = len(kernels)
@@ -1690,10 +2240,8 @@ def apply_by_row(corrs, f):
         return list(map(lambda x: apply_by_row(x, f), corrs))
 
     corrs = vec2mat(corrs)
-    return np.stack(
-        list(map(lambda x: f(np.squeeze(x)), np.split(corrs, corrs.shape[2], axis=2))),
-        axis=0,
-    )
+    # index the timepoint axis (np.squeeze would also drop K = 1 axes)
+    return np.stack([f(corrs[:, :, t]) for t in range(corrs.shape[2])], axis=0)
 
 
 def corrmean_combine(corrs):
@@ -1701,7 +2249,9 @@ def corrmean_combine(corrs):
     Compute the mean element-wise correlation across each matrix in a list.
 
     Correlations are averaged in Fisher z space (``z2r(mean(r2z(r)))``).  An
-    entry of exactly +-1 has infinite z: where only one sign occurs across
+    entry of +-1 has infinite z (values within round-off of +-1, at most
+    1e-12 above or 2.8e-14 below, count as +-1, so round-off does not make
+    the z finite; 1 - 1e-13 keeps its finite z): where only one sign occurs across
     matrices the mean is that sign; where both +1 and -1 occur they are
     excluded and the remaining values are averaged (0 if none remain).
     Fisher z applies to correlations only: an entry where any matrix has a
@@ -1778,8 +2328,8 @@ def tstat_combine(corrs, return_pvals=False):
     with ``scipy.stats.ttest_1samp``.  Fisher z applies to correlations only:
     an entry where any matrix has a value outside [-1, 1] (for example the
     co-fluctuations of a delta kernel, ``eye_weights``) is tested on the raw
-    values, with no NaN and no warning; values within 1e-12 of [-1, 1] are
-    correlations with round-off (clipped to +-1).  An entry with the same
+    values, with no NaN and no warning; values within round-off of +-1 (at
+    most 1e-12 above, 2.8e-14 below) are correlations of +-1 (infinite z).  An entry with the same
     value in every matrix (zero variance across subjects, for example the
     diagonal of ``autofc`` results, where every value is 1) has t = +inf or
     -inf with the sign of that value (p = 0), or t = 0 (p = 1) when the value
@@ -1829,9 +2379,8 @@ def tstat_combine(corrs, return_pvals=False):
         )
     else:
         stacked = np.asarray(np.stack(corrs, axis=2), dtype=np.float64)
-        outside = np.abs(stacked) > 1 + _R_TOLERANCE
+        z, outside = _correlation_z(stacked)
         raw = np.any(outside, axis=2, keepdims=True)
-        z = r2z(np.where(outside, 0.0, np.clip(stacked, -1.0, 1.0)))
         vals = np.where(raw, stacked, z)
         # zero variance across subjects (every value equal, infinities
         # included): t is +-inf with the sign of the mean, 0 for a mean of 0
@@ -1878,7 +2427,10 @@ def null_combine(corrs):
 
 
 # Graph measures accepted (as strings) by ``reduce``.
-_GRAPH_MEASURES = ("eigenvector_centrality", "pagerank_centrality", "strength")
+_GRAPH_MEASURES = (
+    "eigenvector_centrality", "pagerank_centrality", "pagerank_centrality_abs",
+    "strength",
+)
 # strings that create a fresh summary instance (timecorr.summaries)
 _SUMMARY_NAMES = ("weighted_strength", "weighted_strength_split", "communities")
 
@@ -1985,6 +2537,45 @@ def _umap_defaults(rfun):
     return {**rfun, "kwargs": {**defaults, **(rfun.get("kwargs") or {})}}
 
 
+def _pagerank_solution_ok(B, b, r):
+    """True when ``r`` is finite, has a usable sum and solves ``B r = b``."""
+    if not np.all(np.isfinite(r)):
+        return False
+    if abs(np.sum(r)) < _PAGERANK_SUM_TOL * max(1.0, np.max(np.abs(r))):
+        return False
+    residual = np.linalg.norm(B @ r - b) / np.linalg.norm(b)
+    return bool(residual <= _PAGERANK_RESIDUAL_TOL)
+
+
+def _pagerank_solve(B, b):
+    """
+    Solve the PageRank system with ``scipy.linalg.solve``, or return None.
+
+    Returns the unnormalized solution when the system is well-posed (see
+    ``_PAGERANK_RCOND``), otherwise None.  The solution is computed exactly as
+    at commit 863a412, so well-posed outputs are unchanged bit for bit; the
+    condition estimate comes from a separate LU factorization (``getrf``,
+    ``gecon``), with no singular value decomposition.
+    """
+    getrf, gecon = linalg.get_lapack_funcs(("getrf", "gecon"), (B,))
+    lu, _, info = getrf(B)
+    if info > 0:
+        return None
+    rcond, _ = gecon(lu, np.max(np.sum(np.abs(B), axis=0)), norm="1")
+    if not rcond >= _PAGERANK_RCOND:
+        return None
+    try:
+        with warnings.catch_warnings():
+            # an ill-conditioned warning is superseded by the checks here
+            warnings.simplefilter("ignore", linalg.LinAlgWarning)
+            r = linalg.solve(B, b)
+    except np.linalg.LinAlgError:
+        return None
+    if not _pagerank_solution_ok(B, b, r):
+        return None
+    return r
+
+
 def reduce(corrs, rfun=None, ndims=None):
     """
     Reduce vectorized correlation matrices back to a (timepoints by features) matrix.
@@ -2011,11 +2602,49 @@ def reduce(corrs, rfun=None, ndims=None):
           where the installed UMAP has it, ``compatibility_layout=True`` (its
           current layout pipeline), unless the dict's ``'kwargs'`` give them.
         - One of the graph measures ``'eigenvector_centrality'``,
-          ``'pagerank_centrality'``, or ``'strength'`` (strings only), computed
-          per node for each timepoint.  A delta-kernel co-fluctuation matrix
+          ``'pagerank_centrality'``, ``'pagerank_centrality_abs'``, or
+          ``'strength'`` (strings only), computed
+          per node for each timepoint from the K x K matrix (diagonal
+          included).  All but ``'pagerank_centrality_abs'`` use signed
+          weights as they are, without taking absolute values: ``'strength'``
+          is the row sum, so negative
+          correlations subtract; ``'eigenvector_centrality'`` is the absolute
+          value of the unit eigenvector of the largest (most positive)
+          eigenvalue of the symmetrized matrix; ``'pagerank_centrality'``
+          (damping 0.85, uniform prior) divides each column by its column
+          sum (a zero sum is replaced by 1; negative weights can make a
+          column sum small or zero) and normalizes the result to sum to 1.
+          PageRank on signed correlations is not always defined: for some
+          valid correlation matrices the system
+          ``(I - 0.85 W diag(1 / column sums)) r = b`` is singular.  A
+          timepoint is ill-posed when the solve fails, the solution is not
+          finite, its sum is below 1e-12 times ``max(1, max|r|)``, its
+          relative residual ``||B r - b|| / ||b||`` exceeds 1e-8, or the
+          LAPACK estimate of the reciprocal condition number of the system
+          (1-norm) is below 1e-14.  Such a timepoint gets the minimum-norm
+          least-squares solution (``numpy.linalg.lstsq`` with relative
+          singular-value cutoff 1e-14), normalized, when it passes the same
+          residual and sum tests, and otherwise the uniform vector 1/K; one
+          ``UserWarning`` per call gives the counts.  Other timepoints are
+          computed as before (``scipy.linalg.solve``).
+          ``'pagerank_centrality_abs'`` is PageRank on the non-negative
+          weights ``|W|`` (damping 0.85, uniform prior, diagonal included;
+          a node whose weights are all zero spreads its rank uniformly).  It
+          is well-posed for every finite matrix (the system is strictly
+          diagonally dominant by columns, with 1-norm condition number at
+          most ``(1 + 0.85) / (1 - 0.85)``, about 12.3), so it never falls back or
+          warns; a timepoint with a non-finite entry gives NaNs.  It equals
+          ``'pagerank_centrality'`` up to round-off when every weight is
+          non-negative, and
+          ignores the sign of the correlations otherwise.  A delta-kernel co-fluctuation matrix
           ``z z^T`` has rank one, so on the delta path of ``features`` with
           ``delta_weights_function=eye_weights`` eigenvector centrality equals ``|z| / ||z||`` and the graph measures
-          carry no network structure.
+          carry no network structure.  With one node (K = 1, the 1 x 1
+          matrix ``[[w]]``), ``'strength'`` is ``w`` and, for a finite ``w``,
+          the other three measures are 1 (for a non-finite ``w``,
+          ``'pagerank_centrality_abs'`` is NaN and
+          ``'eigenvector_centrality'`` and ``'pagerank_centrality'`` raise
+          an error, as they do for any matrix with a non-finite entry).
         - A squared-correlation summary (see ``timecorr.summaries``): a
           ``WeightedStrength`` or ``Communities`` instance, or the strings
           ``'weighted_strength'`` (``WeightedStrength()``),
@@ -2061,7 +2690,10 @@ def reduce(corrs, rfun=None, ndims=None):
     -----
     UserWarning
         When the output is padded with zero columns (``ndims`` larger than the
-        number of features or samples).
+        number of features or samples), and once per call when the PageRank
+        system of ``'pagerank_centrality'`` is ill-posed for any timepoint
+        (with the numbers of ill-posed timepoints, of least-squares
+        solutions and of uniform vectors).
 
     Examples
     --------
@@ -2105,6 +2737,8 @@ def reduce(corrs, rfun=None, ndims=None):
 
         return centrality
 
+    pagerank_counts = {"total": 0, "lstsq": 0, "uniform": 0}
+
     def pagerank_centrality(W, d=0.85, falff=None):
         """
         Compute PageRank centrality using the same algorithm as brainconn.
@@ -2122,7 +2756,10 @@ def reduce(corrs, rfun=None, ndims=None):
         Returns
         -------
         numpy.ndarray
-            PageRank centrality values
+            PageRank centrality values.  For an ill-posed system (see
+            ``_PAGERANK_RCOND``) the normalized minimum-norm least-squares
+            solution when it solves the system, otherwise the uniform vector;
+            ``pagerank_counts`` records which.
         """
         N = len(W)
         if falff is None:
@@ -2135,9 +2772,49 @@ def reduce(corrs, rfun=None, ndims=None):
         D1 = np.diag(1 / deg)
         B = np.eye(N) - d * np.dot(W, D1)
         b = (1 - d) * norm_falff
-        r = linalg.solve(B, b)
+        pagerank_counts["total"] += 1
+        r = _pagerank_solve(B, b)
+        if r is None:
+            r = np.linalg.lstsq(B, b, rcond=_PAGERANK_RCOND)[0]
+            if _pagerank_solution_ok(B, b, r):
+                pagerank_counts["lstsq"] += 1
+            else:
+                pagerank_counts["uniform"] += 1
+                return np.full(N, 1.0 / N)
         r /= np.sum(r)
         return r
+
+    def pagerank_centrality_abs(W, d=0.85):
+        """
+        PageRank centrality on the non-negative weights ``|W|``.
+
+        Uniform prior; a node whose weights are all zero spreads its rank
+        uniformly (equivalently, the solution of the linear system below is
+        normalized to sum to 1).  Each column of ``|W|`` is divided by its
+        largest entry first (PageRank depends only on the relative weights
+        within each column), so the column sums, between 1 and K, neither
+        overflow nor underflow, and a column of small weights is not lost
+        next to a column of large ones.  With column sums
+        ``s_j`` of the scaled weights (zero sums replaced by 1), the matrix
+        ``B = I - d |W| diag(1 / s)`` is strictly diagonally dominant by
+        columns for ``d < 1``, so the system ``B r = (1 - d) / K`` always has
+        a unique, positive solution and its 1-norm condition number is at
+        most ``(1 + d) / (1 - d)``.  Returns NaNs when ``W`` has a non-finite
+        entry, and an empty array for K = 0.
+        """
+        N = len(W)
+        if N == 0:
+            return np.zeros(0)
+        A = np.abs(W)
+        if not np.all(np.isfinite(A)):
+            return np.full(N, np.nan)
+        top = np.max(A, axis=0)
+        A = A / np.where(top > 0, top, 1.0)[None, :]
+        deg = np.sum(A, axis=0)
+        deg[deg == 0] = 1
+        B = np.eye(N) - d * (A / deg[None, :])
+        r = linalg.solve(B, np.full(N, (1 - d) / N))
+        return r / np.sum(r)
 
     def strengths_und(W):
         """
@@ -2160,6 +2837,7 @@ def reduce(corrs, rfun=None, ndims=None):
     graph_measures = {
         "eigenvector_centrality": eigenvector_centrality_und,
         "pagerank_centrality": lambda x: pagerank_centrality(x, d=0.85),
+        "pagerank_centrality_abs": lambda x: pagerank_centrality_abs(x, d=0.85),
         "strength": strengths_und,
     }
 
@@ -2190,7 +2868,24 @@ def reduce(corrs, rfun=None, ndims=None):
         return rfun([corrs])[0]
 
     if isinstance(rfun, str) and rfun in graph_measures:
-        return apply_by_row(corrs, graph_measures[rfun])
+        out = apply_by_row(corrs, graph_measures[rfun])
+        n_lstsq, n_uniform = pagerank_counts["lstsq"], pagerank_counts["uniform"]
+        if n_lstsq + n_uniform:
+            warnings.warn(
+                "rfun='pagerank_centrality': the PageRank system "
+                "(I - 0.85 W diag(1 / column sums)) r = b was ill-posed "
+                f"(singular, inconsistent or not solved accurately) for "
+                f"{n_lstsq + n_uniform} of {pagerank_counts['total']} timepoints; "
+                f"{n_lstsq} used the minimum-norm least-squares solution and "
+                f"{n_uniform} the uniform vector 1/K.  PageRank on signed "
+                "correlations is not always defined (negative weights can "
+                "cancel the column sums); rfun='pagerank_centrality_abs' "
+                "(PageRank on |W|), rfun='strength' and "
+                "rfun='eigenvector_centrality' are defined for every matrix.",
+                UserWarning,
+                stacklevel=2,
+            )
+        return out
 
     arrays = corrs if isinstance(corrs, list) else [corrs]
     n_features = arrays[0].shape[1]

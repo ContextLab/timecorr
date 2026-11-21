@@ -37,7 +37,7 @@ from .helpers import (
     wisfc,
 )
 from .events import segment
-from .higher_order import features
+from .higher_order import features, two_path_step
 from .summaries import Communities, WeightedStrength
 from .simulate import (
     carrier_columns,
@@ -46,6 +46,7 @@ from .simulate import (
     nested_template,
     simulate_data,
     simulate_multi_order,
+    simulate_hierarchy,
     simulate_nested,
 )
 from .timecorr import timecorr

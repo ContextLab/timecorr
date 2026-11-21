@@ -59,8 +59,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   difference decides was not measured. Order 4
   was not recovered in the one design tried (162 nodes in four levels with
   3 children per group and 3 nodes per module, timescales 5, 100, 1100
-  and 12,000 samples, T 400,000): with the order-1 step replaced by the
-  true modules, the order-4 features gave .02 +- .08 over 4 recordings.
+  and 12,000 samples, T 400,000): the order-4 features of the default
+  call gave .17 +- .07 over 2 recordings (null control -.04 +- .12; fixed
+  kernels -.00 +- .01), with the right number of communities at every
+  order (54, 18, 6, 2), in 1 h 47 min and 33 GB per call of 5 subjects;
+  with the order-1 step replaced by the true modules, .02 +- .08 over 4
+  other recordings.
   On `simulate_nested` data (T 1000, 12 seeds) `X[2]` is unchanged and the
   decoding score of `D[2]` rises from .199 +- .021 to .560 +- .020
   (control .002 +- .025; its spread over seeds is .086 against .051 with

@@ -142,10 +142,13 @@ K > n columns, each lag is used ``K // n`` or ``ceil(K / n)`` times within a
 subject, and columns that share a lag keep their dependence in that surrogate:
 with K = q n + r, a fraction [n q (q - 1) + 2 r q] / [K (K - 1)] of the column
 pairs (1/231 at K = 22, n = 21), and one ``UserWarning`` per fit says so (giving
-the number of communities ``n`` avoids the shift null). The surrogates' squared
-correlations are averaged over every ``s``-th timepoint, ``s`` being the largest
-step at which two rows of the kernel still overlap by ``exp(-1/4)`` (the
-standard deviation, rounded down, for ``gaussian_weights``). When the
+the number of communities ``n`` avoids the shift null). For a built-in kernel
+without events, one-sided restriction or ``exclude_timepoints``, the surrogates'
+squared correlations are averaged over every ``s``-th timepoint, ``s`` being the
+largest step at which two rows of the kernel still overlap by ``exp(-1/4)`` (the
+standard deviation, rounded down, for ``gaussian_weights``); for any other
+kernel (an array, a kernel function of your own, a restricted kernel), whose
+rows can differ, they are averaged over every timepoint. When the
 communities found at a feeding step would emit fewer than 4 columns (at most
 half its input features; one when the shift null finds no structure), that step
 emits ``WeightedStrength(split=False, signed=False, center=False)`` of the same
@@ -168,8 +171,11 @@ held only when one block covers all K rows.
 The default ``cfun=isfc`` correlates each subject's features with the other
 subjects' and so reflects structure shared across subjects; ``cfun=autofc``
 computes within-subject correlations. On ``simulate_nested`` data (108 nodes,
-T 1000, 6 subjects per call, 12 seeds, other arguments default; mean +-
-standard error, control in parentheses):
+T 1000, 6 subjects per call, 12 seeds; mean +- standard error, control in
+parentheses), with the fixed kernels of earlier versions
+(``weights_params={"var": 100}, delta_weights_params={"var": 25}``) and the
+other arguments default (with the automatic kernels, ``X[2]`` is the same
+there and ``D[2]`` with ``isfc`` scores .560 +- .020, control .002 +- .025):
 
 ========================  ==========  ==============================  ==============================
 data (``shared=``)        ``cfun``    ``X[2]`` score                  ``D[2]`` score

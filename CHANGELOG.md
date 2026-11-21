@@ -278,6 +278,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `"sampling"` (timepoints per row). The up-front memory checks of
   later orders (streamed and unreduced steps) use the fewest rows they can
   have, and each step is checked again with its rows when it runs.
+  `max_memory_gb` also covers returning the outputs at all timepoints:
+  each output is interpolated into one array, a chunk of rows at a time,
+  and a run whose outputs at full length would not fit raises
+  `MemoryError` naming their size (up front when both paths are
+  unreduced, otherwise after the order that exceeds it).
   Measured on simulated nested hierarchies (ridge decoding of the top-level
   signal from one subject's features, applied to independent subjects and
   scored against their own top-level signal; mean +- standard error; the
@@ -913,8 +918,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tutorials are the gallery.** `docs/tutorials.rst` shows the notebooks
   as a gallery of cards (nbsphinx `nbgallery`); each card shows a dedicated
   4:3 picture drawn by its notebook (the cell tagged `nbsphinx-thumbnail`)
-  and opens it; the Colab install cell of each notebook prints which source
-  it installed and shows pip's output when an install fails. The
+  and opens it; the Colab install cell of each notebook installs from PyPI,
+  falls back to GitHub, prints which source it installed, and shows pip's
+  output only when both installs fail. The
   tutorials were rewritten with shorter text: `timecorr_notebook` became
   `subjects` and `synthetic_data_tutorial` became `kernels`.
 - **Documentation extras.** The `docs` extra holds only what the Sphinx build

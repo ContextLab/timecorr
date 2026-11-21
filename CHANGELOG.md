@@ -9,6 +9,78 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Automatic kernels in `features` and `two_path_step`.** Kernel
+  parameters of None (`weights_params=None`, `delta_weights_params=None`,
+  the defaults) with Gaussian kernels on both paths now set each order's
+  kernels from that order's input: the feeding kernel's standard deviation
+  is 5 autocorrelation widths of the input (the lag at which the mean
+  autocorrelation of its columns falls below `exp(-1/2)`, at least 1), at
+  least 5 rows and at most a hundredth of the input's rows, and the
+  analysis kernel's is that or 10 rows, whichever is larger. Orders missing
+  from an order map (or mapped to None) are automatic too. What changes:
+  white data at order 1 keep the earlier kernels (standard deviations 10
+  and 5 samples); at orders 2 and above, whose input is smooth, the
+  kernels are wider (10 samples for recordings of up to 1000 timepoints,
+  where `X[2]` on white data is unchanged and `D[2]` differs; wider for
+  longer recordings); autocorrelated data get wider kernels at order 1
+  too. The earlier fixed kernels are requested with
+  `weights_params={"var": 100}, delta_weights_params={"var": 25}`. With
+  another kernel function, or with `delta_weights_function=tc.eye_weights`
+  (the original pipeline, unchanged), None means the kernel function's own
+  defaults, as before. When no kernel parameters and no events are given,
+  each order's feeding features are passed on at every `floor(sd / 2)`-th
+  row while at least 1000 rows remain, so later orders of recordings of
+  2000 or more timepoints are computed at fewer timepoints; every output is
+  returned at all timepoints by linear interpolation. `return_info=True`
+  gives each automatic kernel's `"kernel_sd"` (rows of its order's input)
+  and `"sampling"` (timepoints per row). The up-front memory check of
+  later orders uses the fewest rows they can have.
+  Measured on simulated nested hierarchies (ridge decoding of the top-level
+  signal from one subject's features, applied to independent subjects and
+  scored against their own top-level signal; mean +- standard error; the
+  same data with the fixed kernels in parentheses; weighted strength in
+  place of PCA at order 1 for memory): 108 nodes in two levels, T 6000,
+  16 recordings: order-2 features .747 +- .005 (.496 +- .004); 256 nodes
+  in three levels whose timescales grow by factors of 20 and 15 (5, 100,
+  1500 samples), T 60,000, 8 recordings: order-3 features .662 +- .009
+  (.002 +- .003), with the right number of communities at every order;
+  216 nodes in three levels whose timescales grow by factors of 10 and
+  7.5 (4, 40, 300 samples), T 12,000, 8 recordings: order-3 features
+  .156 +- .028 (.007 +- .004). Each order's kernel was about 10 times as
+  wide as the previous order's (5, 46 and 526 samples), so structure
+  whose timescales lie closer together than that is not followed. Order 4
+  was not recovered in the one design tried (162 nodes in four levels with
+  3 children per group and 3 nodes per module, timescales 5, 100, 1100
+  and 12,000 samples, T 400,000): with the order-1 step replaced by the
+  true modules, the order-4 features gave .02 +- .08 over 4 recordings.
+  On `simulate_nested` data (T 1000, 12 seeds) `X[2]` is unchanged and the
+  decoding score of `D[2]` rises from .199 +- .021 to .560 +- .020
+  (control .002 +- .025; its spread over seeds is .086 against .051 with
+  the fixed kernels).
+- **Constant summary columns: a relative rule.** A summary column counts
+  as constant (set to its mean when its range is nonzero, and reported by
+  the constant-output warning) when its range over time is at most
+  `1e-9 * max|column|`; the earlier rule, `1e-9 * max(1, max|column|)`,
+  also treated real variation of columns with values far below 1 as
+  round-off (a column of values near 3e-6 varying by 1e-6 of them).
+- **Shift null evaluated at every s-th timepoint.** In `features` and
+  `two_path_step`, the surrogates of the automatic community count
+  average their squared correlations over every `s`-th timepoint, where
+  `s` is the largest step at which two rows of the kernel still overlap by
+  `exp(-1/4)` (the standard deviation, rounded down, for a Gaussian
+  kernel; 1 for `eye_weights`), for built-in kernels and kernel functions
+  of your own alike. On 96 noise inputs of four sizes the threshold was 1.000 to
+  1.002 times the threshold from every timepoint (standard errors .001 to
+  .003), and the communities found on 24 structured inputs were the same;
+  the default call on 5 subjects of 6000 x 108 took 45 s instead of 81 s
+  (the null: 11 s instead of 44 s). Thresholds, and so community counts
+  near the threshold, can differ from the previous version. Phase
+  randomization was compared with the circular shift on the same inputs
+  and found the same counts (one worse of 24) and the same rate of false
+  structure on noise (20 % against 18 % for any eigenvalue above the
+  threshold; neither gave the 4 communities at which the default reducer
+  emits community columns), so the circular shift is kept.
+
 - **Kernels without a T x T matrix.** For the built-in kernel functions
   (`gaussian_weights`, `laplace_weights`, `t_weights`,
   `mexican_hat_weights`, `boxcar_weights`, `uniform_weights`,

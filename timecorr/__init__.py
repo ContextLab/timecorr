@@ -51,3 +51,4 @@ from .simulate import (
     simulate_nested,
 )
 from .timecorr import timecorr
+from .video import media_dir, render_video, show_video

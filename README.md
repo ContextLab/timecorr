@@ -14,6 +14,7 @@ The toolbox accompanies Owen, Chang & Manning (2021), *Nature Communications* 12
 - **Simulation** (`tc.simulate_data`): data with known dynamic correlations, including structure embedded at exactly one chosen correlation order.
 - **Decoding**: timepoint decoders that measure how well features of each order identify the moment a pattern came from, across groups of subjects. They accept `events`: the correlation decoders restrict the analysis kernel at levels 1 and above (level 0 is unchanged), and `pca_decoder` restricts its smoothing kernel; the events are supplied by the caller and used as given in every fold.
 - **Inputs**: numpy arrays, pandas DataFrames and polars DataFrames, or lists of them (one per subject).
+- **Example data and videos**: `tc.datasets` downloads and caches the data of the real-data tutorials (`tc.datasets.story_listening`, `tc.datasets.industry_returns`, `tc.datasets.fetch`); `tc.render_video` draws the frames of a video in parallel and encodes them, and `tc.show_video` shows it in a notebook (both need `pip install "timecorr[tutorials]"`); `plt.style.use("timecorr.tutorial")` is the plot style of the tutorials.
 
 # Quick Start
 

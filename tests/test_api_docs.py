@@ -29,6 +29,8 @@ MODULES = [
     "timecorr.simulate",
     "timecorr.events",
     "timecorr.summaries",
+    "timecorr.datasets",
+    "timecorr.video",
 ]
 
 # Public names that are not exported from ``timecorr`` but are documented on the
@@ -54,6 +56,7 @@ USER_FACING_MODULE_NAMES = {
         "get_xval_assignments",
     ],
     "timecorr.helpers": ["r2z", "z2r", "plot_weights"],
+    "timecorr.datasets": ["cache_dir", "fetch", "story_listening", "industry_returns"],
 }
 
 # Public names that are internal helpers: they need a docstring, not an API page.

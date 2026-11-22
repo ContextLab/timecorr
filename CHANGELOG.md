@@ -5,9 +5,94 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.1] - Unreleased
+
+### Added
+
+- `tc.datasets` (`timecorr/datasets.py`), the example data of the real-data
+  tutorials: `tc.datasets.fetch(url, path, sha256=None, member=None)` downloads
+  a file once (through uniquely named `.part` temporary files and an atomic
+  replace, so calls for one target at the same time do not disturb each other; with an optional SHA-256 check
+  and optional extraction of one member of a zip archive) into the cache root
+  (`$TIMECORR_DATA`, default `~/timecorr_data`; `tc.datasets.cache_dir()`);
+  `tc.datasets.story_listening(n_nodes=100, return_nodes=False)` returns the
+  HTFA node weights of the story-listening data of Owen, Chang & Manning
+  (2021) (36 participants, 300 timepoints, the nodes spread over the brain;
+  with `return_nodes=True` also their centers, widths and indices; `n_nodes`
+  must be an integer between 1 and the 679 nodes that vary in every
+  participant, otherwise `ValueError`);
+  `tc.datasets.industry_returns(start="2005-01-01", end="2024-12-31")` returns
+  the daily log returns of the 49 Industry Portfolios of the Kenneth R. French
+  Data Library as a DataFrame. The loaders return the same arrays as the
+  loading code of the tutorial notebooks and use the same cache files.
+- `tc.features(..., return_info=True)`: every entry has `"constant_columns"`
+  (the columns of the step's output that are constant over time in the
+  returned arrays, `np.ptp(x, axis=0) == 0`; one list per subject for list
+  outputs), and feeding entries have `"labels"` (the community of each input
+  column when the output columns are the communities of a `Communities`
+  object, the default included; None after a fallback, for other reducers and
+  for the name `"communities"`). A second run with an explicit
+  `tc.Communities()` is no longer needed to read the labels.
+- `tc.render_video(draw, n_frames, path, fps=30, crf=23, hold=0, n_jobs=None,
+  chunk_size=25, retries=0)` draws the frames of a video in parallel worker
+  processes (`draw(frames, paths)` is called once per run of consecutive
+  frames) and encodes them as H.264 with the ffmpeg of imageio-ffmpeg;
+  `tc.show_video(path, width=960)` shows a video in a notebook (linked inside
+  a Sphinx documentation tree and for a URL, embedded elsewhere);
+  `tc.media_dir(name="tutorial_media")` gives the directory for the two
+  cases. joblib, imageio-ffmpeg and IPython are imported on first use and
+  stay in the `tutorials` extra. `render_video` gives `draw` consecutive frames also when drawing is started
+  again with `retries`, and encodes under a temporary name next to the target,
+  so a failed encoding leaves an existing video as it was;
+  `show_video` percent-encodes and escapes the linked path.
+- The plot style of the tutorials as a matplotlib style in the package:
+  `plt.style.use("timecorr.tutorial")` (`timecorr/tutorial.mplstyle`).
+  Importing timecorr does not apply it.
 
 ### Changed
+
+- `install_requires`: `matplotlib>=3.7` (before: any version), the first
+  version that loads a style from a package. The `test` extra also installs
+  imageio-ffmpeg and ipython (for the tests of the video helpers).
+- The eleven tutorial notebooks use the helpers above in place of their own
+  copies of that code (about a fifth fewer code lines). What they compute,
+  print and show is unchanged: every figure of the re-executed notebooks is
+  pixel-identical to the one before, the printed text is the same but for the
+  two lines named below, and the videos of `stocks` and `trajectories` are
+  byte-identical (the brain renderings of `htfa_network_animations` differ a
+  little from run to run, with the old code as with the new; its committed
+  videos are kept).
+  - The Colab install cell is one shell line, `!pip install -q
+    "timecorr>=0.3.1" || pip install -q "timecorr @
+    git+https://github.com/ContextLab/timecorr.git@master"` (with each
+    notebook's extra and other packages), since the notebooks need release
+    0.3.1. It no longer prints which source was installed, and pip's messages
+    are no longer hidden: when PyPI does not have the release, pip's error
+    shows before the install from GitHub.
+  - The eight simulated-data notebooks set their plot style with
+    `plt.style.use('timecorr.tutorial')`. Thumbnail cells show their figure
+    with `plt.show()` after `%config InlineBackend.print_figure_kwargs =
+    {'bbox_inches': None}` (the same 600 x 450 picture as the PNG they wrote
+    to a buffer before).
+  - `htfa_network_animations`, `stocks` and `trajectories` load their data
+    with `tc.datasets`, write their videos with `tc.render_video` (frames in
+    a temporary folder; before: under `$TIMECORR_DATA`) into `tc.media_dir()`
+    and show them with `tc.show_video`. `stocks` keeps the two `Siccodes`
+    text files of the library in the cache (before: their zip archives).
+  - `htfa_network_animations` and `stocks` read the communities from the
+    `"labels"` of `return_info` and no longer run `tc.features` a second
+    time; the printed lines that compared the two runs are gone
+    (`explicit Communities() at orders [2]: outputs equal to the default run;
+    same warnings` and `same output as the default run: True`).
+    `htfa_network_animations` and `trajectories` read the constant columns
+    from `"constant_columns"`.
+  - `higher_order`: `ridge_decode` fits scikit-learn's
+    `Ridge(fit_intercept=False)` (before: a hand-written solve; the printed
+    scores and the figure are the same).
+  - `htfa_network_animations`, preview quality: the check for the
+    full-quality videos of the online documentation sends a `User-Agent`
+    header. Without one the documentation server answered HTTP 403, so the
+    notebook reported that no full-quality video was online.
 
 - Tutorial `docs/tutorial/trajectories.ipynb`: the trajectories are drawn in
   hypertools' own cubes with `hyp.plot(..., panels=...)`, after reducing each

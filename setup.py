@@ -13,7 +13,7 @@ LICENSE = "MIT"
 
 setup(
     name="timecorr",
-    version="0.3.0",
+    version="0.3.1",
     description="Compute dynamic correlations, dynamic higher-order correlations, and dynamic graph theoretic measures in timeseries data",
     long_description=readme,
     long_description_content_type="text/markdown",
@@ -29,7 +29,8 @@ setup(
         "scipy",
         "scikit-learn",
         "pandas",
-        "matplotlib",
+        # 3.7: styles of packages (plt.style.use("timecorr.tutorial"))
+        "matplotlib>=3.7",
     ],
     extras_require={
         "segment": ["hmmlearn"],
@@ -37,6 +38,9 @@ setup(
             "pytest",
             "polars",
             "hmmlearn",
+            # the video helpers (joblib comes with scikit-learn)
+            "imageio-ffmpeg",
+            "ipython",
         ],
         # building the documentation (the notebooks are not executed)
         "docs": [
@@ -59,5 +63,6 @@ setup(
         ],
     },
     packages=find_packages(exclude=("tests", "docs")),
+    package_data={"timecorr": ["*.mplstyle"]},
 )
 

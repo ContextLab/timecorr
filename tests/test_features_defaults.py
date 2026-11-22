@@ -567,15 +567,40 @@ def test_two_nodes_give_identical_weighted_strength_columns():
 
 # return_info ------------------------------------------------------------------
 
-ANALYSIS_KEYS = {"order", "path", "requested", "effective", "input_width", "output_width"}
-AUTO_KEYS = ANALYSIS_KEYS | {"n_communities", "n_exceed", "null_threshold", "n_null",
+ANALYSIS_KEYS = {"order", "path", "requested", "effective", "input_width", "output_width",
+                 "constant_columns"}
+AUTO_KEYS = ANALYSIS_KEYS | {"labels", "n_communities", "n_exceed", "null_threshold", "n_null",
                              "fallback"}
+
+
+def _int_list(value):
+    return type(value) is list and all(type(item) is int for item in value)
+
+
+def test_no_arrays_rejects_nested_labels_and_mixed_columns():
+    _no_arrays([{"labels": [0, 1, 1], "constant_columns": [[], [2]]},
+                {"labels": None, "constant_columns": []}])
+    for bad in ({"labels": [[0, 1], [1]]}, {"labels": [0, 1.0]}, {"labels": (0, 1)},
+                {"constant_columns": None}, {"constant_columns": [1, [2]]},
+                {"constant_columns": [[1], [[2]]]}, {"constant_columns": [True]}):
+        with pytest.raises(AssertionError):
+            _no_arrays([bad])
 
 
 def _no_arrays(info):
     for entry in info:
         for key, value in entry.items():
             assert isinstance(key, str)
+            if key == "labels" and value is not None:
+                # a flat list of ints
+                assert _int_list(value), (key, value)
+                continue
+            if key == "constant_columns":
+                # a list of ints, or one such list per subject for list outputs
+                assert _int_list(value) or (
+                    type(value) is list and len(value) > 0
+                    and all(_int_list(item) for item in value)), (key, value)
+                continue
             assert value is None or type(value) in (int, float, str), (key, value)
 
 
@@ -610,7 +635,8 @@ def test_return_info_content():
     assert set(a1) == ANALYSIS_KEYS and set(a2) == ANALYSIS_KEYS
     assert set(f1) == AUTO_KEYS and set(f2) == AUTO_KEYS
     assert a1 == {"order": 1, "path": "analysis", "requested": "auto",
-                  "effective": "PCA", "input_width": 24, "output_width": 24}
+                  "effective": "PCA", "input_width": 24, "output_width": 24,
+                  "constant_columns": [[], []]}
     assert a2["requested"] == repr(ws) and a2["effective"] == repr(ws)
     assert (a2["input_width"], a2["output_width"]) == (D[1][0].shape[1], X[2][0].shape[1])
     assert f1["requested"] == "auto" and f1["input_width"] == 24
@@ -623,7 +649,7 @@ def test_return_info_content():
                          **FIXED_FEEDING)
     assert info[0]["requested"] is None and info[0]["effective"] is None
     assert info[0]["output_width"] == 24 * 25 // 2
-    assert set(info[1]) == ANALYSIS_KEYS
+    assert set(info[1]) == ANALYSIS_KEYS | {"labels"}
     assert info[1]["requested"] == "weighted_strength"
 
 

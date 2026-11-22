@@ -5,7 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - Unreleased
+## [Unreleased]
+
+### Changed
+
+- Tutorial `docs/tutorial/trajectories.ipynb`: the trajectories are drawn in
+  hypertools' own cubes with `hyp.plot(..., panels=...)`, after reducing each
+  order to three dimensions with `hyp.reduce` and rescaling each component to
+  its own range (before: boxes fitted to each trajectory, drawn by the
+  notebook). The three videos are 1920 x 600 with the four orders in a row.
+  The text no longer says that hypertools' animations interpolate between
+  samples (they do so only with more frames than samples); the notebook draws
+  its own frames because `animate=True` cannot be combined with `panels=`.
+
+## [0.3.0] - 2026-11-21
 
 ### Changed
 

@@ -11,13 +11,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `tc.datasets` (`timecorr/datasets.py`), the example data of the real-data
   tutorials: `tc.datasets.fetch(url, path, sha256=None, member=None)` downloads
-  a file once (through `.part` temporary files, with an optional SHA-256 check
+  a file once (through uniquely named `.part` temporary files and an atomic
+  replace, so calls for one target at the same time do not disturb each other; with an optional SHA-256 check
   and optional extraction of one member of a zip archive) into the cache root
   (`$TIMECORR_DATA`, default `~/timecorr_data`; `tc.datasets.cache_dir()`);
   `tc.datasets.story_listening(n_nodes=100, return_nodes=False)` returns the
   HTFA node weights of the story-listening data of Owen, Chang & Manning
   (2021) (36 participants, 300 timepoints, the nodes spread over the brain;
-  with `return_nodes=True` also their centers, widths and indices);
+  with `return_nodes=True` also their centers, widths and indices; `n_nodes`
+  must be an integer between 1 and the 679 nodes that vary in every
+  participant, otherwise `ValueError`);
   `tc.datasets.industry_returns(start="2005-01-01", end="2024-12-31")` returns
   the daily log returns of the 49 Industry Portfolios of the Kenneth R. French
   Data Library as a DataFrame. The loaders return the same arrays as the
@@ -38,7 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a Sphinx documentation tree and for a URL, embedded elsewhere);
   `tc.media_dir(name="tutorial_media")` gives the directory for the two
   cases. joblib, imageio-ffmpeg and IPython are imported on first use and
-  stay in the `tutorials` extra.
+  stay in the `tutorials` extra. `render_video` gives `draw` consecutive frames also when drawing is started
+  again with `retries`, and encodes under a temporary name next to the target,
+  so a failed encoding leaves an existing video as it was;
+  `show_video` percent-encodes and escapes the linked path.
 - The plot style of the tutorials as a matplotlib style in the package:
   `plt.style.use("timecorr.tutorial")` (`timecorr/tutorial.mplstyle`).
   Importing timecorr does not apply it.

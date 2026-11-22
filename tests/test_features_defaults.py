@@ -573,16 +573,33 @@ AUTO_KEYS = ANALYSIS_KEYS | {"labels", "n_communities", "n_exceed", "null_thresh
                              "fallback"}
 
 
+def _int_list(value):
+    return type(value) is list and all(type(item) is int for item in value)
+
+
+def test_no_arrays_rejects_nested_labels_and_mixed_columns():
+    _no_arrays([{"labels": [0, 1, 1], "constant_columns": [[], [2]]},
+                {"labels": None, "constant_columns": []}])
+    for bad in ({"labels": [[0, 1], [1]]}, {"labels": [0, 1.0]}, {"labels": (0, 1)},
+                {"constant_columns": None}, {"constant_columns": [1, [2]]},
+                {"constant_columns": [[1], [[2]]]}, {"constant_columns": [True]}):
+        with pytest.raises(AssertionError):
+            _no_arrays([bad])
+
+
 def _no_arrays(info):
     for entry in info:
         for key, value in entry.items():
             assert isinstance(key, str)
-            if key in ("labels", "constant_columns") and value is not None:
-                # lists of ints (constant columns: one list per subject for list outputs)
-                assert type(value) is list, (key, value)
-                for item in value:
-                    assert type(item) is int or (
-                        type(item) is list and all(type(i) is int for i in item)), (key, value)
+            if key == "labels" and value is not None:
+                # a flat list of ints
+                assert _int_list(value), (key, value)
+                continue
+            if key == "constant_columns":
+                # a list of ints, or one such list per subject for list outputs
+                assert _int_list(value) or (
+                    type(value) is list and len(value) > 0
+                    and all(_int_list(item) for item in value)), (key, value)
                 continue
             assert value is None or type(value) in (int, float, str), (key, value)
 

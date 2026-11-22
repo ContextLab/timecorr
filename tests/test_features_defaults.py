@@ -567,8 +567,9 @@ def test_two_nodes_give_identical_weighted_strength_columns():
 
 # return_info ------------------------------------------------------------------
 
-ANALYSIS_KEYS = {"order", "path", "requested", "effective", "input_width", "output_width"}
-AUTO_KEYS = ANALYSIS_KEYS | {"n_communities", "n_exceed", "null_threshold", "n_null",
+ANALYSIS_KEYS = {"order", "path", "requested", "effective", "input_width", "output_width",
+                 "constant_columns"}
+AUTO_KEYS = ANALYSIS_KEYS | {"labels", "n_communities", "n_exceed", "null_threshold", "n_null",
                              "fallback"}
 
 
@@ -576,6 +577,13 @@ def _no_arrays(info):
     for entry in info:
         for key, value in entry.items():
             assert isinstance(key, str)
+            if key in ("labels", "constant_columns") and value is not None:
+                # lists of ints (constant columns: one list per subject for list outputs)
+                assert type(value) is list, (key, value)
+                for item in value:
+                    assert type(item) is int or (
+                        type(item) is list and all(type(i) is int for i in item)), (key, value)
+                continue
             assert value is None or type(value) in (int, float, str), (key, value)
 
 
@@ -610,7 +618,8 @@ def test_return_info_content():
     assert set(a1) == ANALYSIS_KEYS and set(a2) == ANALYSIS_KEYS
     assert set(f1) == AUTO_KEYS and set(f2) == AUTO_KEYS
     assert a1 == {"order": 1, "path": "analysis", "requested": "auto",
-                  "effective": "PCA", "input_width": 24, "output_width": 24}
+                  "effective": "PCA", "input_width": 24, "output_width": 24,
+                  "constant_columns": [[], []]}
     assert a2["requested"] == repr(ws) and a2["effective"] == repr(ws)
     assert (a2["input_width"], a2["output_width"]) == (D[1][0].shape[1], X[2][0].shape[1])
     assert f1["requested"] == "auto" and f1["input_width"] == 24
@@ -623,7 +632,7 @@ def test_return_info_content():
                          **FIXED_FEEDING)
     assert info[0]["requested"] is None and info[0]["effective"] is None
     assert info[0]["output_width"] == 24 * 25 // 2
-    assert set(info[1]) == ANALYSIS_KEYS
+    assert set(info[1]) == ANALYSIS_KEYS | {"labels"}
     assert info[1]["requested"] == "weighted_strength"
 
 

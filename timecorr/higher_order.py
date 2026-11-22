@@ -2034,10 +2034,16 @@ def _step_info(k, inputs, x, delta, analysis_rfun, feeding_rfun, requested,
     entry = {
         "order": k, "path": "feeding", "requested": _describe(requested_delta),
         "effective": _describe(feeding_rfun), "input_width": d,
-        "output_width": _width(delta),
+        "output_width": _width(delta), "labels": None,
     }
+    fit = None
+    if isinstance(feeding_rfun, Communities):
+        # this step's fit (the same object may also reduce the analysis path)
+        fit = next(f for f in reversed(feeding_rfun.fits_)
+                   if f["order"] == k and f["path"] == "feeding")
+        if fit.get("fallback") is None:
+            entry["labels"] = fit["labels"].tolist()
     if getattr(feeding_rfun, "_from_auto", False):
-        fit = feeding_rfun.fits_[-1]
         if fit["fallback"] is not None:
             entry["effective"] = _describe(_auto_fallback())
         entry.update(
@@ -2049,6 +2055,17 @@ def _step_info(k, inputs, x, delta, analysis_rfun, feeding_rfun, requested,
         )
     entries.append(entry)
     return entries
+
+
+def _constant_columns(out):
+    """
+    The columns of an output that are constant over time
+    (``np.ptp(x, axis=0) == 0``), as a list of ints; for a list of arrays,
+    one such list per array.
+    """
+    if isinstance(out, list):
+        return [_constant_columns(x) for x in out]
+    return np.flatnonzero(np.ptp(np.asarray(out), axis=0) == 0).tolist()
 
 
 def _check_events_order_zero(events, T, n_subjects, events_params):
@@ -2372,8 +2389,24 @@ def features(
         ``"n_communities"`` (the columns the candidate communities emit),
         ``"n_exceed"`` (eigenvalues above the shift-null threshold),
         ``"null_threshold"``, ``"n_null"`` and ``"fallback"`` (None,
-        ``"too_few_community_columns"`` or ``"no_null_exceedance"``).  No
-        arrays.  Default: False.
+        ``"too_few_community_columns"`` or ``"no_null_exceedance"``).
+        Feeding steps have ``"labels"``: when the step's output columns are
+        the communities of a ``Communities`` object (the default, or an
+        object given in ``delta_rfun``), a list with the community (an int)
+        of each input column, the same for every subject; communities are
+        numbered in the order of their first column, and the output has
+        one column per community of two or more input columns, in that
+        order.  ``"labels"`` is None when the step fell back
+        (``"fallback"``), was reduced in another way, or was reduced with
+        the name ``"communities"`` (whose fit is not kept).  Every entry
+        has ``"constant_columns"``: the columns of the step's output that
+        are constant over time (``np.ptp(x, axis=0) == 0``) in the arrays
+        the call returns (for outputs computed at a lower rate, after the
+        interpolation to all timepoints), as a list of ints, or one such
+        list per subject when the output is a list; for feeding features
+        that are not returned (``return_delta=False``), in the rows
+        computed.  No arrays: numbers, strings, None and lists of ints.
+        Default: False.
 
     Returns
     -------
@@ -2832,6 +2865,11 @@ def features(
                 if params is not None:
                     entry["kernel_sd"] = _bandwidth(gaussian_weights, params)
                     entry["sampling"] = int(rows[1] - rows[0]) if len(rows) > 1 else 1
+            if delta is not None and not return_delta:
+                # feeding features that are not returned: as computed
+                entries[-1]["constant_columns"] = _constant_columns(
+                    delta[0] if single else delta
+                )
             info.extend(entries)
         if delta is not None:
             fed_by = delta
@@ -2862,5 +2900,10 @@ def features(
         D = [d[0] for d in D]
     result = (X, D) if return_delta else X
     if return_info:
+        # the constant columns of the returned arrays
+        for entry in info:
+            if entry["path"] == "analysis" or return_delta:
+                out = (X if entry["path"] == "analysis" else D)[entry["order"]]
+                entry["constant_columns"] = _constant_columns(out)
         return result, info
     return result

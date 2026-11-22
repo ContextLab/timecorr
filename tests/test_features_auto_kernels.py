@@ -609,8 +609,9 @@ def test_default_return_info_has_the_automatic_kernel_keys():
     (X, D), info = quiet(tc.features, data, order=2, cfun=tc.autofc,
                          return_delta=True, return_info=True)
     base = {"order", "path", "requested", "effective", "input_width", "output_width",
-            "kernel_sd", "sampling"}
-    feeding = base | {"n_communities", "n_exceed", "null_threshold", "n_null", "fallback"}
+            "kernel_sd", "sampling", "constant_columns"}
+    feeding = base | {"labels", "n_communities", "n_exceed", "null_threshold", "n_null",
+                      "fallback"}
     assert [(e["order"], e["path"]) for e in info] == [
         (1, "analysis"), (1, "feeding"), (2, "analysis"), (2, "feeding")]
     for e in info:

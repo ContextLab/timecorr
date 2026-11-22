@@ -58,9 +58,11 @@ def media_dir(name="tutorial_media"):
     --------
     >>> import os, tempfile
     >>> import timecorr as tc
+    >>> here = os.getcwd()
     >>> os.chdir(tempfile.mkdtemp())
     >>> tc.media_dir().as_posix(), tc.media_dir("videos").is_dir()
     ('tutorial_media', True)
+    >>> os.chdir(here)
     """
     path = Path("..") / "_static" / "tutorial_media" if _in_docs() else Path(name)
     path.mkdir(parents=True, exist_ok=True)
@@ -169,12 +171,14 @@ def render_video(draw, n_frames, path, fps=30, crf=23, hold=0, n_jobs=None,
                 )
                 break
             except Exception:
+                if n_jobs != 1:
+                    # stop the workers, which may still be drawing; after a retry,
+                    # new ones draw the frames not yet written
+                    from joblib.externals.loky import get_reusable_executor
+                    get_reusable_executor().shutdown(wait=True, kill_workers=True)
                 failures += 1
                 if failures > retries:
                     raise
-                # stop the workers; new ones draw the frames not yet written
-                from joblib.externals.loky import get_reusable_executor
-                get_reusable_executor().shutdown(wait=True, kill_workers=True)
         missing = [i for i in range(n_frames) if not frame[i].exists()]
         if missing:
             raise RuntimeError(

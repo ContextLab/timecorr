@@ -5,9 +5,49 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.1] - Unreleased
+
+### Added
+
+- `tc.datasets` (`timecorr/datasets.py`), the example data of the real-data
+  tutorials: `tc.datasets.fetch(url, path, sha256=None, member=None)` downloads
+  a file once (through `.part` temporary files, with an optional SHA-256 check
+  and optional extraction of one member of a zip archive) into the cache root
+  (`$TIMECORR_DATA`, default `~/timecorr_data`; `tc.datasets.cache_dir()`);
+  `tc.datasets.story_listening(n_nodes=100, return_nodes=False)` returns the
+  HTFA node weights of the story-listening data of Owen, Chang & Manning
+  (2021) (36 participants, 300 timepoints, the nodes spread over the brain;
+  with `return_nodes=True` also their centers, widths and indices);
+  `tc.datasets.industry_returns(start="2005-01-01", end="2024-12-31")` returns
+  the daily log returns of the 49 Industry Portfolios of the Kenneth R. French
+  Data Library as a DataFrame. The loaders return the same arrays as the
+  loading code of the tutorial notebooks and use the same cache files.
+- `tc.features(..., return_info=True)`: every entry has `"constant_columns"`
+  (the columns of the step's output that are constant over time in the
+  returned arrays, `np.ptp(x, axis=0) == 0`; one list per subject for list
+  outputs), and feeding entries have `"labels"` (the community of each input
+  column when the output columns are the communities of a `Communities`
+  object, the default included; None after a fallback, for other reducers and
+  for the name `"communities"`). A second run with an explicit
+  `tc.Communities()` is no longer needed to read the labels.
+- `tc.render_video(draw, n_frames, path, fps=30, crf=23, hold=0, n_jobs=None,
+  chunk_size=25, retries=0)` draws the frames of a video in parallel worker
+  processes (`draw(frames, paths)` is called once per run of consecutive
+  frames) and encodes them as H.264 with the ffmpeg of imageio-ffmpeg;
+  `tc.show_video(path, width=960)` shows a video in a notebook (linked inside
+  a Sphinx documentation tree and for a URL, embedded elsewhere);
+  `tc.media_dir(name="tutorial_media")` gives the directory for the two
+  cases. joblib, imageio-ffmpeg and IPython are imported on first use and
+  stay in the `tutorials` extra.
+- The plot style of the tutorials as a matplotlib style in the package:
+  `plt.style.use("timecorr.tutorial")` (`timecorr/tutorial.mplstyle`).
+  Importing timecorr does not apply it.
 
 ### Changed
+
+- `install_requires`: `matplotlib>=3.7` (before: any version), the first
+  version that loads a style from a package. The `test` extra also installs
+  imageio-ffmpeg and ipython (for the tests of the video helpers).
 
 - Tutorial `docs/tutorial/trajectories.ipynb`: the trajectories are drawn in
   hypertools' own cubes with `hyp.plot(..., panels=...)`, after reducing each

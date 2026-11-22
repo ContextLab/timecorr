@@ -54,6 +54,13 @@ jobs:
         python -m pip install --upgrade pip
         pip install ".[test]"
 
+    # tests/test_datasets.py reads the story-listening fit (a 460 MB download)
+    - name: Cache the example data
+      uses: actions/cache@v4
+      with:
+        path: ~/timecorr_data
+        key: timecorr-data-pieman-870179316f12
+
     - name: Run the slow tests
       run: |
         pytest tests/ -m slow -v --durations=25

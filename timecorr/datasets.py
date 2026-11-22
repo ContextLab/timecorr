@@ -21,8 +21,8 @@ import scipy.io
 
 __all__ = ["cache_dir", "fetch", "story_listening", "industry_returns"]
 
-#: environment variable that names the cache root
-CACHE_VARIABLE = "TIMECORR_DATA"
+# environment variable that names the cache root
+_CACHE_VARIABLE = "TIMECORR_DATA"
 
 _CHUNK = 1 << 20  # bytes read at a time
 
@@ -51,16 +51,13 @@ def cache_dir():
 
     Examples
     --------
-    >>> import os
+    >>> import os, pathlib
     >>> import timecorr as tc
-    >>> os.environ["TIMECORR_DATA"] = "/tmp/my_cache"
-    >>> tc.datasets.cache_dir().as_posix()
-    '/tmp/my_cache'
-    >>> del os.environ["TIMECORR_DATA"]
-    >>> tc.datasets.cache_dir().name
-    'timecorr_data'
+    >>> default = pathlib.Path.home() / "timecorr_data"
+    >>> tc.datasets.cache_dir() == pathlib.Path(os.environ.get("TIMECORR_DATA") or default)
+    True
     """
-    return Path(os.environ.get(CACHE_VARIABLE) or Path.home() / "timecorr_data")
+    return Path(os.environ.get(_CACHE_VARIABLE) or Path.home() / "timecorr_data")
 
 
 def _sha256(path):

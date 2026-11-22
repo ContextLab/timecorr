@@ -121,7 +121,11 @@ feeding features are passed on at every
 long recordings are computed at fewer timepoints, and every output is returned
 at all timepoints by linear interpolation; ``return_info=True`` gives each
 automatic kernel's ``"kernel_sd"`` (in rows of its order's input) and
-``"sampling"`` (timepoints per row). Giving kernel parameters for any order or
+``"sampling"`` (timepoints per row), and for every step ``"constant_columns"``
+(the output columns that are constant over time in the returned arrays) and,
+for feeding steps, ``"labels"`` (the community of each input column when the
+output columns are the communities of a ``Communities`` object, otherwise
+None). Giving kernel parameters for any order or
 path, events, or a one-sided kernel makes every order be computed at every
 timepoint. With another kernel function, or with
 ``eye_weights`` on the feeding path, None means that function's own default
@@ -513,6 +517,77 @@ Utilities
    r2z
    z2r
    plot_weights
+
+.. currentmodule:: timecorr.datasets
+
+Example datasets
+----------------
+
+The data of the real-data tutorials are in the submodule ``timecorr.datasets``
+(``tc.datasets`` after ``import timecorr as tc``). Files are downloaded once and
+kept under the directory named by the environment variable ``TIMECORR_DATA``
+(default ``~/timecorr_data``).
+
+.. autosummary::
+   :toctree: generated/
+   :nosignatures:
+
+   fetch
+   cache_dir
+   story_listening
+   industry_returns
+
+.. code-block:: python
+
+   import timecorr as tc
+
+   data = tc.datasets.story_listening()        # 36 participants, each (300, 100)
+   returns = tc.datasets.industry_returns()    # DataFrame: trading days x 49 industries
+   path = tc.datasets.fetch("http://mocap.cs.cmu.edu/subjects/86/86_02.amc",
+                            "cmu_mocap/86_02.amc")
+
+.. currentmodule:: timecorr
+
+Videos and plot style
+---------------------
+
+.. autosummary::
+   :toctree: generated/
+   :nosignatures:
+
+   render_video
+   show_video
+   media_dir
+
+``render_video`` draws the frames of a video in parallel worker processes and
+encodes them as H.264; ``show_video`` displays the file in a notebook, linked
+inside a Sphinx documentation tree and embedded elsewhere; ``media_dir`` gives
+the directory for the two cases. They import joblib, imageio-ffmpeg and IPython
+on first use (``pip install "timecorr[tutorials]"``).
+
+.. code-block:: python
+
+   def draw(frames, paths):                 # called once per run of frames, in a worker
+       fig, ax = plt.subplots(figsize=(6.4, 3.6), dpi=100)
+       line, = ax.plot(x, y)
+       for i, path in zip(frames, paths):
+           line.set_data(x[:i + 1], y[:i + 1])
+           fig.savefig(path)
+       plt.close(fig)
+
+   video = tc.render_video(draw, len(x), tc.media_dir() / "line.mp4", fps=30)
+   tc.show_video(video)
+
+The plot style of the tutorials (the Okabe-Ito colors, no top and right axes
+lines, legends without frames) is the matplotlib style ``timecorr.tutorial``;
+importing timecorr does not apply it:
+
+.. code-block:: python
+
+   import matplotlib.pyplot as plt
+
+   plt.style.use("timecorr.tutorial")
+   COLORS = plt.rcParams["axes.prop_cycle"].by_key()["color"]
 
 .. currentmodule:: timecorr
 

@@ -2622,6 +2622,15 @@ def features(
     >>> [(e["order"], e["path"], e["kernel_sd"]) for e in info]
     [(1, 'analysis', 10.0), (1, 'feeding', 5.0), (2, 'analysis', 10.0)]
 
+    The community of each node at the feeding step of order 1 (the 6
+    modules of 4 nodes), and the columns of each subject's ``X_2`` that are
+    constant over time (none):
+
+    >>> info[1]["labels"]
+    [0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5]
+    >>> info[2]["constant_columns"]
+    [[], []]
+
     The same kernels given explicitly (these data have fewer than 2000
     timepoints, so no order is computed at a lower rate either way):
 

@@ -29,7 +29,8 @@ setup(
         "scipy",
         "scikit-learn",
         "pandas",
-        "matplotlib",
+        # 3.7: styles of packages (plt.style.use("timecorr.tutorial"))
+        "matplotlib>=3.7",
     ],
     extras_require={
         "segment": ["hmmlearn"],
@@ -37,6 +38,9 @@ setup(
             "pytest",
             "polars",
             "hmmlearn",
+            # the video helpers (joblib comes with scikit-learn)
+            "imageio-ffmpeg",
+            "ipython",
         ],
         # building the documentation (the notebooks are not executed)
         "docs": [
@@ -59,5 +63,6 @@ setup(
         ],
     },
     packages=find_packages(exclude=("tests", "docs")),
+    package_data={"timecorr": ["*.mplstyle"]},
 )
 

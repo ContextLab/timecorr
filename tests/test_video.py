@@ -137,6 +137,33 @@ def test_render_video_fps_crf_and_hold(tmp_path):
     assert decode(slow)[0]["fps"] == 3.75
 
 
+def test_render_video_equals_the_encoding_of_the_tutorials(tmp_path):
+    # the same frames encoded with the command the tutorial notebooks ran before the
+    # helper existed (stocks.ipynb cell 29, CRF 27; trajectories.ipynb cell 15 draws the
+    # frames of its one-second hold itself): the files are identical
+    log = tmp_path / "log"
+    log.mkdir()
+    draw = make_draw(log, 9, noise=True)
+    FPS, CRF = 30, 27
+    for hold, name in ((0, "plain"), (1, "held")):
+        frames_dir = tmp_path / f"frames_{name}"
+        frames_dir.mkdir()
+        ids = list(range(9))
+        draw(ids, [frames_dir / f"{i:05d}.png" for i in ids])
+        for i in range(9, 9 + hold * FPS):
+            draw([8], [frames_dir / f"{i:05d}.png"])
+        video = tmp_path / f"notebook_{name}.mp4"
+        subprocess.run([imageio_ffmpeg.get_ffmpeg_exe(), "-y", "-loglevel", "error",
+                        "-framerate", str(FPS), "-i", str(frames_dir / "%05d.png"),
+                        "-c:v", "libx264", "-preset", "slow", "-crf", str(CRF),
+                        "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(video)],
+                       check=True)
+        ours = tc.render_video(draw, 9, tmp_path / f"ours_{name}.mp4", fps=FPS, crf=CRF,
+                               hold=hold, n_jobs=2, chunk_size=4)
+        assert ours.read_bytes() == video.read_bytes()
+        assert len(decode(ours)[1]) == 9 + hold * FPS
+
+
 def test_render_video_retries_only_the_missing_frames(tmp_path):
     log = tmp_path / "log"
     log.mkdir()

@@ -4,4 +4,4 @@ numpy
 scipy
 scikit-learn
 pandas
-matplotlib
+matplotlib>=3.7

@@ -8,10 +8,13 @@ joblib, imageio-ffmpeg (which brings its own ffmpeg) and IPython are imported on
 (``timecorr._lazy``); they are listed in the ``tutorials`` extra.
 """
 
+import html
 import os
 import shutil
 import subprocess
 import tempfile
+import urllib.parse
+import uuid
 from pathlib import Path
 
 import numpy as np
@@ -84,14 +87,17 @@ def render_video(draw, n_frames, path, fps=30, crf=23, hold=0, n_jobs=None,
     ----------
     draw : callable
         ``draw(frames, paths)`` draws each frame ``i`` of ``frames`` (a list of
-        consecutive frame numbers, counted from 0) and saves it as the PNG file
+        consecutive frame numbers, counted from 0, also when drawing is started again
+        with ``retries``) and saves it as the PNG file
         ``paths[j]`` for ``frames[j]``. It is sent to the worker processes with what it
         refers to, so a function defined in a notebook works. All frames need the same
         size, with an even width and height (required by ``yuv420p``).
     n_frames : int
         Number of frames drawn.
     path : str or pathlib.Path
-        The video file written (``.mp4``); an existing file is replaced.
+        The video file written (``.mp4``). It is encoded under a temporary name in the
+        same directory and moved into place when the encoding has succeeded: an
+        existing file is replaced only then, and a failed encoding leaves no file.
     fps : float
         Frames per second. Default: 30.
     crf : int
@@ -164,7 +170,10 @@ def render_video(draw, n_frames, path, fps=30, crf=23, hold=0, n_jobs=None,
         while True:
             todo = [i for i in range(n_frames) if not frame[i].exists()]
             n_chunks = max(n_jobs, -(-len(todo) // chunk_size))
-            chunks = [c.tolist() for c in np.array_split(todo, n_chunks) if len(c)]
+            # each chunk as runs of consecutive frames (after a failure, the frames
+            # left need not be consecutive)
+            chunks = [run.tolist() for c in np.array_split(todo, n_chunks) if len(c)
+                      for run in np.split(c, np.flatnonzero(np.diff(c) != 1) + 1)]
             try:
                 joblib.Parallel(n_jobs=n_jobs)(
                     joblib.delayed(draw)(chunk, [frame[i] for i in chunk]) for chunk in chunks
@@ -187,12 +196,19 @@ def render_video(draw, n_frames, path, fps=30, crf=23, hold=0, n_jobs=None,
             )
         for held in frame[n_frames:]:
             shutil.copyfile(frame[n_frames - 1], held)
-        subprocess.run(
-            [ffmpeg, "-y", "-loglevel", "error", "-framerate", f"{fps:g}",
-             "-i", str(Path(folder) / "%05d.png"), "-c:v", "libx264", "-preset", "slow",
-             "-crf", str(crf), "-pix_fmt", "yuv420p", "-movflags", "+faststart", str(path)],
-            check=True,
-        )
+        # encoded next to the target and moved into place only when complete
+        encoded = path.with_name(f"{path.stem}.{uuid.uuid4().hex}.part{path.suffix}")
+        try:
+            subprocess.run(
+                [ffmpeg, "-y", "-loglevel", "error", "-framerate", f"{fps:g}",
+                 "-i", str(Path(folder) / "%05d.png"), "-c:v", "libx264", "-preset", "slow",
+                 "-crf", str(crf), "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+                 str(encoded)],
+                check=True,
+            )
+            encoded.replace(path)
+        finally:
+            encoded.unlink(missing_ok=True)
     return path
 
 
@@ -213,7 +229,7 @@ def show_video(path, width=960):
         The video is displayed with IPython: when the working directory is a folder of
         Sphinx documentation sources (see :func:`media_dir`), and for a URL, as an HTML
         ``<video>`` tag that links the file (by its path relative to the working
-        directory), so the notebook stays small; otherwise (for example on Google
+        directory, percent-encoded), so the notebook stays small; otherwise (for example on Google
         Colab) embedded in the notebook's output. The player has controls, loops and is
         muted.
 
@@ -235,7 +251,12 @@ def show_video(path, width=960):
     display = lazy_import("IPython.display", "ipython", _EXTRA)
     is_url = str(path).startswith(("http://", "https://"))
     if is_url or _in_docs():
-        src = str(path) if is_url else Path(os.path.relpath(path)).as_posix()
+        if is_url:
+            src = str(path)
+        else:
+            # percent-encoded, so that "#", "?" or a space in a name stay part of the path
+            src = urllib.parse.quote(Path(os.path.relpath(path)).as_posix())
+        src = html.escape(src, quote=True)
         shown = display.HTML(
             f'<video src="{src}" controls loop muted playsinline preload="metadata" '
             f'style="width: 100%; max-width: {width}px;"></video>'

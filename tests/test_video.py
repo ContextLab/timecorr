@@ -186,6 +186,65 @@ def test_render_video_retries_only_the_missing_frames(tmp_path):
     assert (counts[4:] == 1).sum() >= 4   # chunks that finished were not drawn again
 
 
+def test_render_video_retries_with_runs_of_consecutive_frames(tmp_path):
+    # the first call writes frames 0, 3, 4, 7, 8, 11 and raises: the frames left are
+    # 1, 2, 5, 6, 9, 10, and every later call gets consecutive frames
+    log = tmp_path / "log"
+    log.mkdir()
+    inner = make_draw(log, 12)
+
+    def draw(frames, paths):
+        first = not (log / "failed").exists()
+        if first:
+            (log / "failed").write_text("")
+            keep = [j for j, i in enumerate(frames) if i % 4 in (0, 3)]
+            frames, paths = [frames[j] for j in keep], [paths[j] for j in keep]
+        inner(frames, paths)
+        if first:
+            raise RuntimeError("a worker failed")
+
+    out = tc.render_video(draw, 12, tmp_path / "runs.mp4", n_jobs=1, chunk_size=12, retries=1)
+    assert len(decode(out)[1]) == 12
+    drawn, _ = calls(log)
+    assert sorted(drawn) == [[0, 3, 4, 7, 8, 11], [1, 2], [5, 6], [9, 10]]
+    # runs longer than chunk_size are divided
+    log = tmp_path / "log2"
+    log.mkdir()
+    inner = make_draw(log, 12)
+    tc.render_video(draw, 12, tmp_path / "runs2.mp4", n_jobs=1, chunk_size=1, retries=1)
+    drawn, _ = calls(log)
+    later = [c for c in drawn if len(c) == 1 and c[0] % 4 in (1, 2)]
+    assert sorted(later) == [[1], [2], [5], [6], [9], [10]]
+
+
+def test_a_failed_encoding_keeps_the_existing_video(tmp_path):
+    log = tmp_path / "log"
+    log.mkdir()
+    out = tmp_path / "videos" / "kept.mp4"
+    out.parent.mkdir()
+    tc.render_video(make_draw(log, 4), 4, out, n_jobs=1)
+    before = out.read_bytes()
+    assert len(decode(out)[1]) == 4
+
+    def odd(frames, paths):                 # 161 pixels wide: yuv420p needs an even width
+        import matplotlib
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+        fig = plt.figure(figsize=(1.61, 1.2), dpi=100)
+        for path in paths:
+            fig.savefig(path, dpi=100)
+        plt.close(fig)
+
+    with pytest.raises(subprocess.CalledProcessError):
+        tc.render_video(odd, 4, out, n_jobs=1)
+    assert out.read_bytes() == before
+    assert [p.name for p in out.parent.iterdir()] == ["kept.mp4"]
+    # without an existing video: nothing is left
+    with pytest.raises(subprocess.CalledProcessError):
+        tc.render_video(odd, 4, out.parent / "new.mp4", n_jobs=1)
+    assert [p.name for p in out.parent.iterdir()] == ["kept.mp4"]
+
+
 def test_render_video_names_frames_that_were_not_written(tmp_path):
     log = tmp_path / "log"
     log.mkdir()
@@ -232,6 +291,50 @@ def test_inside_a_docs_tree_videos_are_linked(tmp_path, video, monkeypatch):
     assert html == LINK.format(src="../_static/tutorial_media/three.mp4", width=960)
     assert shown(target.resolve(), width=640) == LINK.format(
         src="../_static/tutorial_media/three.mp4", width=640)
+
+
+@pytest.mark.parametrize("name, encoded", [
+    ("clip#1.mp4", "clip%231.mp4"),
+    ('a "quoted" & odd?.mp4', "a%20%22quoted%22%20%26%20odd%3F.mp4"),
+    ("it's <b>100%</b>.mp4", "it%27s%20%3Cb%3E100%25%3C/b%3E.mp4"),
+    ("plain-name_2.v1~x.mp4", "plain-name_2.v1~x.mp4"),
+])
+def test_linked_paths_are_url_encoded(tmp_path, video, monkeypatch, name, encoded):
+    from html.parser import HTMLParser
+    from urllib.parse import unquote
+
+    docs = tmp_path / "docs"
+    (docs / "tutorial").mkdir(parents=True)
+    (docs / "_static").mkdir()
+    (docs / "conf.py").write_text("")
+    monkeypatch.chdir(docs / "tutorial")
+    if "/" in name:                          # "</b>" holds a path separator
+        (tc.media_dir() / name).parent.mkdir(parents=True)
+    target = tc.media_dir() / name
+    target.write_bytes(video.read_bytes())
+    html = shown(target)
+    assert html == LINK.format(src="../_static/tutorial_media/" + encoded, width=960)
+
+    found = []
+
+    class Tags(HTMLParser):
+        def handle_starttag(self, tag, attrs):
+            found.append((tag, dict(attrs)))
+
+    Tags().feed(html)
+    assert len(found) == 1 and found[0][0] == "video"
+    attrs = found[0][1]
+    assert set(attrs) == {"src", "controls", "loop", "muted", "playsinline", "preload", "style"}
+    # the link, decoded as a browser decodes it, is the file
+    assert "#" not in attrs["src"] and "?" not in attrs["src"]
+    assert Path(unquote(attrs["src"])).resolve() == target.resolve()
+
+
+def test_a_url_with_special_characters_is_escaped_not_encoded_again(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    url = "https://example.org/v/clip%231.mp4?a=1&b=2"
+    assert shown(url) == LINK.format(src="https://example.org/v/clip%231.mp4?a=1&amp;b=2",
+                                     width=960)
 
 
 def test_elsewhere_videos_are_embedded(tmp_path, video, monkeypatch):

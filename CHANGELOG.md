@@ -48,6 +48,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `install_requires`: `matplotlib>=3.7` (before: any version), the first
   version that loads a style from a package. The `test` extra also installs
   imageio-ffmpeg and ipython (for the tests of the video helpers).
+- The eleven tutorial notebooks use the helpers above in place of their own
+  copies of that code (about a fifth fewer code lines). What they compute,
+  print and show is unchanged: every figure of the re-executed notebooks is
+  pixel-identical to the one before, the printed text is the same but for the
+  two lines named below, and the videos of `stocks` and `trajectories` are
+  byte-identical (the brain renderings of `htfa_network_animations` differ a
+  little from run to run, with the old code as with the new; its committed
+  videos are kept).
+  - The Colab install cell is one shell line, `!pip install -q
+    "timecorr>=0.3.1" || pip install -q "timecorr @
+    git+https://github.com/ContextLab/timecorr.git@master"` (with each
+    notebook's extra and other packages), since the notebooks need release
+    0.3.1. It no longer prints which source was installed, and pip's messages
+    are no longer hidden: when PyPI does not have the release, pip's error
+    shows before the install from GitHub.
+  - The eight simulated-data notebooks set their plot style with
+    `plt.style.use('timecorr.tutorial')`. Thumbnail cells show their figure
+    with `plt.show()` after `%config InlineBackend.print_figure_kwargs =
+    {'bbox_inches': None}` (the same 600 x 450 picture as the PNG they wrote
+    to a buffer before).
+  - `htfa_network_animations`, `stocks` and `trajectories` load their data
+    with `tc.datasets`, write their videos with `tc.render_video` (frames in
+    a temporary folder; before: under `$TIMECORR_DATA`) into `tc.media_dir()`
+    and show them with `tc.show_video`. `stocks` keeps the two `Siccodes`
+    text files of the library in the cache (before: their zip archives).
+  - `htfa_network_animations` and `stocks` read the communities from the
+    `"labels"` of `return_info` and no longer run `tc.features` a second
+    time; the printed lines that compared the two runs are gone
+    (`explicit Communities() at orders [2]: outputs equal to the default run;
+    same warnings` and `same output as the default run: True`).
+    `htfa_network_animations` and `trajectories` read the constant columns
+    from `"constant_columns"`.
+  - `higher_order`: `ridge_decode` fits scikit-learn's
+    `Ridge(fit_intercept=False)` (before: a hand-written solve; the printed
+    scores and the figure are the same).
+  - `htfa_network_animations`, preview quality: the check for the
+    full-quality videos of the online documentation sends a `User-Agent`
+    header. Without one the documentation server answered HTTP 403, so the
+    notebook reported that no full-quality video was online.
 
 - Tutorial `docs/tutorial/trajectories.ipynb`: the trajectories are drawn in
   hypertools' own cubes with `hyp.plot(..., panels=...)`, after reducing each

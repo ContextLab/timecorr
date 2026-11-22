@@ -26,12 +26,15 @@ def make_draw(log, n_frames, noise=False, fail_once=False, skip=()):
     A ``draw(frames, paths)`` as the tutorials write them: one figure per call, then a
     loop over the frames. Frame ``i`` is a gray level rising with ``i`` (or noise).
     Every call appends ``frames`` to a file in ``log``; with ``fail_once``, the first call
-    of each chunk that holds frame 0 raises after drawing its first frame.
+    of the chunk that holds frame 0 raises after drawing its first frame, once every frame
+    of the other chunks is written (so what the other workers finished does not depend
+    on timing).
     """
     log = Path(log)
 
     def draw(frames, paths):
         import os
+        import time
         import uuid
 
         import matplotlib
@@ -60,6 +63,11 @@ def make_draw(log, n_frames, noise=False, fail_once=False, skip=()):
                 tmp.replace(path)             # a frame file exists only once it is complete
                 if fail_once and 0 in frames and not (log / "failed").exists():
                     (log / "failed").write_text("")
+                    others = [path.with_name(f"{j:05d}.png") for j in range(n_frames)
+                              if j not in frames]
+                    deadline = time.time() + 120
+                    while not all(o.exists() for o in others) and time.time() < deadline:
+                        time.sleep(0.05)
                     raise RuntimeError("a worker failed")
         finally:
             plt.close(fig)
@@ -183,7 +191,7 @@ def test_render_video_retries_only_the_missing_frames(tmp_path):
     counts = np.bincount([i for c in drawn for i in c], minlength=12)
     assert counts[0] == 1                 # frame 0 was written before its chunk failed
     assert counts.max() <= 2 and (counts == 2).any()
-    assert (counts[4:] == 1).sum() >= 4   # chunks that finished were not drawn again
+    assert (counts[4:] == 1).all()        # chunks that finished were not drawn again
 
 
 def test_render_video_retries_with_runs_of_consecutive_frames(tmp_path):

@@ -248,3 +248,77 @@ def test_story_listening_equals_the_notebooks_loading_code():
     assert same_arrays(few, reference_htfa_story(fit_path, K=12)[0])
     assert np.array_equal(few_nodes["index"], index[:12])   # farthest points are nested
     assert len(data) == 36 and data[0].shape == (300, 100)
+
+
+# ---------------------------------------------------------------- review fixes
+def test_concurrent_fetches_of_one_target_all_succeed(tmp_path):
+    # eight threads download the same 40 MB file to the same target at once
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+
+    src = tmp_path / "source" / "big.bin"
+    src.parent.mkdir()
+    data = np.random.default_rng(1).bytes(40_000_000)
+    src.write_bytes(data)
+    target = tmp_path / "cache" / "big.bin"
+    n = 8
+    barrier = threading.Barrier(n)
+
+    def call(_):
+        barrier.wait()
+        return datasets.fetch(src.as_uri(), target, sha256=digest(data))
+
+    with ThreadPoolExecutor(n) as pool:
+        paths = list(pool.map(call, range(n)))      # raises if any call raised
+    assert paths == [target] * n
+    assert target.read_bytes() == data
+    assert sorted(p.name for p in target.parent.iterdir()) == ["big.bin"]
+
+
+def test_concurrent_fetches_of_one_archive_member(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+
+    content = np.random.default_rng(2).bytes(20_000_000)
+    archive = tmp_path / "source" / "archive.zip"
+    archive.parent.mkdir()
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_STORED) as z:
+        z.writestr("data/member.bin", content)
+    target = tmp_path / "cache" / "member.bin"
+    barrier = threading.Barrier(6)
+
+    def call(_):
+        barrier.wait()
+        return datasets.fetch(archive.as_uri(), target, member="data/member.bin")
+
+    with ThreadPoolExecutor(6) as pool:
+        paths = list(pool.map(call, range(6)))
+    assert paths == [target] * 6 and target.read_bytes() == content
+    assert sorted(p.name for p in target.parent.iterdir()) == ["member.bin"]
+
+
+@pytest.mark.parametrize("k", [0, -1, 6, 2.0, 2.5, "2", None, True])
+def test_farthest_points_rejects_counts_outside_the_points(k):
+    points = np.random.default_rng(0).standard_normal((5, 3))
+    with pytest.raises(ValueError, match=r"between 1 and 5\b"):
+        datasets._farthest_points(points, k)
+
+
+def test_farthest_points_returns_distinct_points():
+    points = np.random.default_rng(0).standard_normal((5, 3))
+    for k in (1, 3, 5, np.int64(4)):
+        chosen = datasets._farthest_points(points, k)
+        assert len(chosen) == k == len(set(chosen.tolist()))
+
+
+@pytest.mark.slow
+def test_story_listening_validates_n_nodes():
+    _, nodes = datasets.story_listening(n_nodes=1, return_nodes=True)
+    eligible = len(nodes["varying"])
+    assert eligible == 679
+    for bad in (0, -1, eligible + 1, 700, 2.5, "100", True):
+        with pytest.raises(ValueError, match=rf"n_nodes.*between 1 and {eligible}\b"):
+            datasets.story_listening(n_nodes=bad)
+    every, all_nodes = datasets.story_listening(n_nodes=eligible, return_nodes=True)
+    assert every[0].shape == (300, eligible)
+    assert sorted(all_nodes["index"].tolist()) == nodes["varying"].tolist()

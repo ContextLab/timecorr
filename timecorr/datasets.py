@@ -10,8 +10,10 @@ real-data tutorials. The module is used as ``tc.datasets`` after ``import timeco
 
 import hashlib
 import io
+import operator
 import os
 import urllib.request
+import uuid
 import zipfile
 from pathlib import Path
 
@@ -82,9 +84,12 @@ def fetch(url, path, sha256=None, member=None):
     """
     Download a file unless it is already cached, and return its path.
 
-    The download is written to temporary files next to the target (names ending in
-    ``.part``) and moved into place only when it is complete and, with ``sha256``, has
-    the expected checksum, so an interrupted or failed download leaves no file behind.
+    The download is written to temporary files next to the target (uniquely named,
+    ending in ``.part``) and moved into place in one step only when it is complete and,
+    with ``sha256``, has the expected checksum, so an interrupted or failed download
+    leaves no file behind, and calls that run at the same time for one target (in
+    threads or processes) do not disturb each other: each downloads its own copy, and
+    one that finds the target complete when its own copy is ready uses the target.
 
     Parameters
     ----------
@@ -137,8 +142,10 @@ def fetch(url, path, sha256=None, member=None):
         return path
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    downloaded = path.with_name(path.name + ".download.part")
-    complete = path.with_name(path.name + ".part")
+    # temporary files of this call only
+    unique = uuid.uuid4().hex
+    downloaded = path.with_name(f"{path.name}.{unique}.download.part")
+    complete = path.with_name(f"{path.name}.{unique}.part")
     try:
         try:
             urllib.request.urlretrieve(url, downloaded)
@@ -150,7 +157,9 @@ def fetch(url, path, sha256=None, member=None):
             _extract(downloaded, member, complete)
         if sha256 is not None and _sha256(complete) != sha256:
             raise RuntimeError(f"the file downloaded from {url} does not match its checksum")
-        complete.replace(path)
+        # another call may have finished first: its file is used if it is valid
+        if not (path.exists() and (sha256 is None or _sha256(path) == sha256)):
+            complete.replace(path)  # atomic
     finally:
         downloaded.unlink(missing_ok=True)
         complete.unlink(missing_ok=True)
@@ -162,12 +171,28 @@ def _farthest_points(points, k):
     Indices of ``k`` rows of ``points``, spread out: the row nearest to the mean, then,
     one at a time, the row farthest from those chosen so far.
     """
+    k = _count(k, len(points), "k", "points")
     chosen = [int(np.argmin(np.linalg.norm(points - points.mean(axis=0), axis=1)))]
     dist = np.linalg.norm(points - points[chosen[0]], axis=1)
     for _ in range(k - 1):
         chosen.append(int(np.argmax(dist)))
         dist = np.minimum(dist, np.linalg.norm(points - points[chosen[-1]], axis=1))
     return np.array(chosen)
+
+
+def _count(value, largest, name, what):
+    """``value`` as an int; ``ValueError`` unless it is an integer in 1..``largest``."""
+    try:
+        if isinstance(value, bool):
+            raise TypeError
+        value = operator.index(value)
+    except TypeError:
+        value = None
+    if value is None or not 1 <= value <= largest:
+        raise ValueError(
+            f"{name} must be an integer between 1 and {largest} (the number of {what})."
+        )
+    return value
 
 
 def story_listening(n_nodes=100, return_nodes=False):
@@ -188,7 +213,8 @@ def story_listening(n_nodes=100, return_nodes=False):
         Number of nodes returned. They are chosen among the nodes whose weights vary
         over time in every participant (standard deviation above 1e-6), spread over
         the brain: the node nearest to the mean position, then, one at a time, the
-        node farthest from those chosen so far. Default: 100.
+        node farthest from those chosen so far. An integer between 1 and the number
+        of those nodes (679). Default: 100.
     return_nodes : bool
         If True, also return ``nodes``. Default: False.
 
@@ -211,6 +237,9 @@ def story_listening(n_nodes=100, return_nodes=False):
     RuntimeError
         If the download fails or the file does not match its checksum (see
         :func:`fetch`).
+    ValueError
+        If ``n_nodes`` is not an integer between 1 and the number of nodes that vary
+        in every participant.
 
     References
     ----------
@@ -241,6 +270,7 @@ def story_listening(n_nodes=100, return_nodes=False):
                         for i in intact])
     del post
     varying = np.flatnonzero((weights.std(axis=1) > 1e-6).all(axis=0))
+    n_nodes = _count(n_nodes, len(varying), "n_nodes", "nodes that vary in every participant")
     index = varying[_farthest_points(centers[varying], n_nodes)]
     data = [w[:, index] for w in weights]
     if not return_nodes:

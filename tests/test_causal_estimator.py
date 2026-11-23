@@ -845,8 +845,8 @@ def test_a_reducer_of_the_users_warns_once():
     "PCA", {"model": "PCA"}, "weighted_strength", "weighted_strength_split",
     "communities", tc.WeightedStrength(), tc.Communities(n=2),
 ], ids=str)
-def test_fitted_reducers_are_not_implemented_yet(rfun):
-    with pytest.raises(NotImplementedError, match="fit_timepoints"):
+def test_fitted_reducers_need_fit_timepoints(rfun):
+    with pytest.raises(ValueError, match="fit_timepoints"):
         tc.timecorr(X, rfun=rfun, **OK)
 
 

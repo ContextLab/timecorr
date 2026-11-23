@@ -668,30 +668,30 @@ FITTED = ["auto", "PCA", {"model": "PCA"}, "weighted_strength",
 @both
 @pytest.mark.parametrize("rfun", FITTED, ids=str)
 @pytest.mark.parametrize("name", ["rfun", "delta_rfun"])
-def test_fitted_reducers_are_not_implemented_yet(function, name, rfun):
+def test_fitted_reducers_need_fit_timepoints(function, name, rfun):
     kw = {**OK, name: rfun}
-    with pytest.raises(NotImplementedError, match=rf"{name}.*fit_timepoints"):
+    with pytest.raises(ValueError, match=rf"{name}.*fit_timepoints"):
         FUNCTIONS[function](X0, **kw)
 
 
 @both
 def test_the_default_reducers_are_fitted(function):
     kw = {k: v for k, v in OK.items() if k not in ("rfun", "delta_rfun")}
-    with pytest.raises(NotImplementedError, match="fit_timepoints"):
+    with pytest.raises(ValueError, match="fit_timepoints"):
         FUNCTIONS[function](X0, **kw)
-    with pytest.raises(NotImplementedError, match="fit_timepoints"):
+    with pytest.raises(ValueError, match="fit_timepoints"):
         FUNCTIONS[function](X0, rfun="strength", **kw)
-    with pytest.raises(NotImplementedError, match="fit_timepoints"):
+    with pytest.raises(ValueError, match="fit_timepoints"):
         FUNCTIONS[function](X0, delta_rfun="strength", **kw)
 
 
-def test_fitted_reducers_in_order_maps_are_not_implemented_yet():
+def test_fitted_reducers_in_order_maps_need_fit_timepoints():
     kw = {**OK, "rfun": {1: "strength", 2: "PCA"}}
-    with pytest.raises(NotImplementedError, match=r"rfun.*order 2.*fit_timepoints"):
+    with pytest.raises(ValueError, match=r"rfun.*order 2.*fit_timepoints"):
         tc.features(X0, order=2, **kw)
     # an order missing from a map is "auto"
     kw = {**OK, "delta_rfun": {1: "strength"}}
-    with pytest.raises(NotImplementedError, match=r"delta_rfun.*order 2.*fit_timepoints"):
+    with pytest.raises(ValueError, match=r"delta_rfun.*order 2.*fit_timepoints"):
         tc.features(X0, order=2, **kw)
     kw = {**OK, "rfun": {1: "strength", 2: None}, "delta_rfun": {1: None, 2: "strength"}}
     assert len(_quiet(tc.features, X0, order=2, **kw)) == 3
@@ -750,7 +750,7 @@ def test_new_arguments_are_keyword_only_and_documented(function):
         assert f"\n    {name} : " in f.__doc__
     assert parameters["causal"].default is False
     assert parameters["min_samples"].default is None
-    assert "NotImplementedError" in f.__doc__
+    assert "fit_timepoints" in f.__doc__
 
 
 def test_default_is_not_causal():

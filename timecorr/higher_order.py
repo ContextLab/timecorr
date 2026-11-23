@@ -114,7 +114,6 @@ from .timecorr import (
     _check_fit_timepoints,
     _event_kernels,
     _fit_reducer,
-    _FitTimepointsMissing,
     _fixed_weights_wisfc,
     _needs_fit,
     _restricted,
@@ -1979,8 +1978,7 @@ def two_path_step(
     ValueError
         With ``causal=True``, for an ``rfun`` or ``delta_rfun`` that is
         fitted to data (the defaults included) when ``fit_timepoints`` is
-        not given (this error is also a ``NotImplementedError``); for a
-        ``fit_timepoints`` that is not an integer from 1 to the number of
+        not given; for a ``fit_timepoints`` that is not an integer from 1 to the number of
         timepoints, or given without ``causal=True``; when the first
         ``fit_timepoints`` rows hold no row with defined correlations for
         a fit (2 for a model), or fewer than 40 rows for the default
@@ -2381,7 +2379,7 @@ def _check_causal(*, function, include_timepoints, weights_function,
                                   ("delta_rfun", delta_rfun, feeding_rfun)):
         for k in sorted(resolved):
             if _needs_fit(resolved[k]) and fit_timepoints is None:
-                raise _FitTimepointsMissing(
+                raise ValueError(
                     f"causal=True: {name}={_requested(given, k)!r} (order {k}) is "
                     "fitted to data and needs fit_timepoints=n: the reducers "
                     "are then fitted on the first n rows and applied to every "
@@ -3070,8 +3068,7 @@ def features(
     ValueError
         With ``causal=True``, for an ``rfun`` or ``delta_rfun`` that is
         fitted to data (the defaults included) when ``fit_timepoints`` is
-        not given (this error is also a ``NotImplementedError``); for a
-        ``fit_timepoints`` that is not an integer from 1 to the number of
+        not given; for a ``fit_timepoints`` that is not an integer from 1 to the number of
         timepoints, or given without ``causal=True``; when the first
         ``fit_timepoints`` rows hold no row with defined correlations for
         a fit (2 for a model), or fewer than 40 rows for the default

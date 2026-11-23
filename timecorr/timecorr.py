@@ -282,14 +282,6 @@ def _needs_fit(rfun):
     return isinstance(rfun, str) and rfun not in _GRAPH_MEASURES
 
 
-class _FitTimepointsMissing(ValueError, NotImplementedError):
-    """
-    ``causal=True`` with a reducer that is fitted to data and no
-    ``fit_timepoints``.  A ``ValueError``; also a ``NotImplementedError``,
-    which these calls raised before ``fit_timepoints`` existed.
-    """
-
-
 def _check_fit_timepoints(fit_timepoints, causal, T=None):
     """
     ``fit_timepoints`` as None or an int: ``ValueError`` unless it is None
@@ -530,7 +522,7 @@ def _causal_arguments(weights_function, weights_params, include_timepoints, cfun
         )
     _check_rfun(rfun)
     if _needs_fit(rfun) and fit_timepoints is None:
-        raise _FitTimepointsMissing(
+        raise ValueError(
             f"causal=True: rfun={rfun!r} is fitted to data and needs "
             "fit_timepoints=n: it is then fitted on the first n rows and applied "
             "to every row.  Or use rfun=None or a graph measure such as "
@@ -863,8 +855,8 @@ def timecorr(
         no causal form, and for a ``min_samples`` that is not None or a
         finite number >= 1, or that a built-in kernel cannot reach; for
         ``min_samples`` given without ``causal=True``; for an ``rfun``
-        that is fitted to data without ``fit_timepoints`` (this error is
-        also a ``NotImplementedError``); for a ``fit_timepoints`` that is
+        that is fitted to data without ``fit_timepoints``; for a
+        ``fit_timepoints`` that is
         not an integer from 1 to the number of timepoints, or given
         without ``causal=True``; when the first ``fit_timepoints`` rows
         hold no row with defined correlations to fit (2 for a model); and

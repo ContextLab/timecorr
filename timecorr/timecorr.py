@@ -1,15 +1,31 @@
 # coding: utf-8
 
+import functools
 import warnings
 
 import numpy as np
 
 from ._kernels import CHUNK, as_kernel, blocks, check_exclude
-from .events import distinct_event_sets, mask_kernel, resolve_events
+from .events import (
+    _has_features,
+    _parse_spec,
+    distinct_event_sets,
+    mask_kernel,
+    resolve_events,
+)
 from .helpers import (
+    _GRAPH_MEASURES,
+    _MIN_SAMPLES_RTOL,
+    _abs_weights,
     _as_kernel_array,
+    _causal_clean,
+    _check_causal_kernel,
+    _check_min_samples,
+    _check_rfun,
     _lag_kernel,
+    _warn_user,
     autofc,
+    eye_weights,
     format_data,
     gaussian_weights,
     isfc,
@@ -21,6 +37,45 @@ from .helpers import (
 
 # correlation functions that accept one kernel per subject
 _KERNEL_LIST_CFUNS = (wisfc, isfc, autofc)
+
+
+def _causal_smooth(x, weights, min_samples):
+    """
+    ``_kernel_smooth`` for ``causal=True``: the same kernel-weighted means of
+    a kernel without weight on later timepoints, each chunk of rows over the
+    columns where it has weight.  Infinite samples and samples above 1e150
+    in magnitude are missing, like NaN.  An entry whose feature has an
+    effective sample size ``(sum |w|)**2 / sum w**2`` (over the feature's
+    observed samples in the kernel row) below ``min_samples``, or no weighted
+    sample, is NaN; one warning reports how many timepoints have one.
+    """
+    x = _causal_clean(x)
+    valid = ~np.isnan(x)
+    observed = np.where(valid, x, 0.0)
+    valid = valid.astype(np.float64)
+    out = np.full(observed.shape, np.nan)
+    for t0, t1, c0, c1, _, w in blocks(as_kernel(weights), CHUNK, _abs_weights):
+        if c1 <= c0:
+            continue
+        # each row scaled by its largest weight, so squares do not underflow
+        peak = w.max(axis=1, keepdims=True, initial=0.0)
+        with np.errstate(invalid="ignore"):
+            w = np.divide(w, peak, out=np.zeros_like(w), where=peak != 0)
+            den = w @ valid[c0:c1]
+            num = w @ observed[c0:c1]
+            ess = np.divide(den**2, (w * w) @ valid[c0:c1], out=np.zeros_like(den),
+                            where=den > 0)
+            defined = (den > 0) & (ess >= min_samples * (1 - _MIN_SAMPLES_RTOL))
+        np.divide(num, den, out=out[t0:t1], where=defined)
+    undefined = np.isnan(out).any(axis=1)
+    if undefined.any():
+        warnings.warn(
+            f"Smoothing is undefined at {int(undefined.sum())} timepoint(s) (for "
+            "some feature, no weighted, observed sample or an effective sample "
+            f"size below min_samples={min_samples:g}); those values are NaN "
+            "(causal=True)."
+        )
+    return out
 
 
 def _kernel_smooth(x, weights):
@@ -97,13 +152,16 @@ def _shaped_kernel(
     include_timepoints="all",
     include_zero=True,
     exclude_timepoints=None,
+    causal=False,
 ):
     """
     The T x T kernel of ``timecorr`` before the events restriction:
     ``weights_function(T, weights_params)`` shaped by ``include_timepoints``,
     ``include_zero`` and ``exclude_timepoints``.  For a built-in kernel
     function it is a ``LagKernel``, whose rows are computed when they are
-    read (no T x T array); for any other function, the array it returns.
+    read (no T x T array); for any other function, the array it returns
+    (with ``causal=True`` that array must have no weight above its
+    diagonal: ``ValueError``).
     """
     exclude_timepoints = check_exclude(exclude_timepoints)
     include_timepoints = include_timepoints.lower()
@@ -120,6 +178,8 @@ def _shaped_kernel(
         return lazy
 
     weights = weights_function(T, weights_params)
+    if causal:
+        _check_causal_kernel(weights, "the kernel that weights_function returned")
     if include_timepoints == "all":
         if not include_zero:
             weights = weights.copy()
@@ -184,6 +244,121 @@ def _per_subject_cfun(cfun, data, kernels, groups):
     return out
 
 
+def _fixed_weights_wisfc(cfun):
+    """
+    True for ``functools.partial(wisfc, subject_weights=...)`` with weights
+    given (and nothing else bound): the built-in ``wisfc`` with fixed
+    subject weights.
+    """
+    return (
+        isinstance(cfun, functools.partial)
+        and cfun.func is wisfc
+        and not cfun.args
+        and set(cfun.keywords) == {"subject_weights"}
+        and cfun.keywords["subject_weights"] is not None
+    )
+
+
+def _needs_fit(rfun):
+    """True for a reducer that is fitted to data: a model or a summary."""
+    from .summaries import _Summary  # timecorr.summaries imports helpers
+
+    if isinstance(rfun, (dict, _Summary)):
+        return True
+    return isinstance(rfun, str) and rfun not in _GRAPH_MEASURES
+
+
+def _causal_arguments(weights_function, weights_params, include_timepoints, cfun,
+                      rfun, events, T, n_subjects):
+    """
+    The checks of ``timecorr(..., causal=True)``.  Returns
+    ``(include_timepoints, cfun)``: ``'backward'``, and the correlation
+    function to call (a built-in one is called with ``causal=True``).
+    Raises ``ValueError`` for what has no causal form, and warns once when
+    ``cfun`` or ``rfun`` is a function of the user's.
+    """
+    side = str(include_timepoints).lower()
+    if side in ("forward", "post"):
+        raise ValueError(
+            f"causal=True: include_timepoints={include_timepoints!r} weights "
+            "later timepoints.  Leave include_timepoints out (causal=True uses "
+            "'backward'), or pass causal=False."
+        )
+    if side in ("all", "backward", "pre"):
+        include_timepoints = "backward"
+    if weights_function is eye_weights:
+        raise ValueError(
+            "causal=True: eye_weights gives co-fluctuations of series z-scored "
+            "over the whole recording, which use later timepoints.  Pass a "
+            "kernel with a width, for example weights_function="
+            "tc.gaussian_weights, weights_params={'var': 25}."
+        )
+    if weights_params is None:
+        raise ValueError(
+            "causal=True: weights_params must be given (the kernel's width is "
+            "not chosen for you), for example weights_params={'var': 25} for "
+            "gaussian_weights; pass {} for a kernel without parameters."
+        )
+    if cfun is wisfc or (
+        isinstance(cfun, functools.partial) and cfun.func is wisfc
+        and not _fixed_weights_wisfc(cfun)
+    ):
+        raise ValueError(
+            "causal=True: the default subject_weights of wisfc are computed "
+            "from every timepoint of the recording.  Pass cfun="
+            "functools.partial(tc.wisfc, subject_weights=...) with weights of "
+            "your own and nothing else bound, or cfun=tc.isfc."
+        )
+    if _has_features(_parse_spec(events, T, n_subjects)):
+        raise ValueError(
+            "causal=True: events given as features are segmented from the whole "
+            "recording.  Pass the boundaries (the timepoints where a new block "
+            "starts), for example events=[100, 250]."
+        )
+    _check_rfun(rfun)
+    if _needs_fit(rfun):
+        raise NotImplementedError(
+            f"causal=True: rfun={rfun!r} is fitted to data and needs "
+            "fit_timepoints (the rows it is fitted on), which timecorr does not "
+            "accept yet.  Use rfun=None or a graph measure such as 'strength'."
+        )
+    builtin = cfun is None or cfun in (isfc, autofc) or _fixed_weights_wisfc(cfun)
+    theirs = [name for name, f, ours in (("cfun", cfun, builtin),
+                                         ("rfun", rfun, not callable(rfun)))
+              if not ours]
+    if theirs:
+        _warn_user(
+            f"causal=True: {' and '.join(theirs)} "
+            f"{'is a function' if len(theirs) == 1 else 'are functions'} of your "
+            "own; the guarantee that row t does not depend on later rows does "
+            "not cover what "
+            f"{'it does' if len(theirs) == 1 else 'they do'}."
+        )
+    return include_timepoints, cfun
+
+
+def _reduce_defined(corrs, rfun):
+    """
+    ``reduce(corrs, rfun)`` for a graph measure on the output of the causal
+    estimator: the measure is computed for the defined rows; rows of NaN
+    stay rows of NaN.
+    """
+    arrays = corrs if isinstance(corrs, list) else [corrs]
+    out = []
+    for c in arrays:
+        c = np.asarray(c)
+        defined = ~np.isnan(c).all(axis=1)
+        if not defined.any():
+            width = np.asarray(reduce(np.nan_to_num(c[:1]), rfun=rfun)).shape[1]
+            out.append(np.full((c.shape[0], width), np.nan))
+            continue
+        reduced = np.asarray(reduce(c[defined], rfun=rfun))
+        full = np.full((c.shape[0], reduced.shape[1]), np.nan)
+        full[defined] = reduced
+        out.append(full)
+    return out if isinstance(corrs, list) else out[0]
+
+
 def timecorr(
     data,
     weights_function=gaussian_weights,
@@ -197,6 +372,8 @@ def timecorr(
     *,
     events=None,
     events_params=None,
+    causal=False,
+    min_samples=3,
 ):
     """
     Compute dynamic (moment-by-moment) correlations in one or more datasets.
@@ -317,6 +494,55 @@ def timecorr(
         ``events`` (keys ``n``, ``kind``, ``max_events``, ``random_state``).
         Unknown keys, or giving it when no entry of ``events`` holds features,
         raise ``ValueError``.  Default: None.
+    causal : bool
+        True: row ``t`` of the output uses no sample after timepoint ``t``.
+        It is unchanged (to 1e-9) when the rows after ``t`` are replaced by
+        any values, NaN and inf included, or removed; with
+        ``include_zero=False`` also when row ``t`` itself changes.  Keyword
+        only.  Default: False.  With ``causal=True``:
+
+        - the kernel is backward: ``include_timepoints`` 'all' (the
+          default) means 'backward', and 'forward' / 'post' raise
+          ``ValueError``;
+        - ``weights_params`` must be given, and ``weights_function`` cannot
+          be ``eye_weights`` (its z-scores use every timepoint); a kernel
+          function of your own must return a matrix without weight above
+          its diagonal (for example ``tc.one_sided(w, 'backward')``), and
+          removing rows is covered only if its weights do not depend on T;
+        - ``cfun`` is ``isfc``, ``autofc``, None, or
+          ``functools.partial(tc.wisfc, subject_weights=...)`` with weights
+          of your own (the default weights of ``wisfc`` use every
+          timepoint, so ``cfun=tc.wisfc`` raises ``ValueError``).  Any
+          other function is called as without ``causal``, with a
+          ``UserWarning`` that the guarantee does not cover it; the same
+          holds for a callable ``rfun``;
+        - ``events`` must be boundaries; features to segment raise
+          ``ValueError``.  That the boundaries themselves were chosen
+          without later data is the caller's responsibility.  The warm-up
+          below starts again at each boundary;
+        - ``rfun`` is None, a graph measure (computed for the defined rows)
+          or a callable; a reducer that is fitted to data (a model name, a
+          summary) raises ``NotImplementedError``;
+        - infinite samples and samples above 1e150 in magnitude are missing
+          data, like NaN;
+        - the estimator centers each feature, a chunk of 128 timepoints at
+          a time, on the mean of its earlier samples that the chunk
+          weights, and its zero-variance rule is relative to that reference
+          (see ``wcorr``);
+        - timepoints with too few samples are rows of NaN, not 0 (see
+          ``min_samples``).
+    min_samples : float
+        With ``causal=True``, the effective sample size
+        ``(sum |w|)**2 / sum w**2`` that a timepoint needs, summed over the
+        observed timepoints of its kernel row (those where the data, and
+        for ``isfc`` and ``wisfc`` the reference, have at least one sample);
+        compared with a relative tolerance of 1e-12, so three equal weights
+        are 3 samples.  A timepoint below it, or with fewer than 3 observed
+        timepoints with non-zero weight, is a row of NaN.  With
+        ``cfun=None`` only the effective sample size applies, to each
+        feature's own observed samples: values below it are NaN.  Features
+        with zero variance still give correlations of 0.  Keyword only.
+        Default: 3.
 
     Returns
     -------
@@ -327,7 +553,9 @@ def timecorr(
         reduced features when ``rfun`` is given ((T, K) for model-based
         reduction and graph measures); or the smoothed (T, K) data when
         ``cfun`` is None.  A list (one entry per subject)
-        when ``combine`` returns one; a single array otherwise.
+        when ``combine`` returns one; a single array otherwise.  With
+        ``causal=True`` the timepoints with too few samples (the first ones,
+        and those after long gaps or event boundaries) are rows of NaN.
 
     Warns
     -----
@@ -360,7 +588,12 @@ def timecorr(
         row with fewer than 3 non-zero weights (no block is long enough to
         estimate a correlation); and, with per-subject events, when a custom
         ``cfun`` does not return a list with one array per subject; and as
-        raised by ``segment`` for features entries of ``events``.
+        raised by ``segment`` for features entries of ``events``.  With
+        ``causal=True``, for the arguments listed under ``causal`` that have
+        no causal form, and for a ``min_samples`` that is not a finite number
+        >= 0; for ``min_samples`` given without ``causal=True``.
+    NotImplementedError
+        With ``causal=True``, for an ``rfun`` that is fitted to data.
     RuntimeError, ImportError
         As raised by ``segment`` for features entries of ``events``.
 
@@ -449,12 +682,35 @@ def timecorr(
     >>> per_subject = tc.timecorr(subjects, cfun=tc.autofc, events=[[40], [50, 80], None])
     >>> len(per_subject), per_subject[0].shape
     (3, (100, 15))
+
+    Causal estimates: row 60 does not change when later rows do.  The first
+    3 rows have fewer than 3 effective samples and are NaN (a
+    ``UserWarning`` says so).
+
+    >>> past = tc.timecorr(data, causal=True, weights_params={"var": 50})
+    >>> bool(np.isnan(past[:3]).all()), bool(np.isnan(past[3:]).any())
+    (True, False)
+    >>> later = data.copy()
+    >>> later[61:] = 1000.0
+    >>> changed = tc.timecorr(later, causal=True, weights_params={"var": 50})
+    >>> bool(np.array_equal(changed[60], past[60]))
+    True
     """
 
     # NaN samples are kept; both the correlation functions and the smoothing
     # path (cfun=None) give them no weight.
     data = format_data(data, fill_nan=False)
     T = data[0].shape[0]
+
+    min_samples = _check_min_samples(min_samples, causal)
+    if causal:
+        include_timepoints, cfun = _causal_arguments(
+            weights_function, weights_params, include_timepoints, cfun, rfun,
+            events, T, len(data),
+        )
+    # the built-in correlation functions: one kernel per subject, never T x T
+    builtin = cfun in _KERNEL_LIST_CFUNS or (causal and _fixed_weights_wisfc(cfun))
+    estimator = {"causal": True, "min_samples": min_samples} if causal and builtin else {}
 
     weights = _shaped_kernel(
         T,
@@ -463,6 +719,7 @@ def timecorr(
         include_timepoints,
         include_zero,
         exclude_timepoints,
+        causal,
     )
 
     # event restriction: applied after the include/exclude options; subjects that
@@ -472,7 +729,7 @@ def timecorr(
     per_subject = isinstance(kernels, list)
 
     if cfun:
-        if cfun not in _KERNEL_LIST_CFUNS:
+        if not builtin:
             # a correlation function of the user's receives T x T arrays
             if per_subject:
                 arrays = {}
@@ -482,18 +739,25 @@ def timecorr(
                 kernels = [arrays[id(k)] for k in kernels]
             else:
                 kernels = _as_kernel_array(kernels)
-        if not per_subject or cfun in _KERNEL_LIST_CFUNS:
-            corrs = cfun(data, kernels)
+        if not per_subject or builtin:
+            corrs = cfun(data, kernels, **estimator)
         else:
             groups = distinct_event_sets(_restricted(resolved), len(data))
             corrs = _per_subject_cfun(cfun, data, kernels, groups)
-        corrs = reduce(combine(corrs), rfun=rfun)
+        if causal and isinstance(rfun, str):
+            corrs = _reduce_defined(combine(corrs), rfun)
+        else:
+            corrs = reduce(combine(corrs), rfun=rfun)
 
     else:
         # smoothing path: kernel-weighted mean of the samples, using the same
         # kernel rows (after include_timepoints, include_zero, exclude_timepoints
         # and events) as the correlation path
-        if per_subject:
+        if causal:
+            subject_kernels = kernels if per_subject else [kernels] * len(data)
+            smoothed = [_causal_smooth(x, k, min_samples)
+                        for x, k in zip(data, subject_kernels)]
+        elif per_subject:
             smoothed = [_kernel_smooth(x, k) for x, k in zip(data, kernels)]
         else:
             smoothed = [_kernel_smooth(x, kernels) for x in data]

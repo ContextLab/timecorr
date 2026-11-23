@@ -1,0 +1,646 @@
+"""
+The causal estimator: ``causal=True`` in ``timecorr``, ``wcorr``, ``autofc``,
+``isfc`` and ``wisfc``.
+
+The guarantee: output row t is unchanged (to 1e-9, NaN rows included) when
+the input rows after t are replaced by other finite values, by NaN, by inf,
+or removed; with ``include_zero=False`` also when row t itself changes.  The
+tests check every row before several cut points of series of 300
+timepoints, with an offset column, a column constant up to round-off, a
+random walk and NaN samples.  Real computations; nothing is mocked.
+"""
+
+import functools
+import warnings
+
+import numpy as np
+import pytest
+
+import timecorr as tc
+from timecorr import helpers
+
+from .test_estimator_causality import _data as _conditioned_data
+from .test_estimator_causality import _good
+
+ATOL = 1e-9
+T = 300
+CUTS = (3, 40, 127, 128, 129, 200, 257, 299)
+
+# name: (kernel function, parameters, min_samples).  The t kernel has weight
+# at every lag but is narrow whatever its df: a backward row has at most 2.6
+# effective samples (2.1 without the diagonal), so it is tested with
+# min_samples=2 (with the default of 3 every row is NaN).
+KERNELS = {
+    "gaussian": (tc.gaussian_weights, {"var": 25}, 3),
+    "laplace": (tc.laplace_weights, {"scale": 8}, 3),
+    "boxcar": (tc.boxcar_weights, {"width": 30}, 3),
+    "t": (tc.t_weights, {"df": 3}, 2),
+}
+SUBJECT_WEIGHTS = np.array([[0.0, 1.0, 0.5], [0.3, 0.0, 1.0], [1.0, 2.0, 0.0]])
+WISFC = functools.partial(tc.wisfc, subject_weights=SUBJECT_WEIGHTS)
+# name: (cfun, number of subjects, combine)
+CASES = {
+    "autofc": (tc.autofc, 1, tc.null_combine),
+    "isfc-null": (tc.isfc, 3, tc.null_combine),
+    "isfc-corrmean": (tc.isfc, 3, tc.corrmean_combine),
+    "wisfc-null": (WISFC, 3, tc.null_combine),
+    "wisfc-corrmean": (WISFC, 3, tc.corrmean_combine),
+    "smooth": (None, 1, tc.null_combine),
+    "smooth-subjects": (None, 3, tc.null_combine),
+}
+MODES = ("finite", "nan", "inf", "remove")
+
+
+def _quiet(f, *args, **kwargs):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return f(*args, **kwargs)
+
+
+def _series(seed, n=T, K=5, missing=0.02):
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal((n, K))
+    x[:, 0] += 1e6  # an offset
+    x[:, 2] = 2.0 * (1 + 1e-16 * rng.standard_normal(n))  # constant up to round-off
+    x[:, 3] = np.cumsum(rng.standard_normal(n))  # a random walk
+    x[rng.random((n, K)) < missing] = np.nan
+    return x
+
+
+def _subjects(n_subjects, seed=0, missing=0.02):
+    return [_series(seed + s, missing=missing) for s in range(n_subjects)]
+
+
+def _perturb(x, n, mode, rng):
+    """``x`` with rows ``n:`` replaced (finite values, NaN, inf) or removed."""
+    if mode == "remove":
+        return x[:n].copy()
+    y = x.copy()
+    if mode == "finite":
+        y[n:] = rng.standard_normal(y[n:].shape) * 50 - 20
+    elif mode == "nan":
+        y[n:] = np.nan
+    else:
+        y[n:] = np.where(rng.random(y[n:].shape) < 0.5, np.inf, -np.inf)
+        y[n:, 1] = 1e200  # squares overflow
+    return y
+
+
+def _call(data, case, kernel, include_zero=True, **kwargs):
+    cfun, n_subjects, combine = CASES[case]
+    weights_function, weights_params, min_samples = KERNELS[kernel]
+    x = data[0] if n_subjects == 1 else data
+    return _quiet(tc.timecorr, x, causal=True, cfun=cfun, combine=combine,
+                  weights_function=weights_function, weights_params=weights_params,
+                  include_zero=include_zero, min_samples=min_samples, **kwargs)
+
+
+def _as_list(out):
+    return out if isinstance(out, list) else [out]
+
+
+def _max_difference(full, part, rows):
+    """Largest absolute difference over rows ``:rows``; NaN must match NaN."""
+    worst = 0.0
+    for f, p in zip(_as_list(full), _as_list(part)):
+        f, p = np.asarray(f)[:rows], np.asarray(p)[:rows]
+        assert f.shape == p.shape
+        assert np.array_equal(np.isnan(f), np.isnan(p))
+        both = ~np.isnan(f)
+        if both.any():
+            worst = max(worst, float(np.max(np.abs(f[both] - p[both]))))
+    return worst
+
+
+# ----------------------------------------------------------------------------
+# the guarantee
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("kernel", sorted(KERNELS))
+@pytest.mark.parametrize("include_zero", [True, False])
+@pytest.mark.parametrize("case", sorted(CASES))
+def test_rows_do_not_depend_on_later_rows(case, include_zero, kernel, mode):
+    data = _subjects(CASES[case][1])
+    full = _call(data, case, kernel, include_zero)
+    rng = np.random.default_rng(7)
+    defined = 0
+    for n in CUTS:
+        part = _call([_perturb(x, n, mode, rng) for x in data], case, kernel,
+                     include_zero)
+        assert _max_difference(full, part, n) <= ATOL
+        defined += int(np.sum(~np.isnan(np.asarray(_as_list(part)[0])[:n])))
+    assert defined > 0  # the comparison is not between NaN rows only
+
+
+@pytest.mark.parametrize("missing", [0, 0.002])
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("kernel", sorted(KERNELS))
+@pytest.mark.parametrize("include_zero", [True, False])
+@pytest.mark.parametrize("case", ["autofc", "isfc-corrmean", "wisfc-null", "smooth"])
+def test_rows_do_not_depend_on_later_rows_with_few_missing_samples(
+        case, include_zero, kernel, mode, missing):
+    # without NaN samples (and with NaN samples in some chunks of kernel rows
+    # only) the estimator takes its path for complete data, and later NaN or
+    # inf rows change the path of the chunk they are in
+    data = _subjects(CASES[case][1], seed=30, missing=missing)
+    assert bool(missing) == any(np.isnan(x).any() for x in data)
+    full = _call(data, case, kernel, include_zero)
+    rng = np.random.default_rng(17)
+    for n in CUTS:
+        part = _call([_perturb(x, n, mode, rng) for x in data], case, kernel,
+                     include_zero)
+        rows = n if include_zero or mode == "remove" else n + 1
+        assert _max_difference(full, part, rows) <= ATOL
+    # (with the narrow t kernel, a missing sample leaves a feature of the
+    # smoothed data below min_samples for a row or two)
+    assert np.isnan(np.asarray(_as_list(full)[0])[20:]).mean() < 0.01
+
+
+@pytest.mark.parametrize("mode", ["finite", "nan", "inf"])
+@pytest.mark.parametrize("kernel", sorted(KERNELS))
+@pytest.mark.parametrize("case", sorted(CASES))
+def test_without_the_diagonal_row_t_does_not_depend_on_row_t(case, kernel, mode):
+    data = _subjects(CASES[case][1])
+    full = _call(data, case, kernel, include_zero=False)
+    rng = np.random.default_rng(8)
+    for n in CUTS:
+        # rows n: change; rows :n + 1 (row n included) must not
+        part = _call([_perturb(x, n, mode, rng) for x in data], case, kernel,
+                     include_zero=False)
+        assert _max_difference(full, part, n + 1) <= ATOL
+
+
+@pytest.mark.parametrize("kernel", sorted(KERNELS))
+@pytest.mark.parametrize("include_zero", [True, False])
+@pytest.mark.parametrize("case", sorted(CASES))
+def test_replacing_later_rows_with_finite_values_changes_no_bit(case, include_zero,
+                                                               kernel):
+    data = _subjects(CASES[case][1])
+    full = _call(data, case, kernel, include_zero)
+    rng = np.random.default_rng(9)
+    for n in CUTS:
+        part = _call([_perturb(x, n, "finite", rng) for x in data], case, kernel,
+                     include_zero)
+        rows = n if include_zero else n + 1
+        for f, p in zip(_as_list(full), _as_list(part)):
+            assert np.array_equal(np.asarray(f)[:rows], np.asarray(p)[:rows],
+                                  equal_nan=True)
+
+
+def test_rows_do_not_depend_on_later_rows_with_event_boundaries():
+    x = _series(3)
+    kw = dict(causal=True, cfun=tc.autofc, weights_params={"var": 25},
+              events=[90, 210])
+    full = _quiet(tc.timecorr, x, **kw)
+    rng = np.random.default_rng(10)
+    for mode in ("finite", "nan", "inf"):
+        for n in CUTS:
+            part = _quiet(tc.timecorr, _perturb(x, n, mode, rng), **kw)
+            assert _max_difference(full, part, n) <= ATOL
+    # warm-up starts again at each block
+    nan_rows = np.flatnonzero(np.isnan(full).all(axis=1))
+    assert {0, 1, 90, 91, 210, 211} <= set(nan_rows.tolist())
+    assert not np.isnan(full[[89, 209, 299]]).any()
+
+
+@pytest.mark.parametrize("mode", MODES)
+def test_wcorr_rows_do_not_depend_on_later_rows(mode):
+    a, b = _series(11), _series(12)
+    rng = np.random.default_rng(13)
+
+    def run(a, b):
+        w = tc.gaussian_weights(len(a), {"var": 25}, direction="backward")
+        return _quiet(tc.wcorr, a, b, w, causal=True)
+
+    full = run(a, b)
+    for n in CUTS:
+        part = run(_perturb(a, n, mode, rng), _perturb(b, n, mode, rng))
+        f, p = full[:, :, :n], part[:, :, :n]
+        assert np.array_equal(np.isnan(f), np.isnan(p))
+        assert np.allclose(f, p, atol=ATOL, rtol=0, equal_nan=True)
+    assert np.sum(~np.isnan(full)) > 0
+
+
+def test_non_finite_and_overflowing_samples_are_missing():
+    x = np.random.default_rng(0).standard_normal((120, 4))
+    holes = [(5, 0), (40, 1), (41, 1), (90, 3), (119, 2)]
+    values = [np.inf, -np.inf, 1e200, -1e151, np.inf]
+    y, z = x.copy(), x.copy()
+    for (t, k), v in zip(holes, values):
+        y[t, k] = v
+        z[t, k] = np.nan
+    for cfun in (tc.autofc, None):
+        kw = dict(causal=True, cfun=cfun, weights_params={"var": 20})
+        out = _quiet(tc.timecorr, y, **kw)
+        assert np.array_equal(out, _quiet(tc.timecorr, z, **kw), equal_nan=True)
+        assert not np.isnan(out[10:]).any()
+
+
+# ----------------------------------------------------------------------------
+# agreement with the estimator of causal=False
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("cfun", ["autofc", "isfc", "wisfc"])
+def test_agrees_with_the_backward_kernel_of_causal_false(cfun):
+    subjects = [_conditioned_data(seed=s) for s in range(3)]
+    function = {"autofc": tc.autofc, "isfc": tc.isfc,
+                "wisfc": functools.partial(tc.wisfc, subject_weights=1.0)}[cfun]
+    kw = dict(cfun=function, combine=tc.null_combine, weights_params={"var": 30})
+    causal = _quiet(tc.timecorr, subjects, causal=True, **kw)
+    plain = _quiet(tc.timecorr, subjects, include_timepoints="backward", **kw)
+    for s in range(3):
+        # entries that are well conditioned for the estimator of causal=False
+        # (the measure of test_estimator_causality.py)
+        good = _good(subjects, s, cfun, "backward")
+        defined = ~np.isnan(causal[s]).all(axis=1)
+        assert not np.isnan(causal[s][defined]).any()
+        assert defined.sum() >= 147
+        good &= defined[:, np.newaxis]
+        assert good.mean() > 0.5
+        assert np.max(np.abs(causal[s][good] - plain[s][good])) <= ATOL
+
+
+def test_smoothing_agrees_with_the_backward_kernel_of_causal_false():
+    x = np.random.default_rng(1).standard_normal((200, 4))
+    x[30:33, 1] = np.nan
+    kw = dict(cfun=None, weights_params={"var": 30})
+    causal = _quiet(tc.timecorr, x, causal=True, **kw)
+    plain = _quiet(tc.timecorr, x, include_timepoints="backward", **kw)
+    defined = ~np.isnan(causal)
+    assert defined[5:].all() and not defined[:2].any()
+    assert np.max(np.abs(causal[defined] - plain[defined])) <= 1e-12
+
+
+def test_default_is_not_causal():
+    x = np.random.default_rng(2).standard_normal((80, 4))
+    kw = dict(cfun=tc.autofc, weights_params={"var": 20})
+    assert np.array_equal(_quiet(tc.timecorr, x, **kw),
+                          _quiet(tc.timecorr, x, causal=False, min_samples=3, **kw))
+    w = tc.gaussian_weights(80, {"var": 20})
+    assert np.array_equal(_quiet(tc.wcorr, x, x, w),
+                          _quiet(tc.wcorr, x, x, w, causal=False))
+
+
+# ----------------------------------------------------------------------------
+# warm-up rows
+# ----------------------------------------------------------------------------
+
+
+def _expected_undefined(w, observed, min_samples, min_count=3):
+    """Rows of the kernel ``w`` below the rules, from the observed timepoints."""
+    a = np.abs(w) * observed
+    count = (a != 0).sum(axis=1)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ess = a.sum(axis=1) ** 2 / (a**2).sum(axis=1)
+    ess = np.nan_to_num(ess)
+    return (count < min_count) | (ess < min_samples * (1 - 1e-12))
+
+
+def test_three_equal_weights_are_three_samples():
+    x = np.random.default_rng(3).standard_normal((60, 4))
+    # a backward boxcar over the lags 0, 1, 2: three weights of 1 from row 2 on
+    kw = dict(causal=True, cfun=tc.autofc, weights_function=tc.boxcar_weights,
+              weights_params={"width": 5})
+    out = _quiet(tc.timecorr, x, min_samples=3, **kw)
+    nan_rows = np.isnan(out).all(axis=1)
+    assert np.array_equal(np.flatnonzero(nan_rows), [0, 1])
+    assert not np.isnan(out[2:]).any()
+    # the default is 3
+    assert np.array_equal(out, _quiet(tc.timecorr, x, **kw), equal_nan=True)
+    # a little more than 3 samples asks for more than the window has
+    assert np.isnan(_quiet(tc.timecorr, x, min_samples=3.001, **kw)).all()
+    # the same kernel as an array, in wcorr
+    w = np.tril(np.ones((60, 60))) - np.tril(np.ones((60, 60)), -3)
+    r = _quiet(tc.wcorr, x, x, w, causal=True)
+    assert np.array_equal(np.flatnonzero(np.isnan(r).all(axis=(0, 1))), [0, 1])
+    assert not np.isnan(r[:, :, 2:]).any()
+    assert np.allclose(tc.mat2vec(r)[2:], out[2:], atol=1e-12, rtol=0)
+
+
+@pytest.mark.parametrize("include_zero", [True, False])
+@pytest.mark.parametrize("var, min_samples", [(25, 3), (25, 8), (25, 10), (100, 10),
+                                              (25, 0)])
+def test_warm_up_rows_are_those_below_the_rules(include_zero, var, min_samples):
+    n = 150
+    x = np.random.default_rng(4).standard_normal((n, 4))
+    out = _quiet(tc.timecorr, x, causal=True, cfun=tc.autofc, min_samples=min_samples,
+                 weights_params={"var": var}, include_zero=include_zero)
+    w = tc.gaussian_weights(n, {"var": var}, direction="backward",
+                            include_zero=include_zero)
+    expected = _expected_undefined(w, np.ones(n), min_samples)
+    assert np.array_equal(np.isnan(out).all(axis=1), expected)
+    assert not np.isnan(out[~expected]).any()
+    if (var, min_samples) == (25, 10):
+        # a backward Gaussian of variance 25 has fewer than 10 effective
+        # samples (9.4 with the diagonal) in every row
+        ess = w[-1].sum() ** 2 / (w[-1] ** 2).sum()
+        assert 8 < ess < 10 and expected.all()
+        return
+    first = int(np.flatnonzero(~expected)[0])
+    assert np.array_equal(np.flatnonzero(expected), np.arange(first))
+    if min_samples >= 8:
+        assert first > 5  # more leading rows than the three-sample rule gives
+    if min_samples == 3:
+        # three unequal weights are fewer than 3 effective samples
+        assert first == (3 if include_zero else 4)
+    if min_samples == 0:
+        assert first == (2 if include_zero else 3)  # fewer than 3 samples
+
+
+def test_rows_without_samples_do_not_count_as_observed():
+    n = 120
+    x = np.random.default_rng(5).standard_normal((n, 4))
+    x[40:52] = np.nan  # whole rows missing
+    x[80, 2] = np.nan  # a single sample: the row is observed
+    out = _quiet(tc.timecorr, x, causal=True, cfun=tc.autofc, min_samples=6,
+                 weights_params={"var": 25})
+    w = tc.gaussian_weights(n, {"var": 25}, direction="backward")
+    observed = (~np.isnan(x)).any(axis=1).astype(float)
+    expected = _expected_undefined(w, observed, 6)
+    assert np.array_equal(np.isnan(out).all(axis=1), expected)
+    assert not np.isnan(out[~expected]).any()
+    assert expected[45:55].all() and not expected[70:].any()
+
+
+def test_a_kernel_too_narrow_for_min_samples_gives_no_defined_row():
+    x = np.random.default_rng(3).standard_normal((80, 3))
+    kw = dict(causal=True, weights_function=tc.t_weights, weights_params={"df": 3})
+    for cfun in (tc.autofc, None):
+        with pytest.warns(UserWarning, match="80"):
+            out = tc.timecorr(x, cfun=cfun, **kw)
+        assert np.isnan(out).all()
+        assert not np.isnan(_quiet(tc.timecorr, x, cfun=cfun, min_samples=2,
+                                   **kw)[10:]).any()
+
+
+def test_zero_variance_entries_stay_zero():
+    x = np.random.default_rng(6).standard_normal((100, 4))
+    x[:, 1] = 7.0
+    out = _quiet(tc.timecorr, x, causal=True, cfun=tc.autofc,
+                 weights_params={"var": 25})
+    assert np.isnan(out[:3]).all() and not np.isnan(out[3:]).any()
+    full = tc.vec2mat(out[3:])  # (K, K, T - 3)
+    assert np.all(full[1, :, :] == 0) and np.all(full[:, 1, :] == 0)
+    assert np.all(full[[0, 2, 3], [0, 2, 3], :] == 1)
+    assert np.any(full[0, 2, :] != 0)
+
+
+def test_warning_names_the_undefined_rows():
+    x = np.random.default_rng(7).standard_normal((90, 3))
+    w = tc.gaussian_weights(90, {"var": 25}, direction="backward")
+    n8 = int(_expected_undefined(w, np.ones(90), 8).sum())
+    assert n8 > 5
+    with pytest.warns(UserWarning, match=rf"^{n8} of 90 timepoints .* NaN"):
+        out = tc.timecorr(x, causal=True, cfun=tc.autofc, min_samples=8,
+                          weights_params={"var": 25})
+    assert np.array_equal(np.flatnonzero(np.isnan(out).all(axis=1)), np.arange(n8))
+    with pytest.warns(UserWarning, match=r"^3 of 90 timepoints .* NaN"):
+        tc.wcorr(x, x, w, causal=True)
+    with pytest.warns(UserWarning, match=r"^2 of 90 timepoints .* NaN"):
+        tc.autofc(x, w, causal=True, min_samples=0)
+    with pytest.warns(UserWarning, match=r"[Ss]moothing .* 3 timepoint"):
+        tc.timecorr(x, causal=True, cfun=None, weights_params={"var": 25})
+    # one warning per call
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        tc.timecorr([x, x + 1, x * 2], causal=True, weights_params={"var": 25})
+    assert len(caught) == 1
+
+
+def test_smoothing_warm_up_is_per_feature():
+    n = 80
+    x = np.random.default_rng(8).standard_normal((n, 3))
+    x[20:40, 1] = np.nan
+    out = _quiet(tc.timecorr, x, causal=True, cfun=None, min_samples=4,
+                 weights_params={"var": 25})
+    w = tc.gaussian_weights(n, {"var": 25}, direction="backward")
+    for k in range(3):
+        observed = (~np.isnan(x[:, k])).astype(float)
+        expected = _expected_undefined(w, observed, 4, min_count=0)
+        assert np.array_equal(np.isnan(out[:, k]), expected)
+    assert np.isnan(out[30, 1]) and not np.isnan(out[30, [0, 2]]).any()
+
+
+# ----------------------------------------------------------------------------
+# the correlation functions, called directly
+# ----------------------------------------------------------------------------
+
+
+def test_correlation_functions_called_directly():
+    data = [np.random.default_rng(s).standard_normal((100, 4)) for s in range(3)]
+    w = tc.gaussian_weights(100, {"var": 16}, direction="backward")
+    kw = dict(causal=True, weights_params={"var": 16}, combine=tc.null_combine)
+    for cfun, direct in (
+        (tc.autofc, lambda: tc.autofc(data, w, causal=True)),
+        (tc.isfc, lambda: tc.isfc(data, w, causal=True)),
+        (WISFC, lambda: tc.wisfc(data, w, subject_weights=SUBJECT_WEIGHTS,
+                                 causal=True)),
+    ):
+        expected = _quiet(tc.timecorr, data, cfun=cfun, **kw)
+        got = _quiet(direct)
+        for e, g in zip(expected, got):
+            assert np.isnan(g[:3]).all() and not np.isnan(g[3:]).any()
+            assert np.allclose(e, g, atol=1e-12, rtol=0, equal_nan=True)
+    # a single array, and wcorr
+    one = _quiet(tc.autofc, data[0], w, causal=True, min_samples=6)
+    r = _quiet(tc.wcorr, data[0], data[0], w, causal=True, min_samples=6)
+    assert one.shape == (100, 10) and r.shape == (4, 4, 100)
+    undefined = np.isnan(r).all(axis=(0, 1))
+    assert 3 < undefined.sum() < 50 and not np.isnan(r[:, :, ~undefined]).any()
+    assert np.array_equal(np.isnan(one).all(axis=1), undefined)
+    # (mat2vec itself sets NaN above the diagonal to 0)
+    assert np.array_equal(one[~undefined], tc.mat2vec(r)[~undefined])
+    assert np.all(r[[0, 1, 2, 3], [0, 1, 2, 3], 50] == 1)
+
+
+def test_streamed_rows_equal_wcorr():
+    x = _series(20, n=200, K=6)
+    w = helpers._lag_kernel(200, tc.gaussian_weights, {"var": 25}, "backward")
+    for a, b, symmetric in ((x, x, True), (x, _series(21, n=200, K=6), False)):
+        full = _quiet(helpers._wcorr, a, b, w, warn=False, causal=True, min_samples=5,
+                      autocorrelation=symmetric)
+        got = np.empty_like(full)
+        for i0, i1, R, _, _ in helpers._corr_row_blocks(a, b, w, symmetric, 2,
+                                                        causal=True, min_samples=5):
+            got[i0:i1] = R
+        assert np.array_equal(np.isnan(full), np.isnan(got))
+        assert np.isnan(full[:, :, 0]).all() and not np.isnan(full[:, :, 20:]).any()
+        assert np.allclose(full, got, atol=1e-12, rtol=0, equal_nan=True)
+
+
+# ----------------------------------------------------------------------------
+# arguments
+# ----------------------------------------------------------------------------
+
+X = np.random.default_rng(0).standard_normal((60, 4))
+OK = dict(causal=True, cfun=tc.autofc, weights_params={"var": 9})
+
+
+def test_backward_kernel_is_implied():
+    out = _quiet(tc.timecorr, X, **OK)
+    for side in ("backward", "pre", "BACKWARD"):
+        assert np.array_equal(out, _quiet(tc.timecorr, X, include_timepoints=side, **OK),
+                              equal_nan=True)
+
+
+@pytest.mark.parametrize("side", ["forward", "post", "Forward"])
+def test_forward_kernels_raise(side):
+    with pytest.raises(ValueError, match="backward"):
+        tc.timecorr(X, include_timepoints=side, **OK)
+
+
+def test_kernel_parameters_are_required():
+    with pytest.raises(ValueError, match="weights_params"):
+        tc.timecorr(X, causal=True, cfun=tc.autofc)
+
+
+def test_delta_kernel_raises():
+    with pytest.raises(ValueError, match="eye_weights"):
+        tc.timecorr(X, causal=True, cfun=tc.autofc, weights_function=tc.eye_weights,
+                    weights_params={})
+    with pytest.raises(ValueError, match="delta"):
+        tc.wcorr(X, X, np.eye(60), causal=True)
+    with pytest.raises(ValueError, match="delta"):
+        tc.autofc(X, np.eye(60), causal=True)
+
+
+def test_wisfc_needs_fixed_subject_weights():
+    data = [X, X[::-1].copy(), X**2]
+    with pytest.raises(ValueError, match="subject_weights"):
+        tc.timecorr(data, causal=True, cfun=tc.wisfc, weights_params={"var": 9})
+    with pytest.raises(ValueError, match="subject_weights"):
+        tc.timecorr(data, causal=True, cfun=functools.partial(tc.wisfc),
+                    weights_params={"var": 9})
+    w = tc.gaussian_weights(60, {"var": 9}, direction="backward")
+    with pytest.raises(ValueError, match="subject_weights"):
+        tc.wisfc(data, w, causal=True)
+    # fixed weights: the built-in function, without the warning of a callable
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = tc.timecorr(data, causal=True, weights_params={"var": 9},
+                          cfun=functools.partial(tc.wisfc, subject_weights=1.0))
+    assert not [c for c in caught if "guarantee" in str(c.message)]
+    direct = _quiet(tc.wisfc, data, w, subject_weights=1.0, causal=True)
+    for o, d in zip(out, direct):
+        assert np.allclose(o, d, atol=1e-12, rtol=0, equal_nan=True)
+
+
+def test_events_must_be_boundaries():
+    features = np.random.default_rng(1).standard_normal((60, 3))
+    with pytest.raises(ValueError, match="boundaries"):
+        tc.timecorr(X, events=features, **OK)
+    with pytest.raises(ValueError, match="boundaries"):
+        tc.timecorr([X, X + 1], events=[[30], features], **OK)
+    out = _quiet(tc.timecorr, X, events=[30], **OK)
+    assert out.shape == (60, 10)
+    out = _quiet(tc.timecorr, [X, X + 1], events=[[30], None], **OK)
+    assert len(out) == 2
+
+
+def test_kernels_with_weight_on_later_timepoints_raise():
+    two_sided = tc.gaussian_weights(60, {"var": 9})
+    with pytest.raises(ValueError, match="later timepoints"):
+        tc.wcorr(X, X, two_sided, causal=True)
+    with pytest.raises(ValueError, match="later timepoints"):
+        tc.autofc(X, two_sided, causal=True)
+    with pytest.raises(ValueError, match="later timepoints"):
+        tc.isfc([X, X + 1], two_sided, causal=True)
+    with pytest.raises(ValueError, match="later timepoints"):
+        tc.wcorr(X, X, helpers._lag_kernel(60, tc.gaussian_weights, {"var": 9}),
+                 causal=True)
+    for cfun in (tc.autofc, None):
+        with pytest.raises(ValueError, match="later timepoints"):
+            tc.timecorr(X, causal=True, cfun=cfun, weights_params={},
+                        weights_function=lambda T, p: tc.gaussian_weights(T, {"var": 9}))
+    # a function of the user's that returns a backward kernel is accepted
+    out = _quiet(
+        tc.timecorr, X, causal=True, cfun=tc.autofc, weights_params={"var": 9},
+        weights_function=lambda T, p: tc.gaussian_weights(T, p, direction="backward"))
+    assert np.allclose(out, _quiet(tc.timecorr, X, **OK), atol=1e-12, rtol=0,
+                       equal_nan=True)
+
+
+def test_a_correlation_function_of_the_users_warns_once():
+    def mine(data, weights):
+        return tc.autofc(data, weights)
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = tc.timecorr(X, causal=True, cfun=mine, weights_params={"var": 9})
+    messages = [str(c.message) for c in caught if "guarantee" in str(c.message)]
+    assert len(messages) == 1 and "cfun" in messages[0]
+    assert issubclass(
+        [c for c in caught if "guarantee" in str(c.message)][0].category, UserWarning)
+    # it received the backward kernel as a T x T array
+    plain = _quiet(tc.timecorr, X, cfun=tc.autofc, weights_params={"var": 9},
+                   include_timepoints="backward")
+    assert np.array_equal(out, plain)
+
+
+def test_a_reducer_of_the_users_warns_once():
+    def mine(arrays):
+        return [np.nan_to_num(a[:, :2]) for a in arrays]
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = tc.timecorr(X, rfun=mine, **OK)
+    messages = [str(c.message) for c in caught if "guarantee" in str(c.message)]
+    assert len(messages) == 1 and "rfun" in messages[0]
+    assert out.shape == (60, 2)
+
+
+@pytest.mark.parametrize("rfun", [
+    "PCA", {"model": "PCA"}, "weighted_strength", "weighted_strength_split",
+    "communities", tc.WeightedStrength(), tc.Communities(n=2),
+], ids=str)
+def test_fitted_reducers_are_not_implemented_yet(rfun):
+    with pytest.raises(NotImplementedError, match="fit_timepoints"):
+        tc.timecorr(X, rfun=rfun, **OK)
+
+
+@pytest.mark.parametrize("rfun", ["strength", "eigenvector_centrality",
+                                  "pagerank_centrality_abs"])
+def test_graph_measures_run_on_the_defined_rows(rfun):
+    out = _quiet(tc.timecorr, X, rfun=rfun, **OK)
+    corrs = _quiet(tc.timecorr, X, **OK)
+    defined = ~np.isnan(corrs).all(axis=1)
+    assert out.shape == (60, 4)
+    assert np.array_equal(np.isnan(out).all(axis=1), ~defined)
+    assert not np.isnan(out[defined]).any()
+    assert np.allclose(out[defined], _quiet(tc.reduce, corrs[defined], rfun=rfun),
+                       atol=1e-12, rtol=0)
+    # and in a list of subjects
+    outs = _quiet(tc.timecorr, [X, X[::-1].copy()], rfun=rfun, **OK)
+    assert len(outs) == 2 and np.isnan(outs[1][:3]).all()
+    assert not np.isnan(outs[1][3:]).any()
+
+
+@pytest.mark.parametrize("bad", [-1, np.nan, np.inf, "3", None, True])
+def test_min_samples_must_be_a_number(bad):
+    with pytest.raises(ValueError, match="min_samples"):
+        tc.timecorr(X, min_samples=bad, **OK)
+    w = tc.gaussian_weights(60, {"var": 9}, direction="backward")
+    with pytest.raises(ValueError, match="min_samples"):
+        tc.wcorr(X, X, w, causal=True, min_samples=bad)
+
+
+def test_min_samples_needs_causal():
+    with pytest.raises(ValueError, match="causal=True"):
+        tc.timecorr(X, cfun=tc.autofc, weights_params={"var": 9}, min_samples=5)
+    with pytest.raises(ValueError, match="causal=True"):
+        tc.wcorr(X, X, tc.gaussian_weights(60, {"var": 9}), min_samples=5)
+
+
+def test_new_arguments_are_keyword_only():
+    w = tc.gaussian_weights(60, {"var": 9}, direction="backward")
+    with pytest.raises(TypeError):
+        tc.wcorr(X, X, w, True)
+    with pytest.raises(TypeError):
+        tc.autofc(X, w, True)
+    with pytest.raises(TypeError):
+        tc.isfc(X, w, True)
+    with pytest.raises(TypeError):
+        tc.wisfc(X, w, 1.0, True)

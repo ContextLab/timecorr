@@ -788,3 +788,43 @@ def test_order_three_of_5033_by_49_takes_seconds():
     # the rows far from the start agree with the kernels of causal=False
     assert np.max(np.abs(X[3][800:] - P[3][800:])) <= ATOL
     assert causal < 15
+
+
+# ----------------------------------------------------------------------------
+# streamed steps of later orders are refused before order 1 runs
+# ----------------------------------------------------------------------------
+
+
+def test_a_streamed_wisfc_step_that_cannot_fit_is_refused_before_order_one():
+    # with causal=True, wisfc with fixed subject weights is streamed like
+    # isfc, so an order-2 step that cannot fit max_memory_gb raises before
+    # anything is computed (the message of the check made up front, which
+    # holds no results yet), as it does for isfc
+    from timecorr.higher_order import _check_streamed_steps
+
+    K, n, S = 12, 600, 3
+    data = [np.random.default_rng(s).standard_normal((n, K)) for s in range(S)]
+    feeding = tc.WeightedStrength(signed=True)  # 24 columns feed order 2
+    on_k = estimate_memory_gb(K, 1, n, n_subjects=S, streamed=True)[1]
+    on_2k = estimate_memory_gb(2 * K, 1, n, n_subjects=S, streamed=True)[1]
+    assert on_k < on_2k
+    budget = (on_k + on_2k) / 2
+    up_front = (r"streamed analysis step at order 2 needs at least about \S+ GB "
+                r"\(one row of correlations per block; 24 input features")
+    kw = dict(order=2, combine=tc.null_combine, rfun="weighted_strength",
+              delta_rfun={1: feeding}, fit_timepoints=300, **PARAMS)
+    for cfun in (tc.isfc, WISFC):
+        with pytest.raises(MemoryError, match=up_front):
+            _quiet(tc.features, data, cfun=cfun, causal=True, max_memory_gb=budget, **kw)
+        assert feeding.fits_ == []  # nothing was fitted
+    out = _quiet(tc.features, data, cfun=WISFC, causal=True,
+                 max_memory_gb=4 * on_2k, **kw)
+    assert out[2][0].shape == (n, 2 * K)
+    # the check itself: fixed-weight wisfc is streamed in causal mode only
+    steps = dict(combine=tc.null_combine, feeding_function=tc.gaussian_weights,
+                 ndims=None, weights_function=tc.gaussian_weights)
+    reducers = ({1: "weighted_strength", 2: "weighted_strength"}, {1: feeding, 2: None})
+    with pytest.raises(MemoryError, match=up_front):
+        _check_streamed_steps(K, n, S, budget, *reducers, [1], cfun=WISFC,
+                              causal=True, **steps)
+    _check_streamed_steps(K, n, S, budget, *reducers, [1], cfun=WISFC, **steps)

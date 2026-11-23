@@ -504,6 +504,34 @@ def test_a_refit_looks_for_the_columns_of_the_first_fit_not_its_clusters():
         assert _rows_difference(out, applied, start, stop) <= ATOL
 
 
+def test_effective_names_the_clusters_of_the_fit_the_entry_describes():
+    # the reducer asks for six clusters; the fits at rows 140 and 180 took
+    # five (n0 - 1), and the entries describe the last fit
+    x = _data("drifting")
+    asked, used = repr(tc.Communities(n=6)), repr(tc.Communities(n=5))
+    _, single = _run(x, "drifting", refit_every=None, return_info=True)
+    _, info, model = _run(x, "drifting", return_info=True, return_model=True)
+    assert model.fits[(1, "feeding")]["n"] == 5
+    assert single[1]["effective"] == asked
+    assert info[1]["effective"] == used
+    assert info[1]["requested"] == single[1]["requested"] == asked
+    assert info[1]["output_width"] == single[1]["output_width"] == 5
+    # every other entry, and every other key of this one, as without refits
+    assert [set(e) for e in info] == [set(e) for e in single]
+    for i, (a, b) in enumerate(zip(info, single)):
+        assert i == 1 or a["effective"] == b["effective"]
+    # the model holds that fit: its own entries say the same
+    _, applied = _quiet(model.transform, x, return_info=True)
+    assert [e["effective"] for e in applied] == [e["effective"] for e in info]
+    # a fit with the clusters asked for keeps the reducer as given
+    _, cut = _run(x[:130], "drifting", return_info=True)
+    assert cut[1]["refit_rows"] == [100] and cut[1]["effective"] == asked
+    y = _data("communities")
+    _, info = _run(y, "communities", return_info=True)
+    assert info[0]["effective"] == repr(tc.Communities(n=4))
+    assert info[0]["refit_rows"] == ROWS and info[0]["refit_kept_previous"] == []
+
+
 def test_a_fit_that_is_left_out_warns_once_with_its_rows_and_step():
     x = _merging()
     kw = dict(order=2, cfun=tc.autofc, rfun="weighted_strength",

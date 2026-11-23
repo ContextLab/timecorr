@@ -47,6 +47,7 @@ from .helpers import (
 )
 from .higher_order import (
     _constant_columns,
+    _describe,
     _fit_pass,
     _output_elements,
     _step_info,
@@ -85,6 +86,23 @@ def _events_by_order(events, T, n_subjects, order):
                 "new block starts), for example events=[100, 250]."
             )
     return resolve_events_by_order(events, T, n_subjects, order, None, causal=True)
+
+
+def _effective(reducer, fitted):
+    """
+    The ``"effective"`` entry of a step reduced by a ``Communities`` object
+    with a given ``n`` whose fit ``fitted`` has another number of clusters
+    (a refit that took a number near the first fit's: ``_same_width``):
+    the reducer described with the number of the fit.  None otherwise (the
+    entry of ``_step_info`` stays).
+    """
+    if not (isinstance(fitted, _FittedSummary) and isinstance(reducer, Communities)
+            and reducer.n is not None and fitted.fit.get("n") is not None
+            and int(fitted.fit["n"]) != int(reducer.n)):
+        return None
+    used = copy.copy(reducer)
+    used.n = int(fitted.fit["n"])
+    return _describe(used)
 
 
 def _causal_pass(settings, subjects, events, *, steps=None, record=None,
@@ -168,6 +186,10 @@ def _causal_pass(settings, subjects, events, *, steps=None, record=None,
             if single and isinstance(out, list):
                 out = out[0]
             entry["weights_params"] = dict(params)  # a copy
+            described = _effective(s["rfun" if entry["path"] == "analysis"
+                                     else "delta_rfun"][k], used.get(entry["path"]))
+            if described is not None:
+                entry["effective"] = described
             entry["constant_columns"] = _constant_columns(out, True)
             entry["warmup_rows"] = _warmup_rows(out)
             if _is_fit(used.get(entry["path"])):

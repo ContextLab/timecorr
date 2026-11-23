@@ -1312,7 +1312,7 @@ def _known_width(rfun, d, ndims):
 
 def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfun,
                           combine, feeding_function, ndims, weights_function=None,
-                          later_T=None):
+                          later_T=None, causal=False):
     """
     Raise MemoryError, before anything is computed, for a streamed step of
     ``features`` that does not fit ``max_memory_gb`` with one row per block.
@@ -1326,6 +1326,8 @@ def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfu
     rows assumed for orders 2 and above (None: T); ``features`` gives the
     fewest rows such an order can have when feeding features are passed on
     at a lower rate, so that a step is refused here only if it cannot fit.
+    ``causal``: the call has ``causal=True``, where ``wisfc`` with fixed
+    subject weights is streamed too (``_streams``).
     """
     d = int(K)
     rows = {k: T if k == 1 or later_T is None else later_T for k in analysis}
@@ -1333,7 +1335,7 @@ def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfu
     dense_feeding = not _builtin_kernel(feeding_function)
     for k in sorted(analysis):
         if d is not None:
-            if _streams(analysis[k], cfun, combine):
+            if _streams(analysis[k], cfun, combine, causal=causal):
                 _streamed_block_elements(d, rows[k], S, max_memory_gb, k, "analysis",
                                          dense_analysis)
             if (k in fed and feeding_function is not eye_weights
@@ -2933,7 +2935,10 @@ def features(
         ``refit_every``), and
         what describes a fit (``"labels"``, ``"n_communities"``,
         ``"fallback"``, ...) is that of the fit on those rows (with
-        ``refit_every``: of the last fit).
+        ``refit_every``: of the last fit).  When a later fit took another
+        number of clusters than the ``n`` of a ``Communities`` object (see
+        ``refit_every``), ``"effective"`` shows the object with that
+        number.
         Default: False.
     causal : bool
         If True (keyword-only), row ``t`` of every output is computed from
@@ -3608,7 +3613,7 @@ def features(
         _check_streamed_steps(
             K, T, S, max_memory_gb, analysis_rfun, feeding_rfun, fed, cfun=cfun,
             combine=combine, feeding_function=feeding_function, ndims=ndims,
-            weights_function=weights_function, later_T=later_T,
+            weights_function=weights_function, later_T=later_T, causal=causal,
         )
 
     if causal:

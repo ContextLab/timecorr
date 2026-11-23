@@ -331,30 +331,29 @@ def _check_fit_timepoints(fit_timepoints, causal, T=None):
     return int(fit_timepoints)
 
 
-def _defined_rows(arrays, complete=False):
+def _defined_rows(arrays):
     """
-    For each array, the mask of its rows that are not entirely NaN;
-    ``complete``: of its rows without any NaN or infinite value (the rows a
-    model reads: hypertools fills a missing value in from every row it is
-    given, the later ones included, so a row that is partly NaN, as a
-    smoothed row can be, is not passed to it).
+    For each array, the mask of its defined rows: those without any NaN or
+    infinite value.  The causal estimator's undefined rows are entirely
+    NaN; a smoothed row (``cfun=None``) can be partly NaN.  No reducer of
+    causal mode reads such a row: hypertools fills a missing value in from
+    every row it is given, the later ones included, and the summaries and
+    some graph measures raise for one, so that NaN samples in later rows
+    would turn a call that runs into an error.
     """
-    if complete:
-        return [np.isfinite(np.asarray(a)).all(axis=1) for a in arrays]
-    return [~np.isnan(np.asarray(a)).all(axis=1) for a in arrays]
+    return [np.isfinite(np.asarray(a)).all(axis=1) for a in arrays]
 
 
-def _on_defined(arrays, f, complete=False):
+def _on_defined(arrays, f):
     """
     ``f`` (a list of arrays in, a list of arrays out, row by row) applied to
-    the rows of ``arrays`` that are not entirely NaN (``complete``: that
-    hold no NaN or infinite value); the other rows stay
+    the defined rows of ``arrays`` (``_defined_rows``); the other rows are
     rows of NaN.  Every array is passed, at its position, also one without
     such a row (a fit that holds one unit per subject is applied to the
     subject at each position).
     """
     arrays = [np.asarray(a, dtype=np.float64) for a in arrays]
-    defined = _defined_rows(arrays, complete)
+    defined = _defined_rows(arrays)
     # every row is passed, the undefined ones as rows of zeros: a row is then
     # reduced at the same position of an array of the same shape whatever
     # the later rows hold, so replacing later rows (by NaN too) changes no
@@ -377,8 +376,8 @@ def _fit_reducer(corrs, rfun, ndims=None, *, order=None, path=None, append_fit=F
                  name="rfun"):
     """
     ``rfun`` fitted to the rows of ``corrs`` (an array or a list of arrays
-    of vectorized correlations) that are not entirely NaN (a model: that
-    hold no NaN or infinite value), for
+    of vectorized correlations) that hold no NaN or infinite value
+    (``_defined_rows``), for
     ``causal=True``: what ``_apply_frozen`` applies to these or other rows.
 
     A summary (object or name) gives a ``_FittedSummary`` (the object's
@@ -408,8 +407,7 @@ def _fit_reducer(corrs, rfun, ndims=None, *, order=None, path=None, append_fit=F
         return rfun
     arrays = corrs if isinstance(corrs, list) else [corrs]
     arrays = [np.asarray(a, dtype=np.float64) for a in arrays]
-    # a model reads the rows without any missing value
-    rows = [a[d] for a, d in zip(arrays, _defined_rows(arrays, not is_summary))]
+    rows = [a[d] for a, d in zip(arrays, _defined_rows(arrays))]
     at = "" if order is None else f" at order {order}"
     fewest = min(len(r) for r in rows) if is_summary else sum(len(r) for r in rows)
     if fewest < (1 if is_summary else 2):
@@ -618,8 +616,8 @@ def _apply_frozen(corrs, frozen):
     The reduction of ``corrs`` (an array or a list of arrays of vectorized
     correlations of the causal estimator) by ``frozen``, a result of
     ``_fit_reducer``: a fitted summary or model and a graph measure reduce
-    the rows that are not entirely NaN (a model: the rows without any NaN
-    or infinite value; the others stay rows of NaN); None
+    the rows without any NaN or infinite value (``_defined_rows``; the
+    others are rows of NaN); None
     returns ``corrs``; a function of the user's is called as ``reduce``
     calls it.  The same container type as ``corrs``.
     """
@@ -634,7 +632,7 @@ def _apply_frozen(corrs, frozen):
         K = frozen.fit["weights"][0].shape[0]
         if arrays and np.asarray(arrays[0]).shape[1] == K * (K + 1) // 2:
             frozen.check_units(len(arrays), K)
-    out = _on_defined(arrays, frozen.apply, isinstance(frozen, _FittedModel))
+    out = _on_defined(arrays, frozen.apply)
     return out if isinstance(corrs, list) else out[0]
 
 
@@ -729,14 +727,15 @@ def _causal_arguments(weights_function, weights_params, include_timepoints, cfun
 def _reduce_defined(corrs, rfun):
     """
     ``reduce(corrs, rfun)`` for a graph measure on the output of the causal
-    estimator: the measure is computed for the defined rows; rows of NaN
-    stay rows of NaN.
+    estimator: the measure is computed for the defined rows
+    (``_defined_rows``: without any NaN or infinite value); the others are
+    rows of NaN.
     """
     arrays = corrs if isinstance(corrs, list) else [corrs]
     out = []
     for c in arrays:
         c = np.asarray(c)
-        defined = ~np.isnan(c).all(axis=1)
+        defined = _defined_rows([c])[0]
         if not defined.any():
             width = np.asarray(reduce(np.nan_to_num(c[:1]), rfun=rfun)).shape[1]
             out.append(np.full((c.shape[0], width), np.nan))
@@ -980,9 +979,10 @@ def timecorr(
         unchanged (to 1e-9; bit for bit under replacement) when rows after
         ``t`` are replaced or removed, and a row ``t < n`` when rows from
         ``n`` on are.  ``n`` equal to the number of timepoints fits on
-        every row.  A model must be a linear map applied to each row by itself;
-        it is fitted on, and applied to, the rows without any missing value
-        (a row with a NaN is a row of NaN in its output).
+        every row.  A model must be a linear map applied to each row by itself.
+        Every reducer (a model, a summary, a graph measure) reads the rows
+        without any NaN or infinite value only: any other row is left out
+        of the fit and is a row of NaN in the reduced output.
         The guarantee covers ``"PCA"``, ``"IncrementalPCA"``,
         ``"TruncatedSVD"``, ``"FastICA"`` and ``"FactorAnalysis"``
         (scikit-learn's classes of those names, by exact class: a subclass is

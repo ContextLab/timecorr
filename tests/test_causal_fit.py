@@ -1183,3 +1183,67 @@ def test_later_nan_samples_do_not_change_the_blocks_of_a_streamed_summary(reduce
     applied = [_quiet(model.transform, data)[1] for data in (x, later)]
     assert np.array_equal(applied[0], out[1], equal_nan=True)
     assert np.array_equal(applied[1][:101], applied[0][:101], equal_nan=True)
+
+
+# ----------------------------------------------------------------------------
+# rows with missing values and every reducer
+# ----------------------------------------------------------------------------
+
+_PARTLY_NAN_REDUCERS = {
+    "strength": lambda: "strength",
+    "eigenvector": lambda: "eigenvector_centrality",
+    "pagerank": lambda: "pagerank_centrality",
+    "pagerank-abs": lambda: "pagerank_centrality_abs",
+    "weighted-strength": lambda: "weighted_strength",
+    "signed-strength": lambda: tc.WeightedStrength(signed=True),
+    "communities": lambda: tc.Communities(n=2),
+    "pca": lambda: "PCA",
+}
+
+
+@pytest.mark.parametrize("name", sorted(_PARTLY_NAN_REDUCERS))
+def test_every_reducer_takes_a_partly_nan_row_as_undefined(name):
+    # smoothed rows (cfun=None) with one NaN column: a reducer does not read
+    # them (the summaries and two graph measures raised for them, so NaN in
+    # later rows turned a call that ran into an error), and returns NaN rows
+    from timecorr.timecorr import _apply_frozen, _fit_reducer
+
+    make = _PARTLY_NAN_REDUCERS[name]
+    fitted = name in ("weighted-strength", "signed-strength", "communities", "pca")
+    x = np.random.RandomState(0).randn(80, 10)  # 10 columns: 4 x 4 matrices
+    x[50:60, 0] = np.nan
+    kernel = dict(causal=True, events=[50], weights_params={"var": 25})
+    kw = dict(order=1, cfun=None, delta_rfun=None, delta_weights_params={"var": 25},
+              **kernel)
+    if fitted:
+        kw["fit_timepoints"] = 45
+    smooth = _quiet(tc.timecorr, x, cfun=None, **kernel)
+    partial = np.isnan(smooth).any(axis=1)
+    assert partial[50:60].all() and not np.isnan(smooth[50:60]).all(axis=1).any()
+    assert not partial[2:50].any() and not partial[61:].any()
+    out = _quiet(tc.features, x, rfun=make(), return_model=fitted, **kw)
+    out, model = out if fitted else (out, None)
+    assert np.array_equal(np.isnan(out[1]).all(axis=1), partial)
+    assert not np.isnan(out[1][~partial]).any()
+    # the rows without a missing value are those of the call on them alone
+    for mode in ("finite", "nan", "column"):
+        later = x.copy()
+        if mode == "column":
+            later[61:, 3] = np.nan  # one column NaN from row 61 on
+        else:
+            later[61:] = 100.0 if mode == "finite" else np.nan
+        changed = _quiet(tc.features, later, rfun=make(), **kw)
+        assert np.array_equal(changed[1][:61], out[1][:61], equal_nan=True)
+        if model is not None:
+            applied = _quiet(model.transform, later, events=[50])
+            assert np.array_equal(applied[1][:61], out[1][:61], equal_nan=True)
+    cut = _quiet(tc.features, x[:49], rfun=make(), **kw)
+    assert np.nanmax(np.abs(cut[1] - out[1][:49])) <= ATOL
+    if model is not None:
+        assert np.array_equal(_quiet(model.transform, x, events=[50])[1], out[1],
+                              equal_nan=True)
+    # the fit and its application themselves (timecorr's own path)
+    frozen = _fit_reducer(smooth[:65], make())
+    reduced = _apply_frozen(smooth, frozen)
+    assert np.array_equal(np.isnan(reduced).all(axis=1), partial)
+    assert not np.isnan(reduced[~partial]).any()

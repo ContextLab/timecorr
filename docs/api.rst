@@ -273,9 +273,11 @@ changes. The calls without ``causal=True`` are not changed by it.
   dict gives a solver. An output column of a model that is constant on the
   training rows up to round-off is frozen: at any row, a value within that
   tolerance of the column's training mean is returned as exactly that mean,
-  and other values (rows that do vary along it) are returned as computed. A
-  model reads the rows without any missing value; a row with a NaN, as a
-  smoothed row (``cfun=None``) can be, is a row of NaN in its output.
+  and other values (rows that do vary along it) are returned as computed. Every
+  reducer (a model, a summary, a graph measure) reads the rows without any NaN
+  or infinite value only; any other row, as a smoothed row (``cfun=None``)
+  that is partly NaN, is left out of the fit and is a row of NaN in the
+  reduced output.
   Summary columns that are constant up to round-off are not set to their means,
   and no warning reports them.
 - **Refits.** ``refit_every=m`` (``features``) fits the reducers again at rows

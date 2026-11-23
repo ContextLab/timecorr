@@ -102,10 +102,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   strength on those rows. None and the graph measures need no fit. The fits
   of a series and of a longer series with the same first `n` rows are equal
   bit for bit.
-  - A model is fitted on, and applied to, the rows without any missing value:
-    a row with a NaN (a smoothed row of `cfun=None` in `features` can have
-    some) is a row of NaN in its output. (hypertools fills missing values in
-    from every row it is given.)
+  - Every reducer (a model, a summary, a graph measure) reads the rows without
+    any NaN or infinite value only: any other row (a smoothed row of
+    `cfun=None` in `features` can be partly NaN) is left out of the fit and is
+    a row of NaN in the reduced output. (hypertools fills missing values in
+    from every row it is given, and the summaries and two graph measures raise
+    for them, so NaN in later rows would change earlier rows or stop the
+    call.)
   - A model must be a linear map applied to each row by itself. The guarantee
     covers `"PCA"`, `"IncrementalPCA"`, `"TruncatedSVD"`, `"FastICA"` and
     `"FactorAnalysis"` (scikit-learn's classes of those names, by exact

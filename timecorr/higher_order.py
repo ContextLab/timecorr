@@ -619,8 +619,8 @@ def _apply_reducer(corrs, rfun, ndims, order=None, path=None, null_threshold=Non
     ``two_path_step``).
 
     ``causal``: the correlations are those of the causal estimator, whose
-    undefined rows are NaN: they are left out of every fit and stay rows of
-    NaN in the output (see ``timecorr._fit_reducer`` and
+    undefined rows are NaN: they, and any row with a NaN or infinite value,
+    are left out of every fit and are rows of NaN in the output (see ``timecorr._fit_reducer`` and
     ``timecorr._apply_frozen``).  The reducer is fitted to ``corrs`` (the
     training rows of a causal fit) unless ``frozen`` holds a fit made
     earlier (a ``_FittedSummary`` or ``_FittedModel``), which then reduces
@@ -1848,10 +1848,12 @@ def two_path_step(
           first ``fit_timepoints`` rows and then applied, unchanged, to
           every row.  None and the graph measures (``"strength"``,
           ``"eigenvector_centrality"``, ``"pagerank_centrality"``,
-          ``"pagerank_centrality_abs"``) need no fit.  A model reads the
-          rows without any missing value: a row with a NaN (a smoothed
-          row of ``cfun=None`` can have some) is a row of NaN in its
-          output.  A function of your
+          ``"pagerank_centrality_abs"``) need no fit.  Every reducer (a
+          model, a summary, a graph measure) reads the rows without any
+          NaN or infinite value only: any other row (the undefined rows
+          of the estimator; a smoothed row of ``cfun=None`` that is
+          partly NaN) is left out of the fit and is a row of NaN in the
+          reduced output.  A function of your
           own (as ``cfun``, ``combine``, ``rfun`` or ``delta_rfun``) is called as
           without ``causal``, with one ``UserWarning`` that the guarantee
           does not cover what it does; so is a model outside the list
@@ -2989,10 +2991,12 @@ def features(
           first ``fit_timepoints`` rows and then applied, unchanged, to
           every row.  None and the graph measures (``"strength"``,
           ``"eigenvector_centrality"``, ``"pagerank_centrality"``,
-          ``"pagerank_centrality_abs"``) need no fit.  A model reads the
-          rows without any missing value: a row with a NaN (a smoothed
-          row of ``cfun=None`` can have some) is a row of NaN in its
-          output.  A function of your
+          ``"pagerank_centrality_abs"``) need no fit.  Every reducer (a
+          model, a summary, a graph measure) reads the rows without any
+          NaN or infinite value only: any other row (the undefined rows
+          of the estimator; a smoothed row of ``cfun=None`` that is
+          partly NaN) is left out of the fit and is a row of NaN in the
+          reduced output.  A function of your
           own (as ``cfun``, ``combine``, ``rfun`` or ``delta_rfun``) is called as
           without ``causal``, with one ``UserWarning`` that the guarantee
           does not cover what it does; so is a model outside the list

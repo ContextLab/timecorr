@@ -1,6 +1,7 @@
 # coding: utf-8
 
 import functools
+import numbers
 import warnings
 
 import numpy as np
@@ -16,6 +17,10 @@ from .events import (
 from .helpers import (
     _GRAPH_MEASURES,
     _MIN_SAMPLES_RTOL,
+    _SUMMARY_NAMES,
+    _FittedModel,
+    _is_model,
+    _model_reduce,
     _abs_weights,
     _as_kernel_array,
     _causal_clean,
@@ -277,8 +282,207 @@ def _needs_fit(rfun):
     return isinstance(rfun, str) and rfun not in _GRAPH_MEASURES
 
 
+class _FitTimepointsMissing(ValueError, NotImplementedError):
+    """
+    ``causal=True`` with a reducer that is fitted to data and no
+    ``fit_timepoints``.  A ``ValueError``; also a ``NotImplementedError``,
+    which these calls raised before ``fit_timepoints`` existed.
+    """
+
+
+def _check_fit_timepoints(fit_timepoints, causal, T=None):
+    """
+    ``fit_timepoints`` as None or an int: ``ValueError`` unless it is None
+    or an integer in ``1..T`` (``T`` None: any integer >= 1), and when it is
+    given without ``causal=True``.
+    """
+    if fit_timepoints is None:
+        return None
+    if (
+        isinstance(fit_timepoints, (bool, np.bool_))
+        or not isinstance(fit_timepoints, numbers.Integral)
+        or fit_timepoints < 1
+    ):
+        raise ValueError(
+            "fit_timepoints must be None or a positive integer (the number of "
+            f"first rows the reducers are fitted on); got {fit_timepoints!r}."
+        )
+    if not causal:
+        raise ValueError(
+            f"fit_timepoints={fit_timepoints!r} applies with causal=True only; "
+            "pass causal=True, or leave fit_timepoints out."
+        )
+    if T is not None and fit_timepoints > T:
+        raise ValueError(
+            f"fit_timepoints={fit_timepoints} is more than the {T} "
+            f"timepoint{'s' if T != 1 else ''} of the data; pass at most {T} "
+            "(every row is then in the rows the reducers are fitted on)."
+        )
+    return int(fit_timepoints)
+
+
+def _defined_rows(arrays):
+    """For each array, the mask of its rows that are not entirely NaN."""
+    return [~np.isnan(np.asarray(a)).all(axis=1) for a in arrays]
+
+
+def _on_defined(arrays, f, width):
+    """
+    ``f`` (a list of arrays in, a list of arrays out, row by row) applied to
+    the rows of ``arrays`` that are not entirely NaN; the other rows stay
+    rows of NaN.  ``width``: the number of output columns when no array has
+    such a row (None: found by reducing a row of zeros).
+    """
+    arrays = [np.asarray(a, dtype=np.float64) for a in arrays]
+    defined = _defined_rows(arrays)
+    kept = [k for k, d in enumerate(defined) if d.any()]
+    # every row is passed, the undefined ones as rows of zeros: a row is then
+    # reduced at the same position of an array of the same shape whatever
+    # the later rows hold, so replacing later rows (by NaN too) changes no
+    # bit of it (the round-off of a matrix product can depend on its shape)
+    filled = [np.where(defined[k][:, None], arrays[k], 0.0) for k in kept]
+    reduced = f(filled) if kept else []
+    if reduced:
+        width = np.asarray(reduced[0]).shape[1]
+    elif width is None:
+        # no row to reduce: the width of the reduction of a row of zeros
+        width = np.asarray(f([np.zeros((1, arrays[0].shape[1]))])[0]).shape[1]
+    out = [np.full((a.shape[0], width), np.nan) for a in arrays]
+    for k, r in zip(kept, reduced):
+        out[k][defined[k]] = np.asarray(r)[defined[k]]
+    return out
+
+
+# a fitted model must reproduce its own training rows to this (relative to
+# the largest of them, at least 1) to be used on other rows
+_REFIT_ATOL = 1e-9
+
+
+def _fit_reducer(corrs, rfun, ndims=None, *, order=None, path=None, append_fit=False,
+                 name="rfun"):
+    """
+    ``rfun`` fitted to the rows of ``corrs`` (an array or a list of arrays
+    of vectorized correlations) that are not entirely NaN, for
+    ``causal=True``: what ``_apply_frozen`` applies to these or other rows.
+
+    A summary (object or name) gives a ``_FittedSummary`` (the object's
+    ``fits_`` gains the fit, with ``order`` and ``path``; ``append_fit`` as
+    in ``higher_order._apply_reducer``), a model a ``helpers._FittedModel``;
+    None, a graph measure and a function of the user's are returned as they
+    are (nothing to fit).
+
+    ``ValueError`` when the rows hold no defined row to fit (a model: fewer
+    than 2), and for a model that cannot reduce rows it was not fitted on
+    or does not reproduce its training rows (to ``_REFIT_ATOL``).
+    """
+    from .summaries import _auto_emitter, _FittedSummary, _from_name, _Summary
+
+    summary = rfun
+    if isinstance(rfun, str) and rfun in _SUMMARY_NAMES:
+        summary = _from_name(rfun)
+    is_summary = isinstance(summary, _Summary)
+    if not is_summary and not _is_model(rfun):
+        return rfun
+    arrays = corrs if isinstance(corrs, list) else [corrs]
+    arrays = [np.asarray(a, dtype=np.float64) for a in arrays]
+    rows = [a[d] for a, d in zip(arrays, _defined_rows(arrays))]
+    at = "" if order is None else f" at order {order}"
+    fewest = min(len(r) for r in rows) if is_summary else sum(len(r) for r in rows)
+    if fewest < (1 if is_summary else 2):
+        raise ValueError(
+            f"causal=True: the rows {name} is fitted on (fit_timepoints){at} "
+            f"hold {'no row' if is_summary else 'fewer than 2 rows'} with "
+            "defined correlations (the first rows of every order are "
+            "undefined: see min_samples).  Raise fit_timepoints."
+        )
+    if is_summary:
+        summary.fit(rows, order=order, path=path)
+        fit = summary.fits_[-1]
+        K = fit["weights"][0].shape[0]
+        _auto_emitter(summary, fit, K, order)
+        if not append_fit:
+            del summary.fits_[:-1]
+        return _FittedSummary(summary, fit)
+    rfun = _exact_pca(rfun)
+    reduced, fitted = _model_reduce(rows, rfun, ndims, return_model=True)
+    label = rfun.get("model") if isinstance(rfun, dict) else rfun
+    label = getattr(label, "__name__", None) or str(label)
+    try:
+        if fitted.model is None:
+            raise NotImplementedError("hypertools returned no fitted model")
+        again = fitted.apply(rows)
+    except (NotImplementedError, AttributeError, TypeError) as err:
+        raise ValueError(
+            f"causal=True: the model {label!r} ({name}{at}) cannot reduce rows it "
+            f"was not fitted on ({err}), so it cannot be fitted on the first "
+            "rows and applied to later ones.  Use a model with an out-of-sample "
+            "transform, such as 'PCA', 'IncrementalPCA' or 'FactorAnalysis'."
+        ) from err
+    worst = max(float(np.max(np.abs(np.asarray(r) - a), initial=0.0))
+                for r, a in zip(reduced, again))
+    scale = max(1.0, max(float(np.max(np.abs(a), initial=0.0)) for a in again))
+    if not worst <= _REFIT_ATOL * scale:
+        raise ValueError(
+            f"causal=True: the model {label!r} ({name}{at}) does not reproduce "
+            f"the rows it was fitted on when it reduces them again (they differ "
+            f"by up to {worst:.3g}), so the rows it is fitted on and later rows "
+            "would not be comparable.  Use a model with an exact out-of-sample "
+            "transform, such as 'PCA', 'IncrementalPCA' or 'FactorAnalysis', "
+            "with an exact solver (a randomized one, as svd_solver='randomized' "
+            "of PCA, does not reproduce its rows)."
+        )
+    fitted.freeze_constants(again)
+    return fitted
+
+
+def _exact_pca(rfun):
+    """
+    ``"PCA"`` (a name, or a dict that gives no ``svd_solver``) with
+    ``svd_solver="full"``; any other reducer unchanged.  scikit-learn's
+    default chooses a randomized solver for large inputs, whose
+    ``fit_transform`` is not the projection ``transform`` computes, so the
+    rows of the fit would not be reproduced.
+    """
+    if isinstance(rfun, str):
+        rfun = {"model": rfun}
+    if not (isinstance(rfun, dict) and isinstance(rfun.get("model"), str)
+            and rfun["model"] == "PCA"):
+        return rfun
+    given = {**(rfun.get("kwargs") or {}), **(rfun.get("params") or {})}
+    if "svd_solver" in given:
+        return rfun
+    return {**rfun, "kwargs": {**(rfun.get("kwargs") or {}), "svd_solver": "full"}}
+
+
+def _apply_frozen(corrs, frozen):
+    """
+    The reduction of ``corrs`` (an array or a list of arrays of vectorized
+    correlations of the causal estimator) by ``frozen``, a result of
+    ``_fit_reducer``: a fitted summary or model and a graph measure reduce
+    the rows that are not entirely NaN (the others stay rows of NaN); None
+    returns ``corrs``; a function of the user's is called as ``reduce``
+    calls it.  The same container type as ``corrs``.
+    """
+    from .summaries import _FittedSummary
+
+    if isinstance(frozen, str):
+        return _reduce_defined(corrs, frozen)
+    if not isinstance(frozen, (_FittedModel, _FittedSummary)):
+        return reduce(corrs, rfun=frozen)
+    arrays = corrs if isinstance(corrs, list) else [corrs]
+    if isinstance(frozen, _FittedSummary):
+        K = frozen.fit["weights"][0].shape[0]
+        if arrays and np.asarray(arrays[0]).shape[1] == K * (K + 1) // 2:
+            frozen.check_units(len(arrays), K)
+        width = frozen.summary._n_columns(frozen.fit, K)
+    else:
+        width = None
+    out = _on_defined(arrays, frozen.apply, width)
+    return out if isinstance(corrs, list) else out[0]
+
+
 def _causal_arguments(weights_function, weights_params, include_timepoints, cfun,
-                      rfun, events, T, n_subjects):
+                      rfun, events, T, n_subjects, fit_timepoints=None):
     """
     The checks of ``timecorr(..., causal=True)``.  Returns
     ``(include_timepoints, cfun)``: ``'backward'``, and the correlation
@@ -325,16 +529,20 @@ def _causal_arguments(weights_function, weights_params, include_timepoints, cfun
             "starts), for example events=[100, 250]."
         )
     _check_rfun(rfun)
-    if _needs_fit(rfun):
-        raise NotImplementedError(
+    if _needs_fit(rfun) and fit_timepoints is None:
+        raise _FitTimepointsMissing(
             f"causal=True: rfun={rfun!r} is fitted to data and needs "
-            "fit_timepoints (the rows it is fitted on), which timecorr does not "
-            "accept yet.  Use rfun=None or a graph measure such as 'strength'."
+            "fit_timepoints=n: it is then fitted on the first n rows and applied "
+            "to every row.  Or use rfun=None or a graph measure such as "
+            "'strength', which need no fit."
         )
     builtin = cfun is None or cfun in (isfc, autofc) or _fixed_weights_wisfc(cfun)
-    theirs = [name for name, f, ours in (("cfun", cfun, builtin),
-                                         ("rfun", rfun, not callable(rfun)))
-              if not ours]
+    from .summaries import _Summary  # timecorr.summaries imports helpers
+
+    theirs = [name for name, f, ours in (
+        ("cfun", cfun, builtin),
+        ("rfun", rfun, not callable(rfun) or isinstance(rfun, _Summary)),
+    ) if not ours]
     if theirs:
         _warn_user(
             f"causal=True: {' and '.join(theirs)} "
@@ -383,6 +591,7 @@ def timecorr(
     events_params=None,
     causal=False,
     min_samples=None,
+    fit_timepoints=None,
 ):
     """
     Compute dynamic (moment-by-moment) correlations in one or more datasets.
@@ -541,9 +750,11 @@ def timecorr(
           reached), and events that leave no timepoint with 3 samples give
           rows of NaN, not an error, so a prefix of a series runs with the
           events of the whole series;
-        - ``rfun`` is None, a graph measure (computed for the defined rows)
-          or a callable; a reducer that is fitted to data (a model name, a
-          summary) raises ``NotImplementedError``;
+        - an ``rfun`` that is fitted to data (a model name or dict, a
+          summary) needs ``fit_timepoints``: it is fitted on the first
+          ``fit_timepoints`` rows and then applied, unchanged, to every
+          row.  None, a graph measure (computed for the defined rows) and
+          a callable need no fit;
         - infinite samples and samples above 1e150 in magnitude are missing
           data, like NaN;
         - the estimator centers each feature, a chunk of 128 timepoints at
@@ -571,6 +782,37 @@ def timecorr(
         sample, or fewer effective samples than the number.  Features with
         zero variance still give correlations of 0.  Keyword only.
         Default: None.
+    fit_timepoints : int or None
+        With ``causal=True``, the number ``n`` of first rows that ``rfun``
+        is fitted on (an integer from 1 to the number of timepoints), for
+        an ``rfun`` that is fitted to data: a hypertools model (the
+        components of ``"PCA"``) or a summary (the pair weights and
+        communities of ``tc.WeightedStrength`` and ``tc.Communities``; an
+        object given as ``rfun`` holds that fit in ``fits_`` afterwards).
+        It is fitted to the correlations of rows ``0..n-1`` that are
+        defined (not NaN: see ``min_samples``; a model needs 2 such rows,
+        a summary 1) and then reduces every row, so row ``t >= n`` is
+        unchanged (to 1e-9; bit for bit under replacement) when rows after
+        ``t`` are replaced or removed, and a row ``t < n`` when rows from
+        ``n`` on are.  ``n`` equal to the number of timepoints fits on
+        every row.  A model must reduce rows it was not fitted on and
+        reproduce its training rows to 1e-9 (``"PCA"``,
+        ``"IncrementalPCA"``, ``"FactorAnalysis"``, ...; ``"MDS"``,
+        ``"TSNE"``, ``"SpectralEmbedding"`` and
+        ``"LocallyLinearEmbedding"`` raise ``ValueError``); ``"PCA"`` is
+        fitted with ``svd_solver="full"`` unless a model dict gives a
+        solver, because the randomized solver scikit-learn chooses for
+        large inputs does not reproduce its rows.  An output column of
+        a model that is constant on the training rows up to round-off (a
+        range of at most 1e-9 of its largest magnitude, or 1e-12 of the
+        largest magnitude of the output) is frozen: at every row, a value
+        within that tolerance of the column's training mean is returned as
+        exactly that mean.  Output columns
+        of a summary that are constant up to round-off are not set to
+        their mean, and no warning reports them.  Required
+        (``ValueError``) for such an ``rfun``; not used by any other, nor
+        with ``cfun=None``.  Given without ``causal=True``, it raises
+        ``ValueError``.  Keyword only.  Default: None.
 
     Returns
     -------
@@ -620,9 +862,13 @@ def timecorr(
         ``causal=True``, for the arguments listed under ``causal`` that have
         no causal form, and for a ``min_samples`` that is not None or a
         finite number >= 1, or that a built-in kernel cannot reach; for
-        ``min_samples`` given without ``causal=True``.
-    NotImplementedError
-        With ``causal=True``, for an ``rfun`` that is fitted to data.
+        ``min_samples`` given without ``causal=True``; for an ``rfun``
+        that is fitted to data without ``fit_timepoints`` (this error is
+        also a ``NotImplementedError``); for a ``fit_timepoints`` that is
+        not an integer from 1 to the number of timepoints, or given
+        without ``causal=True``; when the first ``fit_timepoints`` rows
+        hold no row with defined correlations to fit (2 for a model); and
+        for a model that cannot reduce rows it was not fitted on.
     RuntimeError, ImportError
         As raised by ``segment`` for features entries of ``events``.
 
@@ -724,6 +970,17 @@ def timecorr(
     >>> changed = tc.timecorr(later, causal=True, weights_params={"var": 50})
     >>> bool(np.array_equal(changed[60], past[60]))
     True
+
+    A reducer that is fitted (here PCA) is fitted on the first
+    ``fit_timepoints`` rows and applied to every row:
+
+    >>> kw = dict(causal=True, weights_params={"var": 50}, rfun="PCA",
+    ...           fit_timepoints=50)
+    >>> reduced = tc.timecorr(data, **kw)
+    >>> reduced.shape
+    (100, 5)
+    >>> bool(np.array_equal(tc.timecorr(later, **kw)[60], reduced[60]))
+    True
     """
 
     # NaN samples are kept; both the correlation functions and the smoothing
@@ -732,10 +989,11 @@ def timecorr(
     T = data[0].shape[0]
 
     min_samples = _check_min_samples(min_samples, causal)
+    fit_timepoints = _check_fit_timepoints(fit_timepoints, causal, T)
     if causal:
         include_timepoints, cfun = _causal_arguments(
             weights_function, weights_params, include_timepoints, cfun, rfun,
-            events, T, len(data),
+            events, T, len(data), fit_timepoints,
         )
     # the built-in correlation functions: one kernel per subject, never T x T
     builtin = cfun in _KERNEL_LIST_CFUNS or (causal and _fixed_weights_wisfc(cfun))
@@ -773,8 +1031,12 @@ def timecorr(
         else:
             groups = distinct_event_sets(_restricted(resolved), len(data))
             corrs = _per_subject_cfun(cfun, data, kernels, groups)
-        if causal and isinstance(rfun, str):
-            corrs = _reduce_defined(combine(corrs), rfun)
+        if causal:
+            # a reducer that is fitted: on the first fit_timepoints rows only
+            corrs = combine(corrs)
+            first = ([c[:fit_timepoints] for c in corrs] if isinstance(corrs, list)
+                     else corrs[:fit_timepoints])
+            corrs = _apply_frozen(corrs, _fit_reducer(first, rfun))
         else:
             corrs = reduce(combine(corrs), rfun=rfun)
 

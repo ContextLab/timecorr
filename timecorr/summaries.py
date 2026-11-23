@@ -18,6 +18,8 @@ rows; ``_shift_null_threshold`` gives
 the threshold of the automatic number of communities.
 """
 
+import copy
+import functools
 import numbers
 import warnings
 from fractions import Fraction
@@ -28,11 +30,13 @@ from sklearn.cluster import KMeans
 from ._kernels import LagKernel
 from .helpers import (
     _WCORR_NAN_PRODUCTS,
+    _causal_clean,
     _corr_row_blocks,
     _fisher_mean,
     _kernel_work_elements,
     _kernels_message,
     _nan_weighted_mean,
+    _own_reference,
     _subject_kernels,
     _subject_weight_matrix,
     _warn_user,
@@ -618,8 +622,10 @@ class _Summary:
             )
         return [check(i, f"fit_index[{u}]") for u, i in enumerate(indices)]
 
-    def _transform_fit(self, fit, corrs, fit_index=None):
-        """``transform`` with the fit record ``fit`` (see ``_auto_emitter``)."""
+    def _transform_fit(self, fit, corrs, fit_index=None, constant=True):
+        """``transform`` with the fit record ``fit`` (see ``_auto_emitter``).
+        ``constant=False`` leaves out ``_warn_constant`` (the causal mode:
+        no column is set to its mean, which would read every row)."""
         name = type(self).__name__
         units, K, single = _as_units(corrs, name)
         K_fit = fit["weights"][0].shape[0]
@@ -636,7 +642,8 @@ class _Summary:
             out = np.zeros((R.shape[2], c))
             self._emit(fit, unit, 0, K, R, out)
             outs.append(out)
-        self._warn_constant(outs)
+        if constant:
+            self._warn_constant(outs)
         return outs[0] if single else outs
 
     def _warn_constant(self, outs):
@@ -1152,6 +1159,54 @@ def _auto_emitter(summary, fit, K, order=None):
     return _auto_fallback()
 
 
+class _FittedSummary:
+    """
+    One fit of a summary, frozen (the causal mode of ``timecorr`` and
+    ``features``): ``summary``, a copy of the summary that emits the output
+    (the fallback of an automatic feeding step included) and ``fit``, its
+    record (as in ``fits_``).  ``apply`` summarizes other correlations with
+    it; neither changes when the summary it came from is fitted again.
+    """
+
+    def __init__(self, summary, fit):
+        fit = dict(fit)
+        emitter = _auto_fallback() if fit.get("fallback") else copy.copy(summary)
+        emitter.fits_ = [fit]
+        self.summary = emitter
+        self.fit = fit
+
+    @property
+    def n_units(self):
+        return len(self.fit["weights"])
+
+    def check_units(self, n_units, K):
+        """``ValueError`` unless the correlations are those of ``n_units``
+        units of the fit's number of nodes: each unit uses the pair weights
+        fitted to the unit at its position."""
+        name = type(self.summary).__name__
+        K_fit = self.fit["weights"][0].shape[0]
+        if K != K_fit:
+            raise ValueError(
+                f"{name}: the fit has {K_fit} nodes but the correlations have "
+                f"{K} nodes."
+            )
+        if n_units != self.n_units:
+            raise ValueError(
+                f"{name}: the fit holds pair weights of {self.n_units} "
+                f"subject{'s' if self.n_units != 1 else ''} (each subject is "
+                f"summarized with its own); got {n_units}.  Pass the same "
+                "number of subjects, in the order of the fit."
+            )
+
+    def apply(self, arrays):
+        """The summary of a list of (rows, K(K+1)/2) arrays of finite
+        correlations (a list of arrays), unit u with fitted unit u; no
+        column is set to its mean."""
+        units, K, _ = _as_units(arrays, type(self.summary).__name__)
+        self.check_units(len(units), K)
+        return self.summary._transform_fit(self.fit, units, constant=False)
+
+
 # ----------------------------------------------------------------------------
 # streaming: correlations in row blocks
 # ----------------------------------------------------------------------------
@@ -1219,7 +1274,10 @@ def _block_rows_for(T, K, S, max_bytes, dense=False):
 
 
 def _correlation_kind(cfun):
-    """``"auto"``, ``"isfc"`` or ``"wisfc"`` for the supported correlation functions."""
+    """``"auto"``, ``"isfc"`` or ``"wisfc"`` for the supported correlation
+    functions (``functools.partial(wisfc, subject_weights=...)`` is ``wisfc``)."""
+    if isinstance(cfun, functools.partial) and cfun.func is wisfc:
+        return "wisfc"
     for kind, f in (("auto", autofc), ("isfc", isfc), ("wisfc", wisfc)):
         if cfun is f:
             return kind
@@ -1277,7 +1335,7 @@ def _fisher_rows(R, Rt):
         flat[k0:k1] = _fisher_mean(np.stack([flat[k0:k1], flat_t[k0:k1]]), axis=0)
 
 
-def _unit_row_blocks(a, ref, kernel, symmetric, b):
+def _unit_row_blocks(a, ref, kernel, symmetric, b, estimator=None):
     """
     Rows of one subject's (K, K, T') correlations as ``wisfc`` returns them
     (before ``mat2vec``), in blocks of b rows: ``(i0, i1, R, cancelled_all,
@@ -1286,18 +1344,31 @@ def _unit_row_blocks(a, ref, kernel, symmetric, b):
     autocorrelation; otherwise each block holds rows of ``C`` (subject versus
     reference) and of ``C.T`` (reference versus subject), averaged in Fisher z
     space as ``_fisher_symmetrize`` does.
+
+    ``estimator``: the keyword arguments of the causal estimator
+    (``causal=True``, ``min_samples``), or None.  The timepoints it leaves
+    undefined are NaN in every block.
     """
+    estimator = estimator or {}
     if symmetric:
-        for i0, i1, R, cancelled, sparse in _corr_row_blocks(a, ref, kernel, True, b):
+        for i0, i1, R, cancelled, sparse in _corr_row_blocks(a, ref, kernel, True, b,
+                                                             **estimator):
             yield i0, i1, R, cancelled, sparse
         return
-    forward = _corr_row_blocks(a, ref, kernel, False, b)
-    backward = _corr_row_blocks(ref, a, kernel, False, b)
+    forward = _corr_row_blocks(a, ref, kernel, False, b, **estimator)
+    backward = _corr_row_blocks(ref, a, kernel, False, b, **estimator)
     for (i0, i1, R, cancelled, sparse), (_, _, Rt, _, _) in zip(forward, backward):
         R = np.ascontiguousarray(R)
         Rt = np.ascontiguousarray(Rt)
+        undefined = None
+        if estimator:
+            undefined = np.isnan(R[0, 0]) | np.isnan(Rt[0, 0])
+            R[:, :, undefined] = 0
+            Rt[:, :, undefined] = 0
         _fisher_rows(R, Rt)
         del Rt
+        if undefined is not None:
+            R[:, :, undefined] = np.nan
         yield i0, i1, R, cancelled, sparse
 
 
@@ -1306,11 +1377,20 @@ class _Units:
     The fitting units of a streamed step: each subject, its kernel and its
     reference (the subject's own data for ``autofc``; otherwise the weighted
     mean of the subjects that ``wisfc`` correlates it with).
+
+    ``estimator``: the keyword arguments of the causal estimator
+    (``causal=True``, ``min_samples``) or None.  With it, the blocks hold 0
+    at the timepoints the estimator leaves undefined, and ``undefined[s]``
+    is their mask (set when subject s's blocks are read).
     """
 
-    def __init__(self, subjects, kernels, cfun, grouping=None):
+    def __init__(self, subjects, kernels, cfun, grouping=None, estimator=None):
         self.kind = _correlation_kind(cfun)
+        self.estimator = dict(estimator or {})
         self.subjects = _as_subjects(subjects)
+        if self.estimator:
+            self.subjects = [_causal_clean(x) for x in self.subjects]
+        self.undefined = [None] * len(self.subjects)
         self.has_nan = any(bool(np.isnan(x).any()) for x in self.subjects)
         S = len(self.subjects)
         if grouping is None:
@@ -1333,6 +1413,11 @@ class _Units:
                 _subject_weight_matrix(self.subjects, 1 - np.eye(S))
                 if self.kind == "isfc" else None
             )
+            if isinstance(cfun, functools.partial):
+                # wisfc with subject weights of the caller's
+                self.weights = _subject_weight_matrix(
+                    self.subjects, cfun.keywords["subject_weights"]
+                )
             self.stacked = np.stack(self.subjects, axis=2)
         self._mean = _nan_weighted_mean
 
@@ -1344,6 +1429,8 @@ class _Units:
 
     def blocks(self, s, b):
         a = self.subjects[s]
+        if self.estimator:
+            return self._defined_blocks(s, b)
         if self.kind == "auto":
             return _unit_row_blocks(a, a, self.kernel(s), True, b)
         if self.weights is None:
@@ -1352,28 +1439,59 @@ class _Units:
         symmetric = bool(np.array_equal(a, ref, equal_nan=True))
         return _unit_row_blocks(a, ref, self.kernel(s), symmetric, b)
 
+    def _defined_blocks(self, s, b):
+        """``blocks`` of the causal estimator, as ``wisfc(..., causal=True)``
+        computes subject s's correlations: whether the reference is the
+        subject's own data is read from the subject weights (comparing the
+        samples would read every timepoint)."""
+        a = self.subjects[s]
+        own = self.kind == "auto" or _own_reference(self.weights[s, :], s)
+        ref = a if own else self._mean(self.stacked, self.weights[s, :])
+        for i0, i1, R, cancelled, sparse in _unit_row_blocks(
+                a, ref, self.kernel(s), own, b, self.estimator):
+            undefined = np.isnan(R[0, 0])
+            if undefined.any():
+                R[:, :, undefined] = 0
+            self.undefined[s] = undefined
+            yield i0, i1, R, cancelled, sparse
+
 
 def _accumulate_units(units, K, T_out, signed, b, masks=None):
     """
     Pass 1: one fitting state per unit; with ``masks`` (a pair of lists, one
-    entry per distinct kernel), the estimator's cancelled and sparse masks
-    are merged into it as ``wisfc`` merges them.
+    entry per distinct kernel; three with the causal estimator), the
+    estimator's cancelled and sparse (and undefined) masks are merged into
+    it as ``wisfc`` merges them.  With the causal estimator, a state's
+    ``"T"`` is the number of defined timepoints (the others add nothing to
+    the sums).
     """
     states = []
     for s in range(len(units)):
         state = _new_state(K, T_out, signed)
-        cancelled = np.ones(T_out, dtype=bool)
-        sparse = np.zeros(T_out, dtype=bool)
-        for i0, i1, R, c, f in units.blocks(s, b):
-            _accumulate(state, i0, i1, R)
-            cancelled &= c
-            sparse |= f
-        if masks is not None:
-            g = units.group_of[s]
-            masks[0][g] = masks[0][g] | cancelled
-            masks[1][g] = masks[1][g] | sparse
+        _read_blocks(units, s, b, T_out, masks,
+                     lambda i0, i1, R: _accumulate(state, i0, i1, R))
+        if units.undefined[s] is not None:
+            state["T"] = int(T_out - np.sum(units.undefined[s]))
         states.append(state)
     return states
+
+
+def _read_blocks(units, s, b, T_out, masks, use):
+    """Call ``use(i0, i1, R)`` for every block of unit ``s`` and merge the
+    estimator's masks into ``masks`` (see ``_accumulate_units``; None: not
+    merged)."""
+    cancelled = np.ones(T_out, dtype=bool)
+    sparse = np.zeros(T_out, dtype=bool)
+    for i0, i1, R, c, f in units.blocks(s, b):
+        use(i0, i1, R)
+        cancelled &= c
+        sparse |= f
+    if masks is not None:
+        g = units.group_of[s]
+        masks[0][g] = masks[0][g] | cancelled
+        masks[1][g] = masks[1][g] | sparse
+        if len(masks) > 2 and units.undefined[s] is not None:
+            masks[2][g] = masks[2][g] | units.undefined[s]
 
 
 def _shift_lags(rng, T, K, L):
@@ -1549,7 +1667,7 @@ class _EveryNthRow:
 
 def _shift_null_threshold(
     subjects, kernels, n_null=5, bandwidth=5.0, max_block_elements=None,
-    row_stride=None,
+    row_stride=None, estimator=None,
 ):
     """
     Threshold of the automatic number of communities (``autofc`` steps).
@@ -1585,6 +1703,15 @@ def _shift_null_threshold(
     (event-masked kernels), whole columns are shifted across event
     boundaries while the event masks stay fixed.
 
+    ``estimator``: the keyword arguments of the causal estimator
+    (``causal=True``, ``min_samples``) or None.  With it, the subjects are
+    the training rows of a causal fit: the correlations are the causal
+    estimator's (averaged over its defined timepoints), and the rows of a
+    subject that are entirely missing (the warm-up rows of an earlier
+    order) stay where they are while each column is shifted circularly
+    among the subject's other rows (``T`` above is then the smallest number
+    of such rows of a subject).
+
     Raises
     ------
     ValueError
@@ -1592,10 +1719,16 @@ def _shift_null_threshold(
     """
     subjects = _as_subjects(subjects)
     T, K = subjects[0].shape
+    present = None
+    if estimator:
+        subjects = [_causal_clean(x) for x in subjects]
+        present = [np.flatnonzero(~np.isnan(x).all(axis=1)) for x in subjects]
+        T = min(len(rows) for rows in present)
     if T < 40:
         raise ValueError(
-            f"the shift null needs T >= 40 timepoints (got T = {T}); give the "
-            "number of communities n."
+            f"the shift null needs T >= 40 timepoints (got T = {T}"
+            f"{' with data in the training span' if estimator else ''}); give "
+            "the number of communities n."
         )
     L = int(min(T // 4, max(10, 10 * float(bandwidth))))
     n_null = _check_n_null(n_null)
@@ -1614,26 +1747,37 @@ def _shift_null_threshold(
             stacklevel=2,
         )
     rng = np.random.default_rng(0)
-    probe = _Units(subjects, kernels, autofc)
+    probe = _Units(subjects, kernels, autofc, estimator=estimator)
     null_kernels = probe.kernels
     if row_stride is None:
         row_stride = _null_stride(null_kernels)
     if row_stride > 1:
         null_kernels = [_every_nth_row(k, int(row_stride)) for k in null_kernels]
     T_out = null_kernels[0].shape[0]
-    b = _rows_per_block(max_block_elements, T_out, K, T, probe.has_nan)
+    b = _rows_per_block(max_block_elements, T_out, K, subjects[0].shape[0],
+                        probe.has_nan)
     rows = np.arange(T)[:, None]
     cols = np.arange(K)
     top = []
     for _ in range(n_null):
         shifted = []
-        for x in subjects:
+        for s, x in enumerate(subjects):
             lags = _shift_lags(rng, T, K, L)
-            shifted.append(x[(rows - lags[None, :]) % T, cols])
+            if present is None:
+                shifted.append(x[(rows - lags[None, :]) % T, cols])
+                continue
+            # among the subject's rows with data (all of them at order 1)
+            kept = present[s]
+            moved = np.full_like(x, np.nan)
+            moved[kept] = x[kept][
+                (np.arange(len(kept))[:, None] - lags[None, :]) % len(kept), cols]
+            shifted.append(moved)
         units = _Units(
-            shifted, kernels, autofc, grouping=(null_kernels, probe.group_of)
+            shifted, kernels, autofc, grouping=(null_kernels, probe.group_of),
+            estimator=estimator,
         )
         states = _accumulate_units(units, K, T_out, False, b)
+        _check_defined(states)
         del units, shifted
         wbar = np.mean([_pair_weights(s["sum_r2"], s["T"]) for s in states], axis=0)
         top.append(float(np.linalg.eigvalsh(_centered(wbar))[-1]))
@@ -1652,6 +1796,8 @@ def _streamed_summary(
     auto_n=False,
     bandwidth=5.0,
     null_row_stride=None,
+    estimator=None,
+    fitted=None,
 ):
     """
     A summary of the subjects' correlations, computed in row blocks.
@@ -1695,6 +1841,19 @@ def _streamed_summary(
         ``row_stride`` of ``_shift_null_threshold`` (None: every s-th
         timepoint for stationary built-in kernels, every timepoint
         otherwise, chosen only when the null runs).  Default: None.
+    estimator : dict or None
+        The keyword arguments of the causal estimator (``causal=True``,
+        ``min_samples``): the correlations are ``cfun(subjects, kernels,
+        **estimator)`` (``cfun`` may then be ``functools.partial(wisfc,
+        subject_weights=...)``), the timepoints the estimator leaves
+        undefined are left out of the fit and are rows of NaN in the
+        output, and no output column is set to its mean (no warning about
+        constant columns either).  Default: None.
+    fitted : _FittedSummary or None
+        A frozen fit: the summary is not fitted (no pass 1, ``fits_``
+        unchanged) and the output is that fit's summary of these
+        subjects' correlations, subject s with fitted unit s.  Default:
+        None.
 
     Returns
     -------
@@ -1709,15 +1868,26 @@ def _streamed_summary(
     ------
     ValueError
         For an unsupported ``cfun``, the summary's fitting errors, or
-        ``auto_n`` with a ``cfun`` other than ``autofc``.
+        ``auto_n`` with a ``cfun`` other than ``autofc``; with
+        ``estimator``, when a subject has no defined timepoint to fit;
+        with ``fitted``, when the number of nodes or of subjects differs
+        from the fit's.
     MemoryError
         If one row of correlations (``K * T'`` elements) exceeds
         ``max_block_elements``.
     """
-    units = _Units(subjects, kernels, cfun)
+    units = _Units(subjects, kernels, cfun, estimator=estimator)
     T, K = units.subjects[0].shape
     T_out = units.kernels[0].shape[0]
     b = _rows_per_block(max_block_elements, T_out, K, T, units.has_nan)
+    n_kernels = len(units.kernels)
+    masks = ([False] * n_kernels, [False] * n_kernels)
+    if estimator:
+        masks += ([False] * n_kernels,)
+    if fitted is not None:
+        fitted.check_units(len(units), K)
+        outs = _emit_units(units, fitted.summary, fitted.fit, K, T_out, b, masks)
+        return outs, _units_message(units, masks)
 
     null_threshold = None
     if auto_n and summary._needs_communities and summary.n is None:
@@ -1736,13 +1906,13 @@ def _streamed_summary(
             bandwidth=bandwidth,
             max_block_elements=max_block_elements,
             row_stride=null_row_stride,
+            estimator=estimator,
         )
     summary._check_fit(K, null_threshold)
 
-    n_kernels = len(units.kernels)
-    masks = ([False] * n_kernels, [False] * n_kernels)
     states = _accumulate_units(units, K, T_out, summary.signed, b, masks)
-    message = _kernels_message(units.kernels, units.group_of, masks[0], masks[1])
+    _check_defined(states)
+    message = _units_message(units, masks)
     summary._fit_states(
         states, K, order=order, path=path, null_threshold=null_threshold,
         n_null=None if null_threshold is None else summary.n_null,
@@ -1751,13 +1921,48 @@ def _streamed_summary(
 
     fit = summary.fits_[-1]
     emitter = _auto_emitter(summary, fit, K, order)
+    outs = _emit_units(units, emitter, fit, K, T_out, b, None)
+    if not estimator:
+        emitter._warn_constant(outs)
+    return outs, message
+
+
+def _check_defined(states):
+    """``ValueError`` when a unit of a causal fit has no defined timepoint."""
+    for s, state in enumerate(states):
+        if state["T"] < 1:
+            raise ValueError(
+                "causal=True: the rows the reducers are fitted on "
+                f"(fit_timepoints) hold no timepoint with defined correlations"
+                f"{'' if len(states) == 1 else f' for subject {s}'} (the first "
+                "rows of every order are undefined: see min_samples).  Raise "
+                "fit_timepoints."
+            )
+
+
+def _units_message(units, masks):
+    """The estimator's warning of a streamed step (see ``_kernels_message``)."""
+    if len(masks) > 2:
+        return _kernels_message(units.kernels, units.group_of, masks[0], masks[1],
+                                masks[2], units.estimator.get("min_samples"))
+    return _kernels_message(units.kernels, units.group_of, masks[0], masks[1])
+
+
+def _emit_units(units, emitter, fit, K, T_out, b, masks):
+    """
+    Pass 2: one (T_out, c) output per unit, unit s with fitted unit s of
+    ``fit``, emitted by ``emitter``.  With the causal estimator, the
+    timepoints it leaves undefined are rows of NaN.  ``masks``: as in
+    ``_accumulate_units`` (None: the masks are not merged).
+    """
     c = emitter._n_columns(fit, K)
     outs = []
     for s in range(len(units)):
         unit = emitter._unit_params(fit, s)
         out = np.zeros((T_out, c))
-        for i0, i1, R, _, _ in units.blocks(s, b):
-            emitter._emit(fit, unit, i0, i1, R, out)
+        _read_blocks(units, s, b, T_out, masks,
+                     lambda i0, i1, R: emitter._emit(fit, unit, i0, i1, R, out))
+        if units.undefined[s] is not None:
+            out[units.undefined[s]] = np.nan
         outs.append(out)
-    emitter._warn_constant(outs)
-    return outs, message
+    return outs

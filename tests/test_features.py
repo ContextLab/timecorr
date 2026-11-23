@@ -722,7 +722,8 @@ def test_events_signatures_keep_positional_order():
         later = ["delta_weights_function", "delta_weights_params"] + (
             ["order"] if f is two_path_step else ["return_info"])
         # the arguments of the causal mode (0.4.0), keyword-only, come last
-        later += ["causal", "min_samples"]
+        later += ["causal", "min_samples", "fit_timepoints"] + (
+            [] if f is two_path_step else ["return_model"])
         assert list(params) == positional + ["events", "events_params"] + later, (
             f.__name__)
         assert all(params[n].kind == inspect.Parameter.KEYWORD_ONLY

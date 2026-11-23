@@ -3,6 +3,7 @@ import functools
 import inspect
 import numbers
 import os
+import pickle
 import sys
 import warnings
 
@@ -1067,7 +1068,6 @@ class _KernelRows:
         ``zero_rows``, however much of the kernel they cover, as the causal
         estimator needs).
         """
-        T_out = self.shape[0]
         T = self.shape[1] if len(self.shape) == 2 else 0
         peak = self._peak if self.zero is None else np.where(self.zero, 0.0, self._peak)
         extreme = (
@@ -3570,6 +3570,151 @@ def _pagerank_solve(B, b):
     return r
 
 
+def _model_reduce(corrs, rfun, ndims, return_model=False):
+    """
+    The model-based reduction of ``reduce`` (``rfun`` a model name or dict,
+    ``ndims`` checked).  ``return_model=True`` returns ``(reduced, fitted)``,
+    ``fitted`` a ``_FittedModel`` that reduces other rows with the model
+    fitted here.
+    """
+    arrays = corrs if isinstance(corrs, list) else [corrs]
+    n_features = arrays[0].shape[1]
+    if ndims is None:
+        # K(K+1)/2 features back to K columns
+        ndims = int(np.divide(np.sqrt(8 * n_features + 1) - 1, 2))
+
+    # a model cannot return more components than there are features or samples
+    n_samples = sum(a.shape[0] for a in arrays)
+    n_fit = min(ndims, n_features, n_samples)
+
+    if isinstance(rfun, dict) and "params" in rfun:
+        # hypertools deprecated 'params' in favor of 'kwargs': merge both
+        params = dict(rfun["params"] or {})
+        kwargs = dict(rfun.get("kwargs") or {})
+        clash = sorted(
+            k for k in set(params) & set(kwargs) if params[k] is not kwargs[k]
+            and params[k] != kwargs[k]
+        )
+        if clash:
+            raise ValueError(
+                f"rfun gives different values for {clash} in 'params' and "
+                "'kwargs'; give each model argument once."
+            )
+        rfun = {
+            **{k: v for k, v in rfun.items() if k not in ("params", "kwargs")},
+            "kwargs": {**kwargs, **params},
+        }
+
+    rfun = _umap_defaults(rfun)
+    model = None
+    if return_model:
+        red_corrs, model = hyp.reduce(corrs, reduce=rfun, ndims=n_fit,
+                                      random_state=0, return_model=True)
+    else:
+        red_corrs = hyp.reduce(corrs, reduce=rfun, ndims=n_fit, random_state=0)
+    if isinstance(corrs, list) and not isinstance(red_corrs, list):
+        # hypertools returns a bare array for a one-element list
+        red_corrs = [red_corrs]
+
+    if n_fit < ndims:
+        # Pad with zeros to match the requested output width
+        pad = ndims - n_fit
+        _warn_user(
+            f"reduce: the data supply at most {n_fit} components ({n_features} "
+            f"features, {n_samples} samples) but {ndims} were requested; the "
+            f"output is padded with {pad} zero column{'s' if pad > 1 else ''}."
+        )
+        if isinstance(red_corrs, list):
+            red_corrs = [
+                np.hstack((arr, np.zeros((arr.shape[0], pad)))) for arr in red_corrs
+            ]
+        else:
+            red_corrs = np.hstack((red_corrs, np.zeros((red_corrs.shape[0], pad))))
+
+    if return_model:
+        return red_corrs, _FittedModel(model, n_features, max(0, ndims - n_fit))
+    return red_corrs
+
+
+# an output column of a fitted model is constant on its training rows when
+# its range there is at most this fraction of its largest magnitude, or
+# _FROZEN_ZERO_RTOL of the largest magnitude of the whole output (the
+# tolerances of summaries._Summary._warn_constant)
+_FROZEN_RTOL = 1e-9
+_FROZEN_ZERO_RTOL = 1e-12
+
+
+class _FittedModel:
+    """
+    A hypertools model fitted by ``_model_reduce``: ``model`` (the fitted
+    ``hypertools`` reducer; None when hypertools fitted none, as for a
+    single row), the number of input columns ``n_features`` and the number
+    of zero columns ``pad`` that ``reduce`` appends when the data supplied
+    fewer components than requested.  ``apply`` reduces other rows with it.
+
+    ``freeze_constants(outputs)`` (the model's outputs for its training
+    rows) records the output columns that are constant there up to
+    round-off: a range of at most ``_FROZEN_RTOL`` of the column's largest
+    magnitude, or ``_FROZEN_ZERO_RTOL`` of the largest magnitude of the
+    whole output (a component along which the training rows do not vary,
+    for example: its values are round-off of the others).  ``apply`` then
+    returns a value of such a column that lies within that tolerance of
+    the column's training mean as exactly that mean; other values are
+    returned as computed.  The rule reads the training rows and the row it
+    is applied to, nothing else, so it is causal; without it the next
+    order would correlate that round-off, which is not reproducible to
+    1e-9 when later rows are removed.
+    """
+
+    def __init__(self, model, n_features, pad=0):
+        # the model as a pickle restores it: a fitted model's arrays can be
+        # laid out differently in memory after pickling, which changes the
+        # round-off of its products, so a model and its unpickled copy
+        # would differ in the last bit
+        try:
+            model = pickle.loads(pickle.dumps(model))
+        except Exception:  # a model that cannot be pickled is used as it is
+            pass
+        self.model = model
+        self.n_features = int(n_features)
+        self.pad = int(pad)
+        self.constants = None  # (columns, their training means, tolerances)
+
+    def freeze_constants(self, outputs):
+        stacked = np.vstack([np.asarray(o, dtype=np.float64) for o in outputs])
+        if not stacked.shape[0]:
+            return
+        largest = np.max(np.abs(stacked), axis=0)
+        tol = np.maximum(_FROZEN_RTOL * largest,
+                         _FROZEN_ZERO_RTOL * np.max(largest, initial=0.0))
+        columns = np.flatnonzero(np.ptp(stacked, axis=0) <= tol)
+        if columns.size:
+            self.constants = (columns, np.mean(stacked[:, columns], axis=0),
+                              tol[columns])
+
+    def apply(self, arrays):
+        """The rows of a list of (rows, n_features) arrays, reduced with the
+        fitted model (a list of arrays)."""
+        arrays = [np.asarray(a, dtype=np.float64) for a in arrays]
+        for a in arrays:
+            if a.ndim != 2 or a.shape[1] != self.n_features:
+                raise ValueError(
+                    f"the fitted model takes {self.n_features} columns; got an "
+                    f"array of shape {a.shape}."
+                )
+        out = hyp.reduce(arrays, reduce=self.model)
+        out = out if isinstance(out, list) else [out]
+        out = [np.asarray(o, dtype=np.float64) for o in out]
+        if self.pad:
+            out = [np.hstack((o, np.zeros((o.shape[0], self.pad)))) for o in out]
+        if self.constants is not None:
+            columns, means, tol = self.constants
+            for o in out:
+                values = o[:, columns]
+                o[:, columns] = np.where(np.abs(values - means) <= tol, means, values)
+        return out
+
+
 def reduce(corrs, rfun=None, ndims=None):
     """
     Reduce vectorized correlation matrices back to a (timepoints by features) matrix.
@@ -3881,56 +4026,7 @@ def reduce(corrs, rfun=None, ndims=None):
             )
         return out
 
-    arrays = corrs if isinstance(corrs, list) else [corrs]
-    n_features = arrays[0].shape[1]
-    if ndims is None:
-        # K(K+1)/2 features back to K columns
-        ndims = int(np.divide(np.sqrt(8 * n_features + 1) - 1, 2))
-
-    # a model cannot return more components than there are features or samples
-    n_samples = sum(a.shape[0] for a in arrays)
-    n_fit = min(ndims, n_features, n_samples)
-
-    if isinstance(rfun, dict) and "params" in rfun:
-        # hypertools deprecated 'params' in favor of 'kwargs': merge both
-        params = dict(rfun["params"] or {})
-        kwargs = dict(rfun.get("kwargs") or {})
-        clash = sorted(
-            k for k in set(params) & set(kwargs) if params[k] is not kwargs[k]
-            and params[k] != kwargs[k]
-        )
-        if clash:
-            raise ValueError(
-                f"rfun gives different values for {clash} in 'params' and "
-                "'kwargs'; give each model argument once."
-            )
-        rfun = {
-            **{k: v for k, v in rfun.items() if k not in ("params", "kwargs")},
-            "kwargs": {**kwargs, **params},
-        }
-
-    rfun = _umap_defaults(rfun)
-    red_corrs = hyp.reduce(corrs, reduce=rfun, ndims=n_fit, random_state=0)
-    if isinstance(corrs, list) and not isinstance(red_corrs, list):
-        # hypertools returns a bare array for a one-element list
-        red_corrs = [red_corrs]
-
-    if n_fit < ndims:
-        # Pad with zeros to match the requested output width
-        pad = ndims - n_fit
-        _warn_user(
-            f"reduce: the data supply at most {n_fit} components ({n_features} "
-            f"features, {n_samples} samples) but {ndims} were requested; the "
-            f"output is padded with {pad} zero column{'s' if pad > 1 else ''}."
-        )
-        if isinstance(red_corrs, list):
-            red_corrs = [
-                np.hstack((arr, np.zeros((arr.shape[0], pad)))) for arr in red_corrs
-            ]
-        else:
-            red_corrs = np.hstack((red_corrs, np.zeros((red_corrs.shape[0], pad))))
-
-    return red_corrs
+    return _model_reduce(corrs, rfun, ndims)
 
 
 def smooth(

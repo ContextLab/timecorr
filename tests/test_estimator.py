@@ -732,7 +732,8 @@ def test_timecorr_positional_order():
         "rfun",
         "include_zero",
     ]
-    keyword_only = ["events", "events_params", "causal", "min_samples"]
+    keyword_only = ["events", "events_params", "causal", "min_samples",
+                    "fit_timepoints"]
     assert list(params) == positional + keyword_only
     assert all(
         params[n].kind == inspect.Parameter.KEYWORD_ONLY for n in keyword_only

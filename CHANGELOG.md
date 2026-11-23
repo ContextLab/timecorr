@@ -172,8 +172,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the daily returns of the 49 Industry Portfolios
   (`tc.datasets.industry_returns`): the look-ahead of a call without `causal`,
   reducers fitted on a training span and applied to later days with
-  `model.transform`, warm-up rows and `min_samples`, refits, and what causal
-  mode does not accept. Its Colab cell installs `timecorr>=0.4.0`.
+  `model.transform`, warm-up rows and `min_samples`, refits with the default
+  reducers (it prints the rows of the fits, the fits left out and the warning
+  about them), and what causal mode does not accept. Its Colab cell installs `timecorr>=0.4.0`.
 - `tests/test_packaging.py`: the declared hypertools requirement is at least
   1.1, and the installed `hypertools.reduce` has `random_state`,
   `return_model` and `model`.

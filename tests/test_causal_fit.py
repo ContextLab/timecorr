@@ -711,7 +711,7 @@ def test_return_model_needs_causal():
 
 @pytest.mark.parametrize("function,names", [
     (tc.timecorr, ["fit_timepoints"]),
-    (tc.features, ["fit_timepoints", "return_model"]),
+    (tc.features, ["fit_timepoints", "refit_every", "return_model"]),
     (two_path_step, ["fit_timepoints"]),
 ])
 def test_new_arguments_are_keyword_only_and_documented(function, names):

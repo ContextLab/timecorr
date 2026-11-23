@@ -3636,6 +3636,26 @@ def _model_reduce(corrs, rfun, ndims, return_model=False):
     return red_corrs
 
 
+class _FitUnusable(ValueError):
+    """
+    A reducer could not be fitted to the training rows of a causal fit, or
+    its fit cannot be used on other rows (no defined row, a clustering
+    without a community of 2 members, a model that does not reproduce its
+    rows).  A ``ValueError`` for the caller; a refit of ``features`` that
+    raises it keeps the previous fit (``refit_every``).
+    """
+
+
+# the hypertools model names whose fitted estimator has ``components_`` (one
+# vector per output column): the models a refit can match to the fit before
+# (``features(..., refit_every=...)``)
+_COMPONENT_MODELS = (
+    "PCA", "IncrementalPCA", "SparsePCA", "MiniBatchSparsePCA", "FastICA",
+    "FactorAnalysis", "TruncatedSVD", "DictionaryLearning",
+    "MiniBatchDictionaryLearning",
+)
+
+
 # an output column of a fitted model is constant on its training rows when
 # its range there is at most this fraction of its largest magnitude, or
 # _FROZEN_ZERO_RTOL of the largest magnitude of the whole output (the

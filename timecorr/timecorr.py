@@ -19,6 +19,7 @@ from .helpers import (
     _MIN_SAMPLES_RTOL,
     _SUMMARY_NAMES,
     _FittedModel,
+    _FitUnusable,
     _is_model,
     _model_reduce,
     _abs_weights,
@@ -381,7 +382,7 @@ def _fit_reducer(corrs, rfun, ndims=None, *, order=None, path=None, append_fit=F
     at = "" if order is None else f" at order {order}"
     fewest = min(len(r) for r in rows) if is_summary else sum(len(r) for r in rows)
     if fewest < (1 if is_summary else 2):
-        raise ValueError(
+        raise _FitUnusable(
             f"causal=True: the rows {name} is fitted on (fit_timepoints){at} "
             f"hold {'no row' if is_summary else 'fewer than 2 rows'} with "
             "defined correlations (the first rows of every order are "
@@ -404,7 +405,7 @@ def _fit_reducer(corrs, rfun, ndims=None, *, order=None, path=None, append_fit=F
             raise NotImplementedError("hypertools returned no fitted model")
         again = fitted.apply(rows)
     except (NotImplementedError, AttributeError, TypeError) as err:
-        raise ValueError(
+        raise _FitUnusable(
             f"causal=True: the model {label!r} ({name}{at}) cannot reduce rows it "
             f"was not fitted on ({err}), so it cannot be fitted on the first "
             "rows and applied to later ones.  Use a model with an out-of-sample "
@@ -414,7 +415,7 @@ def _fit_reducer(corrs, rfun, ndims=None, *, order=None, path=None, append_fit=F
                 for r, a in zip(reduced, again))
     scale = max(1.0, max(float(np.max(np.abs(a), initial=0.0)) for a in again))
     if not worst <= _REFIT_ATOL * scale:
-        raise ValueError(
+        raise _FitUnusable(
             f"causal=True: the model {label!r} ({name}{at}) does not reproduce "
             f"the rows it was fitted on when it reduces them again (they differ "
             f"by up to {worst:.3g}), so the rows it is fitted on and later rows "

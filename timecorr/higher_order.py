@@ -63,6 +63,7 @@ import warnings
 import numpy as np
 
 from .helpers import (
+    _COMPONENT_MODELS,
     _SUMMARY_NAMES,
     _check_min_samples,
     _check_ndims,
@@ -631,6 +632,9 @@ def _apply_reducer(corrs, rfun, ndims, order=None, path=None, null_threshold=Non
             )
         if record is not None:
             record[path] = frozen
+            # a record of a refit matches the fit to the one before
+            # (model._Matched): what it holds reduces the step
+            frozen = record[path]
         return _apply_frozen(corrs, frozen)
     summary = _as_summary(rfun)
     if summary is None:
@@ -740,11 +744,7 @@ def _run_streamed(subjects, summary, cfun, kernels, *, max_memory_gb, order, pat
     max_block = _streamed_block_elements(
         d, T, len(subjects), max_memory_gb, order, path, dense
     )
-    out, message = _streamed_summary(
-        subjects,
-        kernels,
-        summary,
-        cfun,
+    step = dict(
         max_block_elements=max_block,
         order=order,
         path=path,
@@ -754,11 +754,18 @@ def _run_streamed(subjects, summary, cfun, kernels, *, max_memory_gb, order, pat
         # for a stationary built-in kernel, every timepoint otherwise
         null_row_stride=None,
         estimator=estimator,
-        fitted=frozen,
     )
+    out, message = _streamed_summary(subjects, kernels, summary, cfun,
+                                     fitted=frozen, **step)
     if frozen is None:
         if record is not None:
-            record[path] = _FittedSummary(summary, summary.fits_[-1])
+            made = _FittedSummary(summary, summary.fits_[-1])
+            record[path] = made
+            if record[path] is not made:
+                # a refit, matched to the fit before (model._Matched): the
+                # matched fit summarizes the step
+                out, _ = _streamed_summary(subjects, kernels, summary, cfun,
+                                           fitted=record[path], **step)
         if not append_fit:
             del summary.fits_[:-1]
     elif record is not None:
@@ -1978,12 +1985,12 @@ def two_path_step(
     ValueError
         With ``causal=True``, for an ``rfun`` or ``delta_rfun`` that is
         fitted to data (the defaults included) when ``fit_timepoints`` is
-        not given; for a ``fit_timepoints`` that is not an integer from 1 to the number of
-        timepoints, or given without ``causal=True``; when the first
-        ``fit_timepoints`` rows hold no row with defined correlations for
-        a fit (2 for a model), or fewer than 40 rows for the default
-        feeding reducer or a shift null; and for a model that cannot
-        reduce rows it was not fitted on.
+        not given; for a ``fit_timepoints`` that is not an integer from 1
+        to the number of timepoints, or given without ``causal=True``;
+        when the first ``fit_timepoints`` rows hold no row with defined
+        correlations for a fit (2 for a model), or fewer than 40 rows for
+        the default feeding reducer or a shift null; and for a model that
+        cannot reduce rows it was not fitted on.
     RuntimeError, ImportError
         As raised by ``segment`` for features entries of ``events``.
     TypeError
@@ -2412,6 +2419,57 @@ def _check_causal(*, function, include_timepoints, weights_function,
         )
 
 
+def _no_components_message(label, name, k):
+    """The error of ``refit_every`` for a model a refit cannot match."""
+    return (
+        f"refit_every: the model {label!r} ({name}, order {k}) has no "
+        "components_ (one vector per output column), so the columns of a "
+        "refit cannot be matched to those of the fit before.  Use a model "
+        "that has them ('PCA', 'IncrementalPCA', 'FactorAnalysis', 'FastICA', "
+        "'TruncatedSVD', ...), a summary such as 'weighted_strength', or "
+        "leave refit_every out."
+    )
+
+
+def _check_refit_every(refit_every, causal, fit_timepoints, analysis_rfun,
+                       feeding_rfun, fed):
+    """
+    ``refit_every`` as None or an int: ``ValueError`` unless it is None or
+    an integer >= 1 given with ``causal=True`` and ``fit_timepoints``, and
+    for a model of a computed step that is named and known to have no
+    ``components_`` (a model given as an object is checked when it has been
+    fitted: ``model._refit``).
+    """
+    if refit_every is None:
+        return None
+    if (
+        isinstance(refit_every, (bool, np.bool_))
+        or not isinstance(refit_every, numbers.Integral)
+        or refit_every < 1
+    ):
+        raise ValueError(
+            "refit_every must be None or a positive integer (the number of "
+            f"rows between two fits of the reducers); got {refit_every!r}."
+        )
+    if not causal or fit_timepoints is None:
+        raise ValueError(
+            f"refit_every={refit_every!r} applies with causal=True and "
+            "fit_timepoints=n only (the reducers are fitted on the first n "
+            f"rows, then again every {refit_every} rows, each time on all "
+            "rows before); pass both, or leave refit_every out."
+        )
+    for name, reducers, orders in (("rfun", analysis_rfun, sorted(analysis_rfun)),
+                                   ("delta_rfun", feeding_rfun, fed)):
+        for k in orders:
+            label = reducers[k]
+            if isinstance(label, dict):
+                label = label.get("model")
+            if (isinstance(label, str) and _is_model(label)
+                    and label not in _COMPONENT_MODELS):
+                raise ValueError(_no_components_message(label, name, k))
+    return int(refit_every)
+
+
 def _theirs(reducer):
     """True for a reducer that is a function of the user's (not a summary)."""
     return callable(reducer) and not isinstance(reducer, _Summary)
@@ -2554,6 +2612,7 @@ def features(
     causal=False,
     min_samples=None,
     fit_timepoints=None,
+    refit_every=None,
     return_model=False,
 ):
     """
@@ -2865,9 +2924,14 @@ def features(
         or one int per subject when the output is a list), and
         ``"constant_columns"`` is taken over the other rows; the entry of
         a step whose reducer was fitted has ``"fit_timepoints"`` (the
-        number of rows it was fitted on), and what describes a fit
-        (``"labels"``, ``"n_communities"``, ``"fallback"``, ...) is that
-        of the fit on those rows.
+        number of rows it was fitted on), ``"refit_rows"`` (the rows of
+        the fits: ``[fit_timepoints]``, and with ``refit_every`` every
+        row at which the reducers were fitted again) and
+        ``"refit_kept_previous"`` (those of them whose fit could not be
+        used, so that the fit before was kept; see ``refit_every``), and
+        what describes a fit (``"labels"``, ``"n_communities"``,
+        ``"fallback"``, ...) is that of the fit on those rows (with
+        ``refit_every``: of the last fit).
         Default: False.
     causal : bool
         If True (keyword-only), row ``t`` of every output is computed from
@@ -2973,6 +3037,49 @@ def features(
         warning reports them.  Not used by reducers that need no fit;
         required (``ValueError``) when a reducer is fitted.  Given without
         ``causal=True``, it raises ``ValueError``.  Default: None.
+    refit_every : int or None
+        With ``causal=True`` and ``fit_timepoints=n`` (keyword-only): the
+        number of rows ``m >= 1`` after which the reducers are fitted
+        again, each time on every row before.  The fits are at rows
+        ``s_j = n + j * m`` for ``j = 0, 1, ...`` while ``s_j`` is less
+        than the number of timepoints; fit ``j`` reads rows ``0..s_j - 1``
+        only.  Rows ``s_j`` to ``s_{j+1} - 1`` of every output (to the
+        last row for the last fit) are the rows that this call returns
+        with ``fit_timepoints=s_j`` and no ``refit_every``, up to the two
+        rules below; rows before ``n`` are those of fit 0.  So the
+        guarantee of ``fit_timepoints`` holds: a row ``t >= n`` is
+        unchanged when rows after ``t`` are replaced or removed, and a
+        row ``t < n`` when rows from ``n`` on are.  Every fit is a pass
+        over its rows and one over all rows, so the time grows with the
+        number of fits.
+
+        - The structure is that of fit 0, so that every output has the
+          same columns at every row: the number of communities of a
+          summary that counts them with the shift null (the null runs in
+          fit 0 only), what an automatic feeding step chose (communities
+          or weighted strength), and the number of components of a
+          model.  A later fit that cannot have it (its clustering gives
+          another number of communities of 2 or more nodes, its model
+          another number of components, or does not reproduce its rows)
+          is not used: the fit before, of every order, stays for its
+          rows, and the row is listed in ``"refit_kept_previous"`` of
+          ``return_info``.
+        - The columns of a fit are matched to those of the fit before,
+          order by order, before the next order of that fit is fitted:
+          the components of a model (the one-to-one assignment with the
+          largest sum of absolute cosines between component vectors;
+          a component is negated when its cosine is negative), and the
+          communities of ``Communities`` (the assignment with the most
+          shared nodes).  Models need ``components_`` (``"PCA"``,
+          ``"IncrementalPCA"``, ``"FactorAnalysis"``, ``"FastICA"``,
+          ``"TruncatedSVD"``, ...); others raise ``ValueError``.  The
+          columns of ``WeightedStrength`` belong to the nodes and are not
+          matched; with ``split=True`` a node that changes community
+          changes which pairs its own and other columns sum.
+
+        Summary objects passed as reducers keep the records of fit 0 in
+        ``fits_``; the last fit is in the model (``return_model``).
+        Default: None (one fit).
     return_model : bool
         If True (keyword-only; needs ``causal=True``), also return the
         fitted pipeline as a ``tc.FeaturesModel``, last: ``(X, model)``,
@@ -2980,7 +3087,12 @@ def features(
         model)``.  ``model.transform(data)`` computes the features of
         other data (the same series with later rows, for example) with the
         reducers as fitted here, causally and without fitting anything;
-        ``model.transform`` of this data returns these outputs.  The model
+        ``model.transform`` of this data returns these outputs.  With
+        ``refit_every`` the model holds the last fit, which
+        ``model.transform`` applies to every row: it returns these
+        outputs from the last row of ``model.refits`` on, and the rows
+        before as the last fit gives them, not as returned here (they
+        came from earlier fits).  The model
         can be pickled (see ``FeaturesModel``).  Default: False.
 
     Returns
@@ -3068,12 +3180,15 @@ def features(
     ValueError
         With ``causal=True``, for an ``rfun`` or ``delta_rfun`` that is
         fitted to data (the defaults included) when ``fit_timepoints`` is
-        not given; for a ``fit_timepoints`` that is not an integer from 1 to the number of
-        timepoints, or given without ``causal=True``; when the first
-        ``fit_timepoints`` rows hold no row with defined correlations for
-        a fit (2 for a model), or fewer than 40 rows for the default
-        feeding reducer or a shift null; and for a model that cannot
-        reduce rows it was not fitted on.
+        not given; for a ``fit_timepoints`` that is not an integer from 1
+        to the number of timepoints, or given without ``causal=True``;
+        when the first ``fit_timepoints`` rows hold no row with defined
+        correlations for a fit (2 for a model), or fewer than 40 rows for
+        the default feeding reducer or a shift null; for a model that
+        cannot reduce rows it was not fitted on; and for a
+        ``refit_every`` that is not None or an integer >= 1, that is
+        given without ``causal=True`` and ``fit_timepoints``, or given
+        with a model that has no ``components_``.
     TypeError
         If ``rfun`` or ``delta_rfun`` is not None, a string, a dict or a
         callable, or ``delta_weights_function`` is not None or callable.
@@ -3307,6 +3422,19 @@ def features(
     (200, 5)
     >>> bool(np.allclose(longer[2][:150], X[2], atol=1e-9, equal_nan=True))
     True
+
+    With ``refit_every`` the reducers are fitted again every so many rows,
+    each time on all rows before; the rows from a fit to the next are those
+    of a call with that fit alone (the columns of a model or of
+    communities are also matched to those of the fit before):
+
+    >>> kw["rfun"] = "weighted_strength"
+    >>> X, info = tc.features(x, refit_every=40, return_info=True, **kw)
+    >>> info[0]["refit_rows"], info[0]["refit_kept_previous"]
+    ([120, 160], [])
+    >>> alone = tc.features(x, **{**kw, "fit_timepoints": 160})
+    >>> bool(np.array_equal(X[2][160:], alone[2][160:]))
+    True
     """
     if (
         not isinstance(order, numbers.Integral)
@@ -3371,6 +3499,8 @@ def features(
 
     S = len(subjects)
     fit_timepoints = _check_fit_timepoints(fit_timepoints, causal, T)
+    refit_every = _check_refit_every(refit_every, causal, fit_timepoints,
+                                     analysis_rfun, feeding_rfun, fed)
     if causal:
         _check_causal(
             function="features", include_timepoints=include_timepoints,
@@ -3466,8 +3596,9 @@ def features(
                 auto={k: _auto_at(rfun, k) for k in orders},
                 fed=list(fed),
             ),
-            fit_timepoints=fit_timepoints, return_delta=return_delta,
-            return_info=return_info, return_model=return_model,
+            fit_timepoints=fit_timepoints, refit_every=refit_every,
+            return_delta=return_delta, return_info=return_info,
+            return_model=return_model,
         )
 
     X = [subjects]

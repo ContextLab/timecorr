@@ -30,6 +30,7 @@ from sklearn.cluster import KMeans
 from ._kernels import LagKernel
 from .helpers import (
     _WCORR_NAN_PRODUCTS,
+    _FitUnusable,
     _causal_clean,
     _corr_row_blocks,
     _fisher_mean,
@@ -262,7 +263,7 @@ def _find_communities(wbar, n):
 def _check_labels(labels, what):
     """Raise ``ValueError`` unless some community has at least 2 members."""
     if not np.any(np.bincount(labels) >= 2):
-        raise ValueError(
+        raise _FitUnusable(
             f"{what}: the clustering left no community with at least 2 members "
             f"({len(labels)} nodes in {len(np.unique(labels))} communities); "
             "use a smaller n."
@@ -1931,7 +1932,7 @@ def _check_defined(states):
     """``ValueError`` when a unit of a causal fit has no defined timepoint."""
     for s, state in enumerate(states):
         if state["T"] < 1:
-            raise ValueError(
+            raise _FitUnusable(
                 "causal=True: the rows the reducers are fitted on "
                 f"(fit_timepoints) hold no timepoint with defined correlations"
                 f"{'' if len(states) == 1 else f' for subject {s}'} (the first "

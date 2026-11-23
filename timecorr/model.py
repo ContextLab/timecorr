@@ -17,21 +17,46 @@ two-path pipeline, both with the causal estimator:
 ``FeaturesModel`` holds the settings and the fits of pass 1;
 ``FeaturesModel.transform`` is pass 2 on other data.  ``_single_fit`` is
 pass 1 and ``_causal_pass`` either pass.
+
+``refit_every=m`` repeats both passes for the fits at rows ``s_j = n + j m``
+(``_refit``): fit ``j`` is pass 1 on the first ``s_j`` rows, with the
+structure of the first fit (``_refit_settings``) and every reducer's fit
+matched to the fit before as soon as it is made (``_Matched``), so that
+the next order of that fit is fitted on the matched columns; rows
+``[s_j, s_{j+1})`` of the output are those of pass 2 on every row with fit
+``j``.  A fit that cannot have the structure of the first one
+(``helpers._FitUnusable``) is left out: the fit before stays for its rows.
 """
 
 import copy
 
+import numpy as np
+from scipy.optimize import linear_sum_assignment
+
 from .events import _has_features, _parse_spec, resolve_events_by_order
-from .helpers import _FittedModel, format_data, gaussian_weights
+from .helpers import (
+    _SUMMARY_NAMES,
+    _FittedModel,
+    _FitUnusable,
+    format_data,
+    gaussian_weights,
+)
 from .higher_order import (
     _constant_columns,
     _fit_pass,
+    _no_components_message,
     _output_elements,
     _step_info,
     _two_path_step,
     _warmup_rows,
 )
-from .summaries import Communities, _FittedSummary, _Summary
+from .summaries import (
+    Communities,
+    _auto_fallback,
+    _FittedSummary,
+    _from_name,
+    _Summary,
+)
 from .timecorr import _needs_fit
 
 __all__ = ["FeaturesModel"]
@@ -59,7 +84,7 @@ def _events_by_order(events, T, n_subjects, order):
 
 
 def _causal_pass(settings, subjects, events, *, steps=None, record=None,
-                 keep_delta=True, single=False):
+                 keep_delta=True, single=False, match=None):
     """
     One causal pass of the two-path pipeline over ``subjects`` (a list of
     (T, K) arrays): ``(X, D, info)``, the lists of outputs by order
@@ -75,7 +100,9 @@ def _causal_pass(settings, subjects, events, *, steps=None, record=None,
     specification, resolved for these rows.  ``keep_delta``: whether the
     feeding features of every order are kept (counted against
     ``max_memory_gb``); ``single``: the data were one array (the entries of
-    ``info`` then describe arrays, not lists).
+    ``info`` then describe arrays, not lists).  ``match`` (with
+    ``record``): the fits of the fit before, to which each new fit is
+    matched when it is made (a refit; see ``_Matched``).
     """
     s = settings
     order = s["order"]
@@ -89,7 +116,7 @@ def _causal_pass(settings, subjects, events, *, steps=None, record=None,
     for k in range(1, order + 1):
         kept = X[1:] + ([d for d in D[1:] if d is not None] if keep_delta
                         else ([] if k == 1 else [fed_by]))
-        used = {}
+        used = {} if match is None else _Matched(match[k], k)
         x, delta = _two_path_step(
             fed_by,
             delta_rfun=s["delta_rfun"][k],
@@ -118,7 +145,7 @@ def _causal_pass(settings, subjects, events, *, steps=None, record=None,
             record=used,
         )
         if record is not None:
-            record[k] = used
+            record[k] = dict(used)
         X.append(x)
         D.append(delta)
         feeding = used.get("feeding")
@@ -141,6 +168,8 @@ def _causal_pass(settings, subjects, events, *, steps=None, record=None,
             entry["warmup_rows"] = _warmup_rows(out)
             if _is_fit(used.get(entry["path"])):
                 entry["fit_timepoints"] = s["fit_timepoints"]
+                entry["refit_rows"] = list(s.get("refits", [s["fit_timepoints"]]))
+                entry["refit_kept_previous"] = list(s.get("refit_kept_previous", []))
         info.extend(entries)
         if delta is not None:
             fed_by = delta
@@ -169,14 +198,298 @@ def _single_fit(settings, subjects, events):
     return steps
 
 
+# -- refits ------------------------------------------------------------------
+
+# the attributes of a fitted scikit-learn model that hold one value per
+# component (reordered with ``components_``), and the one with one column
+# per component
+_PER_COMPONENT = ("explained_variance_", "explained_variance_ratio_",
+                  "singular_values_")
+_COLUMN_PER_COMPONENT = "mixing_"
+# a model with reordered components must give the reordered outputs of the
+# model as fitted to this (relative to the largest of them, at least 1)
+_MATCH_RTOL = 1e-9
+
+
+def _components(fitted):
+    """``components_`` of a ``_FittedModel`` as a 2-D array, or None."""
+    estimator = getattr(fitted.model, "model_", fitted.model)
+    components = getattr(estimator, "components_", None)
+    if components is None:
+        return None
+    components = np.asarray(components, dtype=np.float64)
+    return components if components.ndim == 2 else None
+
+
+def _assignment(score):
+    """For each row of a square score matrix, the column of the one-to-one
+    assignment with the largest total score."""
+    rows, columns = linear_sum_assignment(-np.asarray(score, dtype=np.float64))
+    out = np.empty(len(rows), dtype=int)
+    out[rows] = columns
+    return out
+
+
+def _match_model(new, previous, order, path):
+    """
+    ``new`` (a ``_FittedModel``) with its components in the order and with
+    the signs of those of ``previous``: each component is assigned to one
+    of ``previous`` (the one-to-one assignment with the largest sum of
+    |cosine| between component vectors), takes its place, and is negated
+    when the cosine is negative; the columns frozen as constant
+    (``constants``) follow, and the padding stays last.  ``new`` itself
+    when nothing moves.  ``_FitUnusable`` when the numbers of components or
+    of padded columns differ; ``ValueError`` when the reordered model does
+    not give the reordered outputs.
+    """
+    a, b = _components(new), _components(previous)
+    if a is None or b is None:
+        label = type(getattr(new.model, "model_", new.model)).__name__
+        raise ValueError(_no_components_message(
+            label, "rfun" if path == "analysis" else "delta_rfun", order))
+    if a.shape != b.shape or new.pad != previous.pad:
+        raise _FitUnusable(
+            f"refit at order {order} ({path}): the model has {a.shape[0]} "
+            f"components and {new.pad} padded columns; the fit before "
+            f"{b.shape[0]} and {previous.pad}."
+        )
+    c = a.shape[0]
+    norms = np.linalg.norm(a, axis=1)[:, None] * np.linalg.norm(b, axis=1)[None, :]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cosine = np.where(norms > 0, (a @ b.T) / norms, 0.0)
+    cosine = np.nan_to_num(cosine, nan=0.0, posinf=0.0, neginf=0.0)
+    place = _assignment(np.abs(cosine))  # place[q]: where component q goes
+    source = np.empty(c, dtype=int)
+    source[place] = np.arange(c)  # source[p]: the component that comes to p
+    signs = np.where(cosine[source, np.arange(c)] < 0, -1.0, 1.0)
+    if np.array_equal(source, np.arange(c)) and np.all(signs > 0):
+        return new
+    model = copy.deepcopy(new.model)
+    estimator = getattr(model, "model_", model)
+    fitted = np.asarray(estimator.components_)
+    estimator.components_ = np.ascontiguousarray(signs[:, None] * fitted[source])
+    for name in _PER_COMPONENT:
+        value = getattr(estimator, name, None)
+        if isinstance(value, np.ndarray) and value.shape[:1] == (c,):
+            setattr(estimator, name, np.ascontiguousarray(value[source]))
+    value = getattr(estimator, _COLUMN_PER_COMPONENT, None)
+    if isinstance(value, np.ndarray) and value.ndim == 2 and value.shape[1] == c:
+        setattr(estimator, _COLUMN_PER_COMPONENT,
+                np.ascontiguousarray(value[:, source] * signs))
+    matched = _FittedModel(model, new.n_features, new.pad)
+    if new.constants is not None:
+        columns, means, tol = (np.array(v) for v in new.constants)
+        real = columns < c
+        columns[real] = place[columns[real]]
+        means[real] = means[real] * signs[columns[real]]
+        at = np.argsort(columns)
+        matched.constants = (columns[at], means[at], tol[at])
+    # the reordered model on rows of its own: the reordered outputs
+    probe = np.random.RandomState(0).standard_normal((4, new.n_features))
+    probe = probe * np.max(np.abs(fitted), initial=1.0)
+    before, after = new.apply([probe])[0], matched.apply([probe])[0]
+    expected = before.copy()
+    expected[:, :c] = before[:, source] * signs
+    scale = max(1.0, float(np.max(np.abs(expected), initial=0.0)))
+    if not np.max(np.abs(after - expected), initial=0.0) <= _MATCH_RTOL * scale:
+        raise ValueError(
+            f"refit_every: the components of the model at order {order} ({path}) "
+            "could not be put in the order of the fit before (the reordered "
+            "model does not give the reordered outputs).  Use 'PCA', "
+            "'IncrementalPCA', 'FactorAnalysis' or 'TruncatedSVD', or a summary."
+        )
+    return matched
+
+
+def _match_labels(labels, previous):
+    """
+    The community labels of a refit with the communities of 2 or more
+    members (one output column each, in the order of their labels) in the
+    order of those of the fit before: each is assigned to one of the
+    earlier ones (the one-to-one assignment with the largest number of
+    shared nodes) and takes the label that puts its column at that one's
+    place.  Single-node communities keep their labels.  ``_FitUnusable``
+    when the numbers of such communities differ.
+    """
+    labels, previous = np.asarray(labels), np.asarray(previous)
+    kept = np.flatnonzero(np.bincount(labels) >= 2)
+    kept_before = np.flatnonzero(np.bincount(previous) >= 2)
+    if len(kept) != len(kept_before) or len(labels) != len(previous):
+        raise _FitUnusable(
+            f"refit: {len(kept)} communities of 2 or more nodes; the fit "
+            f"before has {len(kept_before)}."
+        )
+    shared = np.array([[np.sum((labels == q) & (previous == p)) for p in kept_before]
+                       for q in kept]).reshape(len(kept), len(kept))
+    place = _assignment(shared)  # place[q]: the column community kept[q] takes
+    out = labels.copy()
+    for q, label in enumerate(kept):
+        out[labels == label] = kept[place[q]]
+    return out
+
+
+# what an automatic feeding step records about its choice (made by the first fit)
+_AUTO_KEYS = ("n_columns", "fallback", "n_exceed", "null_threshold", "n_null")
+
+
+def _match(new, previous, order, path):
+    """
+    The fit ``new`` of a refit, matched to ``previous``, the fit before of
+    the same step (see ``_match_model`` and ``_match_labels``; the fits of
+    ``WeightedStrength`` have nothing to match); ``new`` itself when
+    nothing changes.  ``_FitUnusable`` when ``new`` has not the structure
+    of ``previous``.
+    """
+    if isinstance(new, _FittedModel) and isinstance(previous, _FittedModel):
+        return _match_model(new, previous, order, path)
+    if not (isinstance(new, _FittedSummary) and isinstance(previous, _FittedSummary)):
+        return new
+    if "fallback" in previous.fit:
+        # the choice of the automatic feeding reducer is the first fit's
+        new.fit.update({key: previous.fit[key] for key in _AUTO_KEYS})
+    if not (isinstance(new.summary, Communities)
+            and isinstance(previous.summary, Communities)):
+        return new
+    labels = _match_labels(new.fit["labels"], previous.fit["labels"])
+    if np.array_equal(labels, new.fit["labels"]):
+        return new
+    return _FittedSummary(new.summary, {**new.fit, "labels": labels})
+
+
+class _Matched(dict):
+    """
+    The record of one order of a refit (``record`` of ``_two_path_step``):
+    a fit stored under its path is replaced by that fit matched to the fit
+    before (``previous``: that order's record of the fit before), and the
+    step is then reduced with what the record holds
+    (``higher_order._apply_reducer`` and ``_run_streamed`` read it back).
+    """
+
+    def __init__(self, previous, order):
+        super().__init__()
+        self.previous = previous
+        self.order = order
+
+    def __setitem__(self, path, fit):
+        super().__setitem__(path, _match(fit, self.previous[path], self.order, path))
+
+
+def _refit_settings(settings, steps):
+    """
+    The settings of the fits after the first, whose fits are ``steps``:
+    the structure is the first fit's.  A summary that chose its number of
+    communities with the shift null gets that number (no null runs again);
+    an automatic feeding step is what it chose, those communities or the
+    weighted strength it fell back to.  The summaries are copies, so the
+    objects of the caller keep the records of the first fit.
+    """
+    s = FeaturesModel._detached(settings)
+    for name, path in (("rfun", "analysis"), ("delta_rfun", "feeding")):
+        reducers = dict(s[name])
+        for k, step in steps.items():
+            fitted = step.get(path)
+            if not isinstance(fitted, _FittedSummary):
+                continue
+            reducer = reducers[k]
+            if isinstance(reducer, str) and reducer in _SUMMARY_NAMES:
+                reducer = _from_name(reducer)
+            if fitted.fit.get("fallback"):
+                reducers[k] = _auto_fallback()
+            elif reducer._needs_communities and reducer.n is None:
+                reducer = copy.copy(reducer)
+                reducer.n = int(fitted.fit["n"])
+                reducer._from_auto = False
+                reducers[k] = reducer
+        s[name] = reducers
+    return s
+
+
+def _summaries(settings):
+    return {id(r): r for name in ("rfun", "delta_rfun")
+            for r in settings[name].values() if isinstance(r, _Summary)}.values()
+
+
+def _stitch(into, part, start):
+    """Rows ``start:`` of the outputs ``part`` (arrays, lists of arrays or
+    None, by order) copied into ``into``."""
+    for a, b in zip(into[1:], part[1:]):
+        if a is None:
+            continue
+        for u, v in zip(a if isinstance(a, list) else [a],
+                        b if isinstance(b, list) else [b]):
+            u[start:] = v[start:]
+
+
+def _refit(model, settings, subjects, single, events, return_delta, refit_every,
+           X, D, info):
+    """
+    The fits after the first of ``refit_every`` (module docstring): the
+    outputs ``X`` and ``D`` of pass 2 with the first fit get, from each row
+    ``s_j`` on, the rows of pass 2 with fit ``j``; ``model`` gets the last
+    fit.  Returns the ``return_info`` entries (those of the last fit's
+    pass, with the constant columns and warm-up rows of the outputs as
+    returned, the rows of the fits and those whose fit was left out).
+    """
+    steps = model._steps
+    for k, step in steps.items():
+        for path, fitted in step.items():
+            if isinstance(fitted, _FittedModel) and _components(fitted) is None:
+                label = type(getattr(fitted.model, "model_", fitted.model)).__name__
+                raise ValueError(_no_components_message(
+                    label, "rfun" if path == "analysis" else "delta_rfun", k))
+    n, T = settings["fit_timepoints"], subjects[0].shape[0]
+    rows = [n] + list(range(n + refit_every, T, refit_every))
+    fit_settings = _refit_settings(settings, steps)
+    kept = []
+    for s_j in rows[1:]:
+        for summary in _summaries(fit_settings):
+            summary.fits_ = []
+        new = {}
+        try:
+            with _fit_pass():
+                _causal_pass(dict(fit_settings, fit_timepoints=s_j),
+                             [x[:s_j] for x in subjects], events, record=new,
+                             keep_delta=False, match=steps)
+        except _FitUnusable:
+            # not the structure of the first fit: the fit before stays, and
+            # with it the rows already there
+            kept.append(s_j)
+            continue
+        steps = new
+        with _fit_pass():
+            X_j, D_j, info = _causal_pass(model._settings, subjects, events,
+                                          steps=steps, keep_delta=return_delta,
+                                          single=single)
+        _stitch(X, X_j, s_j)
+        _stitch(D, D_j, s_j)
+        del X_j, D_j
+    model._steps = steps
+    model._settings["refits"] = rows
+    model._settings["refit_kept_previous"] = kept
+    for entry in info:
+        out = (X if entry["path"] == "analysis" else D)[entry["order"]]
+        if single and isinstance(out, list):
+            out = out[0]
+        entry["constant_columns"] = _constant_columns(out, True)
+        entry["warmup_rows"] = _warmup_rows(out)
+        if "refit_rows" in entry:
+            entry["refit_rows"] = list(rows)
+            entry["refit_kept_previous"] = list(kept)
+    return info
+
+
 def _causal_features(subjects, single, events, settings, *, fit_timepoints,
-                     return_delta, return_info, return_model):
+                     refit_every, return_delta, return_info, return_model):
     """``features(..., causal=True)`` on formatted subjects, after its checks."""
     settings = dict(settings, fit_timepoints=fit_timepoints)
     steps = _single_fit(settings, subjects, events)
     model = FeaturesModel(settings, steps, n_features=subjects[0].shape[1],
                           n_subjects=len(subjects))
-    result, info = model._transform(subjects, single, events, return_delta)
+    X, D, info = model._pass(subjects, single, events, return_delta)
+    if refit_every is not None and steps is not None:
+        info = _refit(model, settings, subjects, single, events, return_delta,
+                      refit_every, X, D, info)
+    result = model._returned(X, D, single, return_delta)
     model.info = info
     out = (result,) + ((info,) if return_info else ()) + (
         (model,) if return_model else ())
@@ -216,6 +529,11 @@ class FeaturesModel:
     fit_timepoints : int or None
         The number of first rows the reducers were fitted on (None: the
         call gave none, and no reducer needed a fit).
+    refits : list of int
+        The rows of the fits: ``[fit_timepoints]``, and with
+        ``refit_every`` every row at which the reducers were fitted again
+        (each fit read the rows before its row only); empty when no
+        reducer was fitted.  The model holds the last fit.
     n_features, n_subjects : int
         The numbers of columns and of subjects of the data of the fit.
     info : list of dict
@@ -242,6 +560,14 @@ class FeaturesModel:
 
     Notes
     -----
+    With ``refit_every`` the model holds the last fit (its columns matched
+    to those of the fits before), and ``transform`` applies it to every
+    row.  The ``features`` call returned, before the last row of
+    ``refits``, rows made with earlier fits: ``transform`` of the same
+    data equals that output from ``refits[-1]`` on (and on every row
+    when that fit is the only one) and, before it, differs from it as the
+    fits differ.
+
     A model can be pickled when the arguments of the call can: a ``cfun``,
     reducer or kernel function that is a lambda or a local function cannot.
     Unpickling needs the same versions of timecorr, hypertools and
@@ -301,6 +627,13 @@ class FeaturesModel:
 
     order = property(lambda self: self._settings["order"])
     fit_timepoints = property(lambda self: self._settings["fit_timepoints"])
+
+    @property
+    def refits(self):
+        if self._steps is None or not any(
+                _is_fit(f) for step in self._steps.values() for f in step.values()):
+            return []
+        return list(self._settings.get("refits", [self.fit_timepoints]))
     weights_function = property(lambda self: self._settings["weights_function"])
     weights_params = property(lambda self: self._settings["weights_params"])
     delta_weights_function = property(
@@ -441,15 +774,19 @@ class FeaturesModel:
                 "were not computed by the features call that made this model; "
                 "call features with return_delta=True."
             )
-        result, info = self._transform(subjects, single, events, return_delta)
+        X, D, info = self._pass(subjects, single, events, return_delta)
+        result = self._returned(X, D, single, return_delta)
         return (result, info) if return_info else result
 
-    def _transform(self, subjects, single, events, return_delta):
-        """Pass 2 on formatted subjects: ``(result, info)``."""
-        X, D, info = _causal_pass(self._settings, subjects, events,
-                                  steps=self._steps, keep_delta=return_delta,
-                                  single=single)
+    def _pass(self, subjects, single, events, return_delta):
+        """Pass 2 on formatted subjects: ``(X, D, info)`` of ``_causal_pass``."""
+        return _causal_pass(self._settings, subjects, events, steps=self._steps,
+                            keep_delta=return_delta, single=single)
+
+    @staticmethod
+    def _returned(X, D, single, return_delta):
+        """The outputs of a pass as ``features`` returns them."""
         if single:
             X = [x[0] if isinstance(x, list) else x for x in X]
             D = [d if d is None else d[0] for d in D]
-        return ((X, D) if return_delta else X), info
+        return (X, D) if return_delta else X

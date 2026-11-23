@@ -63,7 +63,6 @@ import warnings
 import numpy as np
 
 from .helpers import (
-    _COMPONENT_MODELS,
     _SUMMARY_NAMES,
     _check_min_samples,
     _check_ndims,
@@ -113,6 +112,7 @@ from .summaries import (
 from .timecorr import (
     _apply_frozen,
     _check_fit_timepoints,
+    _check_linear_model,
     _event_kernels,
     _fit_reducer,
     _fixed_weights_wisfc,
@@ -1889,11 +1889,19 @@ def two_path_step(
         ``t`` are replaced or removed, and a row ``t < n`` (in sample: the
         fits have read rows after it) when rows from ``n`` on are replaced
         or removed.  ``n`` equal to the number of timepoints fits on every
-        row.  A model must reduce rows it was not fitted on and reproduce
-        its training rows to 1e-9 (``"PCA"``, ``"IncrementalPCA"``,
-        ``"FactorAnalysis"``, ``"FastICA"``, ...; ``"MDS"``, ``"TSNE"``,
-        ``"SpectralEmbedding"`` and ``"LocallyLinearEmbedding"`` raise
-        ``ValueError``); ``"PCA"`` is fitted with ``svd_solver="full"``
+        row.  A model must be a linear map applied to each row by itself:
+        its fitted estimator has ``components_`` (``"PCA"``,
+        ``"IncrementalPCA"``, ``"TruncatedSVD"``, ``"FastICA"``,
+        ``"FactorAnalysis"``, ...), it reproduces its training rows to
+        1e-9, and it reduces rows one at a time as it reduces them
+        together; any other model raises ``ValueError`` (``"UMAP"``,
+        ``"KernelPCA"``, ``"Isomap"``, ``"MDS"``, ``"TSNE"``,
+        ``"SpectralEmbedding"``, ``"LocallyLinearEmbedding"``: the
+        transform of some of them depends on the rows it is given
+        together).  A model asked for as many components as its input
+        has columns, or more, changes nothing (zero columns are appended
+        for the components beyond them), as without ``causal``.
+        ``"PCA"`` is fitted with ``svd_solver="full"``
         unless a model dict gives a solver, because the randomized solver
         scikit-learn chooses for large inputs does not reproduce its
         rows.  An output column of a model that is constant on the
@@ -1990,7 +1998,7 @@ def two_path_step(
         when the first ``fit_timepoints`` rows hold no row with defined
         correlations for a fit (2 for a model), or fewer than 40 rows for
         the default feeding reducer or a shift null; and for a model that
-        cannot reduce rows it was not fitted on.
+        is not a linear map applied row by row (see ``fit_timepoints``).
     RuntimeError, ImportError
         As raised by ``segment`` for features entries of ``events``.
     TypeError
@@ -2385,6 +2393,7 @@ def _check_causal(*, function, include_timepoints, weights_function,
     for name, given, resolved in (("rfun", rfun, analysis_rfun),
                                   ("delta_rfun", delta_rfun, feeding_rfun)):
         for k in sorted(resolved):
+            _check_linear_model(resolved[k], f"{name} at order {k}")
             if _needs_fit(resolved[k]) and fit_timepoints is None:
                 raise ValueError(
                     f"causal=True: {name}={_requested(given, k)!r} (order {k}) is "
@@ -2419,26 +2428,10 @@ def _check_causal(*, function, include_timepoints, weights_function,
         )
 
 
-def _no_components_message(label, name, k):
-    """The error of ``refit_every`` for a model a refit cannot match."""
-    return (
-        f"refit_every: the model {label!r} ({name}, order {k}) has no "
-        "components_ (one vector per output column), so the columns of a "
-        "refit cannot be matched to those of the fit before.  Use a model "
-        "that has them ('PCA', 'IncrementalPCA', 'FactorAnalysis', 'FastICA', "
-        "'TruncatedSVD', ...), a summary such as 'weighted_strength', or "
-        "leave refit_every out."
-    )
-
-
-def _check_refit_every(refit_every, causal, fit_timepoints, analysis_rfun,
-                       feeding_rfun, fed):
+def _check_refit_every(refit_every, causal, fit_timepoints):
     """
     ``refit_every`` as None or an int: ``ValueError`` unless it is None or
-    an integer >= 1 given with ``causal=True`` and ``fit_timepoints``, and
-    for a model of a computed step that is named and known to have no
-    ``components_`` (a model given as an object is checked when it has been
-    fitted: ``model._refit``).
+    an integer >= 1 given with ``causal=True`` and ``fit_timepoints``.
     """
     if refit_every is None:
         return None
@@ -2458,15 +2451,6 @@ def _check_refit_every(refit_every, causal, fit_timepoints, analysis_rfun,
             f"rows, then again every {refit_every} rows, each time on all "
             "rows before); pass both, or leave refit_every out."
         )
-    for name, reducers, orders in (("rfun", analysis_rfun, sorted(analysis_rfun)),
-                                   ("delta_rfun", feeding_rfun, fed)):
-        for k in orders:
-            label = reducers[k]
-            if isinstance(label, dict):
-                label = label.get("model")
-            if (isinstance(label, str) and _is_model(label)
-                    and label not in _COMPONENT_MODELS):
-                raise ValueError(_no_components_message(label, name, k))
     return int(refit_every)
 
 
@@ -3018,11 +3002,19 @@ def features(
         ``t`` are replaced or removed, and a row ``t < n`` (in sample: the
         fits have read rows after it) when rows from ``n`` on are replaced
         or removed.  ``n`` equal to the number of timepoints fits on every
-        row.  A model must reduce rows it was not fitted on and reproduce
-        its training rows to 1e-9 (``"PCA"``, ``"IncrementalPCA"``,
-        ``"FactorAnalysis"``, ``"FastICA"``, ...; ``"MDS"``, ``"TSNE"``,
-        ``"SpectralEmbedding"`` and ``"LocallyLinearEmbedding"`` raise
-        ``ValueError``); ``"PCA"`` is fitted with ``svd_solver="full"``
+        row.  A model must be a linear map applied to each row by itself:
+        its fitted estimator has ``components_`` (``"PCA"``,
+        ``"IncrementalPCA"``, ``"TruncatedSVD"``, ``"FastICA"``,
+        ``"FactorAnalysis"``, ...), it reproduces its training rows to
+        1e-9, and it reduces rows one at a time as it reduces them
+        together; any other model raises ``ValueError`` (``"UMAP"``,
+        ``"KernelPCA"``, ``"Isomap"``, ``"MDS"``, ``"TSNE"``,
+        ``"SpectralEmbedding"``, ``"LocallyLinearEmbedding"``: the
+        transform of some of them depends on the rows it is given
+        together).  A model asked for as many components as its input
+        has columns, or more, changes nothing (zero columns are appended
+        for the components beyond them), as without ``causal``.
+        ``"PCA"`` is fitted with ``svd_solver="full"``
         unless a model dict gives a solver, because the randomized solver
         scikit-learn chooses for large inputs does not reproduce its
         rows.  An output column of a model that is constant on the
@@ -3070,9 +3062,7 @@ def features(
           largest sum of absolute cosines between component vectors;
           a component is negated when its cosine is negative), and the
           communities of ``Communities`` (the assignment with the most
-          shared nodes).  Models need ``components_`` (``"PCA"``,
-          ``"IncrementalPCA"``, ``"FactorAnalysis"``, ``"FastICA"``,
-          ``"TruncatedSVD"``, ...); others raise ``ValueError``.  The
+          shared nodes).  The
           columns of ``WeightedStrength`` belong to the nodes and are not
           matched; with ``split=True`` a node that changes community
           changes which pairs its own and other columns sum.
@@ -3185,10 +3175,9 @@ def features(
         when the first ``fit_timepoints`` rows hold no row with defined
         correlations for a fit (2 for a model), or fewer than 40 rows for
         the default feeding reducer or a shift null; for a model that
-        cannot reduce rows it was not fitted on; and for a
-        ``refit_every`` that is not None or an integer >= 1, that is
-        given without ``causal=True`` and ``fit_timepoints``, or given
-        with a model that has no ``components_``.
+        is not a linear map applied row by row (see ``fit_timepoints``);
+        and for a ``refit_every`` that is not None or an integer >= 1,
+        or that is given without ``causal=True`` and ``fit_timepoints``.
     TypeError
         If ``rfun`` or ``delta_rfun`` is not None, a string, a dict or a
         callable, or ``delta_weights_function`` is not None or callable.
@@ -3499,8 +3488,7 @@ def features(
 
     S = len(subjects)
     fit_timepoints = _check_fit_timepoints(fit_timepoints, causal, T)
-    refit_every = _check_refit_every(refit_every, causal, fit_timepoints,
-                                     analysis_rfun, feeding_rfun, fed)
+    refit_every = _check_refit_every(refit_every, causal, fit_timepoints)
     if causal:
         _check_causal(
             function="features", include_timepoints=include_timepoints,

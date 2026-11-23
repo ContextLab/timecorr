@@ -1581,51 +1581,80 @@ def _profile_tails(profile, n):
     return None
 
 
-def _kernel_reach(kernel):
-    """
-    The largest effective sample size ``(sum |w|)**2 / sum w**2`` a row of a
-    backward kernel can have with any number of earlier timepoints: the
-    largest over the lags ``0..n`` (from 1 without the diagonal, within
-    ``exclude_timepoints``), for every n.  It does not depend on the length
-    of the series.
+# ``_strided_reach`` evaluates a lag profile at this many lags, a stride apart
+_STRIDED_LAGS = 2 ** 16
+# and returns its estimate times this, so that it is an upper bound
+_STRIDED_MARGIN = 1.01
 
-    The sums are added up over the first lags; when they have not converged
-    there (a heavy tail, as of ``t_weights`` with few degrees of freedom, or
-    a very wide kernel), the rest comes from the profile's formula
-    (``_profile_tails``), so the result is known for every built-in kernel
-    function and parameter value: exactly for ``boxcar_weights`` and
-    ``laplace_weights``, to round-off of the tail formula for
-    ``gaussian_weights`` and ``t_weights``, and as an upper bound for a
-    ``mexican_hat_weights`` wider than about 1000 samples.
 
-    None when it has no limit (``uniform_weights``: the effective sample
-    size grows with the number of earlier timepoints) or is not known: a
-    kernel without a lag profile function (an array, a kernel function of
-    the user's), a ``mexican_hat_weights`` with sigma above 2 million
-    samples, and a kernel that is both wider than the lags added up and
-    restricted by ``exclude_timepoints``.  The result is kept on the kernel.
+def _flat_profile(profile):
+    """Whether a lag profile is the same weight at every lag
+    (``uniform_weights``; ``boxcar_weights`` of infinite width)."""
+    family = getattr(profile, "func", None)
+    if family is uniform_profile:
+        return True
+    if family is boxcar_profile:
+        params = (getattr(profile, "keywords", None) or {}).get("params") or {}
+        try:
+            return float(params.get("width")) == np.inf
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
+def _strided_reach(profile, lo):
     """
-    profile = getattr(kernel, "lag_profile", None)
-    if profile is None or kernel.include != "backward":
-        return None
-    cached = getattr(kernel, "_reach", None)
-    if cached is not None:
-        return cached[0]
-    reach = None
+    An upper bound of the largest effective sample size over the lags
+    ``lo..n``, for every n, of a profile too wide for its lags to be added
+    up one by one: the profile is read at every ``s``-th lag, for the
+    smallest stride ``s`` (a power of 16) at which the sums converge within
+    ``_STRIDED_LAGS`` lags, and the result is ``s`` times the effective
+    sample size of those lags (the profile varies little within a stride;
+    there are at least ``_STRIDED_LAGS / 16`` lags in its extent), times
+    ``_STRIDED_MARGIN``.  None when the sums converge at no stride.
+    """
+    k = np.arange(_STRIDED_LAGS, dtype=np.float64)
+    half = _STRIDED_LAGS // 2
+    stride = 16.0
+    while np.isfinite(lo + stride * _STRIDED_LAGS):
+        with np.errstate(all="ignore"):
+            a = np.abs(np.asarray(profile(lo + stride * k), dtype=np.float64))
+        a[~np.isfinite(a)] = 0
+        peak = a.max()
+        if peak > 0:
+            a /= peak
+            total, squares = np.cumsum(a), np.cumsum(a * a)
+            if total[-1] - total[half - 1] <= 1e-12 * total[-1]:
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    ess = total**2 / squares
+                return float(_STRIDED_MARGIN * stride * np.nanmax(ess))
+        stride *= 16.0
+    return None
+
+
+def _profile_reach(profile, include_zero, exclude):
+    """``_kernel_reach`` from the lag profile function and the restrictions
+    of a backward kernel (``exclude``: ``exclude_timepoints`` or None)."""
+    lo, hi = (0 if include_zero else 1), np.inf  # the lags lo..hi are kept
+    if exclude is not None:
+        x = int(abs(exclude))
+        if exclude >= 0:
+            hi = x
+        else:
+            lo = max(lo, x + 1)
+    if lo > hi:
+        return 0.0
+    if _flat_profile(profile):
+        # equal weights: the number of lags
+        return None if np.isinf(hi) else float(hi - lo + 1)
     n = 1024
-    unbounded = getattr(profile, "func", None) is uniform_profile
-    while n <= _REACH_LAGS and not unbounded:
+    while n <= _REACH_LAGS:
         with np.errstate(over="ignore", invalid="ignore"):
             a = np.abs(np.asarray(profile(np.arange(n, dtype=np.int64)), dtype=np.float64))
         a[~np.isfinite(a)] = 0
-        if not kernel.include_zero:
-            a[0] = 0
-        if kernel.exclude is not None:
-            x = int(min(abs(kernel.exclude), n))
-            if kernel.exclude >= 0:
-                a[x + 1:] = 0
-            else:
-                a[:x + 1] = 0
+        a[:lo] = 0
+        if hi < n:
+            a[hi + 1:] = 0
         peak = a.max()
         if peak > 0:
             a /= peak  # so that tiny weights do not underflow when squared
@@ -1635,23 +1664,89 @@ def _kernel_reach(kernel):
                 ess = total**2 / squares
             # converged: the later half of the lags adds nothing to the sums
             if total[-1] - total[n // 2 - 1] <= 1e-15 * total[-1]:
-                reach = float(np.nanmax(ess))
-                break
+                return float(np.nanmax(ess))
             # not converged: the rest of the sums from the profile's formula
-            # (not with exclude_timepoints, which cuts the tail)
-            tails = _profile_tails(profile, n) if kernel.exclude is None else None
-            if tails is not None:
+            # (the lags from n on: all kept when no lag ends them)
+            tails = _profile_tails(profile, n) if np.isinf(hi) else None
+            if tails is not None and np.isfinite(tails[0]):
                 first, second = tails[0] / peak, tails[1] / peak**2
                 with np.errstate(invalid="ignore", divide="ignore"):
                     limit = (total[-1] + first) ** 2 / (squares[-1] + second)
-                reach = float(np.nanmax([np.nanmax(ess), limit]))
-                break
+                return float(np.nanmax([np.nanmax(ess), limit]))
+        elif hi < n:
+            return 0.0  # every lag kept was read, and none has weight
         n *= 2
-    else:
-        if not unbounded and peak == 0:
-            reach = 0.0
-    if reach is not None and np.isinf(reach):
-        reach = None  # no limit (a boxcar of infinite width)
+    n //= 2  # the lags 0..n-1 were read
+    if np.isfinite(hi):
+        # kept up to a lag beyond those read
+        if peak == 0:
+            return 0.0  # no weight at any lag read
+        near, far = _profile_tails(profile, n), _profile_tails(profile, hi + 1)
+        if near is not None and far is not None and near[1] > 0 and np.isfinite(near[0]):
+            # weights that fall with the lag: the sums over the lags n..hi
+            # from the formula, and the largest value at the last lag
+            first = (near[0] - far[0]) / peak
+            second = (near[1] - far[1]) / peak**2
+            with np.errstate(invalid="ignore", divide="ignore"):
+                limit = (total[-1] + first) ** 2 / (squares[-1] + second)
+            return float(np.nanmax([np.nanmax(ess), limit]))
+        # no formula: at most what the kernel reaches without that end
+        return _profile_reach(profile, lo == 0, None)
+    if lo >= n:
+        # only lags beyond those read.  The four families whose weights
+        # fall with the lag: the effective sample size grows with every
+        # lag added, to the limit of the formula's sums
+        tails = _profile_tails(profile, lo)
+        if tails is not None and tails[1] > 0:
+            return float(tails[0] ** 2 / tails[1]) if np.isfinite(tails[0]) else None
+        if tails is not None and tails[0] == 0:
+            return 0.0
+    elif peak == 0:
+        return 0.0  # no weight at any lag read (parameters that are not finite)
+    return _strided_reach(profile, lo)
+
+
+def _kernel_reach(kernel):
+    """
+    The largest effective sample size ``(sum |w|)**2 / sum w**2`` a row of a
+    backward kernel can have with any number of earlier timepoints: the
+    largest over the lags kept up to lag n, for every n.  The lags kept are
+    those the kernel's restrictions leave: from 1 without the diagonal
+    (``include_zero=False``); up to ``x`` with ``exclude_timepoints=x >=
+    0``, from ``x + 1`` with ``exclude_timepoints=-x``.  It does not depend
+    on the length of the series (nor on events: the last block of a series
+    grows with it).
+
+    For a kernel with the same weight at every lag (``uniform_weights``, a
+    ``boxcar_weights`` of infinite width) it is the number of lags kept.
+    Otherwise the sums are added up over the first lags; when they have not
+    converged there (a heavy tail, as of ``t_weights`` with few degrees of
+    freedom, or a very wide kernel), the rest comes from the profile's
+    formula (``_profile_tails``).  So the result is known for every
+    built-in kernel function and parameter value: exactly for
+    ``boxcar_weights``, ``laplace_weights`` and ``uniform_weights``, to
+    round-off of the tail formula for ``gaussian_weights`` and
+    ``t_weights``, and as an upper bound (so that a ``min_samples`` is
+    never refused wrongly) for a ``mexican_hat_weights`` wider than about
+    1000 samples (beyond 2 million samples from ``_strided_reach``; one
+    that ``exclude_timepoints`` ends beyond the 4 million lags added up
+    has what it reaches without that end).  0 for a kernel without weight
+    at the lags kept.
+
+    None when it has no limit (equal weights at lags without end: the
+    effective sample size grows with the number of earlier timepoints) and
+    for a kernel without a lag profile function (an array, a kernel
+    function of the user's).  The result is kept on the kernel.
+    """
+    profile = getattr(kernel, "lag_profile", None)
+    if profile is None or kernel.include != "backward":
+        return None
+    cached = getattr(kernel, "_reach", None)
+    if cached is not None:
+        return cached[0]
+    reach = _profile_reach(profile, kernel.include_zero, kernel.exclude)
+    if reach is not None and not np.isfinite(reach):
+        reach = None
     kernel._reach = (reach,)
     return reach
 
@@ -3667,8 +3762,10 @@ _FROZEN_ZERO_RTOL = 1e-12
 class _FittedModel:
     """
     A hypertools model fitted by ``_model_reduce``: ``model`` (the fitted
-    ``hypertools`` reducer; None when hypertools fitted none, as for a
-    single row), the number of input columns ``n_features`` and the number
+    ``hypertools`` reducer; None when hypertools fitted none: it returns
+    data with no more columns than the components asked for as they are,
+    and ``apply`` is then the identity), the number of input columns
+    ``n_features`` and the number
     of zero columns ``pad`` that ``reduce`` appends when the data supplied
     fewer components than requested.  ``apply`` reduces other rows with it.
 
@@ -3700,6 +3797,23 @@ class _FittedModel:
         self.pad = int(pad)
         self.constants = None  # (columns, their training means, tolerances)
 
+    @property
+    def estimator(self):
+        """The fitted scikit-learn model (None for the identity)."""
+        return getattr(self.model, "model_", self.model)
+
+    @property
+    def components(self):
+        """``components_`` of the fitted model, one vector per output
+        column, as a 2-D array; None when it has none."""
+        components = getattr(self.estimator, "components_", None)
+        if components is None:
+            return None
+        components = np.asarray(components, dtype=np.float64)
+        if components.ndim != 2 or components.shape[1] != self.n_features:
+            return None
+        return components
+
     def freeze_constants(self, outputs):
         stacked = np.vstack([np.asarray(o, dtype=np.float64) for o in outputs])
         if not stacked.shape[0]:
@@ -3722,9 +3836,12 @@ class _FittedModel:
                     f"the fitted model takes {self.n_features} columns; got an "
                     f"array of shape {a.shape}."
                 )
-        out = hyp.reduce(arrays, reduce=self.model)
-        out = out if isinstance(out, list) else [out]
-        out = [np.asarray(o, dtype=np.float64) for o in out]
+        if self.model is None:
+            out = [a.copy() for a in arrays]  # the identity
+        else:
+            out = hyp.reduce(arrays, reduce=self.model)
+            out = out if isinstance(out, list) else [out]
+            out = [np.asarray(o, dtype=np.float64) for o in out]
         if self.pad:
             out = [np.hstack((o, np.zeros((o.shape[0], self.pad)))) for o in out]
         if self.constants is not None:

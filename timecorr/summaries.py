@@ -1165,12 +1165,15 @@ class _FittedSummary:
     One fit of a summary, frozen (the causal mode of ``timecorr`` and
     ``features``): ``summary``, a copy of the summary that emits the output
     (the fallback of an automatic feeding step included) and ``fit``, its
-    record (as in ``fits_``).  ``apply`` summarizes other correlations with
-    it; neither changes when the summary it came from is fitted again.
+    record (as in ``fits_``, its arrays copied).  ``apply`` summarizes
+    other correlations with it; neither changes when the summary it came
+    from is fitted again or its records are changed.
     """
 
     def __init__(self, summary, fit):
-        fit = dict(fit)
+        # a copy of every array: the summary's own record (``fits_``) is the
+        # caller's to change
+        fit = copy.deepcopy(dict(fit))
         emitter = _auto_fallback() if fit.get("fallback") else copy.copy(summary)
         emitter.fits_ = [fit]
         self.summary = emitter

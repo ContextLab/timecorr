@@ -725,3 +725,290 @@ def test_new_arguments_are_keyword_only_and_documented(function, names):
         assert section in tc.FeaturesModel.transform.__doc__
     assert "Examples" in tc.FeaturesModel.__doc__
     assert tc.FeaturesModel.__module__ == "timecorr.model"
+
+
+# ----------------------------------------------------------------------------
+# models: only linear maps applied row by row
+# ----------------------------------------------------------------------------
+
+LINEAR = ["PCA", "IncrementalPCA", "TruncatedSVD", "FastICA"]
+
+
+@pytest.mark.parametrize("model", ["UMAP", "KernelPCA", "Isomap"])
+def test_models_without_components_raise(model):
+    # reproducing its training rows does not make a model's transform one
+    # of each row alone (UMAP's depends on the number of rows it is given):
+    # only models with components_, a linear map, are taken
+    x = np.random.default_rng(60).standard_normal((100, 4))
+    kw = dict(causal=True, cfun=tc.autofc, fit_timepoints=40,
+              weights_params={"var": 25})
+    rfun = {"model": model, "kwargs": {"n_neighbors": 5}} if model != "KernelPCA" else model
+    with pytest.raises(ValueError, match=f"causal=True: the model '{model}'.*components_"):
+        tc.timecorr(x, rfun=rfun, **kw)
+    kw["ndims"] = 2
+    for name in ("rfun", "delta_rfun"):
+        other = "delta_rfun" if name == "rfun" else "rfun"
+        with pytest.raises(ValueError, match=f"causal=True: the model '{model}' "
+                                             rf"\({name}.*order 1.*components_"):
+            tc.features(x, order=1, delta_weights_params={"var": 16},
+                        **{name: rfun, other: "strength"}, **kw)
+        with pytest.raises(ValueError, match=f"causal=True: the model '{model}'"):
+            two_path_step(x, delta_weights_params={"var": 16},
+                          **{name: rfun, other: "strength"}, **kw)
+    with pytest.raises(ValueError, match="components_"):
+        tc.features(x, order=1, delta_weights_params={"var": 16}, rfun=rfun,
+                    delta_rfun="strength", refit_every=20, **kw)
+
+
+def test_a_model_whose_transform_is_not_row_by_row_raises():
+    from sklearn.decomposition import PCA
+
+    class BatchCentered(PCA):
+        """Components, but an output that depends on the other rows given."""
+
+        def transform(self, X):
+            out = super().transform(X)
+            return out - out.mean(axis=0)
+
+    class Unfitted(PCA):
+        """No components_ once fitted."""
+
+        def fit(self, X, y=None):
+            super().fit(X, y)
+            self.axes_ = self.components_
+            del self.components_
+            return self
+
+        def fit_transform(self, X, y=None):
+            return self.fit(X).transform(X)
+
+        def transform(self, X):
+            return (X - self.mean_) @ self.axes_.T
+
+    x = np.random.default_rng(61).standard_normal((100, 4))
+    kw = dict(causal=True, cfun=tc.autofc, fit_timepoints=40,
+              weights_params={"var": 25})
+    with pytest.raises(ValueError, match="row by row"):
+        _quiet(tc.timecorr, x, rfun={"model": BatchCentered}, **kw)
+    with pytest.raises(ValueError, match=r"order 1.*row by row"):
+        _quiet(tc.features, x, order=1, rfun={"model": BatchCentered}, ndims=2,
+               delta_rfun="strength", delta_weights_params={"var": 16}, **kw)
+    with pytest.raises(ValueError, match="components_"):
+        _quiet(tc.timecorr, x, rfun={"model": Unfitted}, **kw)
+    # without causal they reduce the recording
+    assert _quiet(tc.timecorr, x, cfun=tc.autofc,
+                  rfun={"model": BatchCentered}).shape == (100, 4)
+
+
+@pytest.mark.parametrize("model", LINEAR)
+def test_linear_models_are_taken_and_guaranteed(model):
+    x = np.random.default_rng(62).standard_normal((T, 5))
+    kw = dict(order=2, causal=True, cfun=tc.autofc, rfun=model, delta_rfun=model,
+              ndims=3, fit_timepoints=N, return_delta=True, **PARAMS)
+    full, fitted = _quiet(tc.features, x, return_model=True, **kw)
+    assert hasattr(fitted.fits[(1, "analysis")].model_, "components_")
+    rng = np.random.default_rng(63)
+    worst = 0.0
+    for mode in MODES:
+        for m in (N, 190):
+            part = _quiet(tc.features, _perturb(x, m, mode, rng), **kw)
+            worst = max(worst, _worst(full, part, m))
+            if mode != "remove":
+                assert _identical(full, part, m)
+    assert worst <= ATOL
+    # the model on a series and on its first rows
+    z = np.random.default_rng(64).standard_normal((300, 5))
+    whole = _quiet(fitted.transform, z, return_delta=True)
+    part = _quiet(fitted.transform, z[:120], return_delta=True)
+    assert _worst(whole, part, 120) <= ATOL
+
+
+# ----------------------------------------------------------------------------
+# a subject without a defined row keeps its place
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("rfun", [tc.WeightedStrength(), "PCA", "strength"], ids=str)
+def test_a_subject_without_defined_rows_keeps_its_place(rfun):
+    import functools
+
+    x = np.random.default_rng(3).normal(size=(80, 4))
+    # a combine function of the user's: the step is not streamed
+    kw = dict(order=1, causal=True, cfun=tc.autofc, rfun=rfun, delta_rfun=rfun,
+              combine=functools.partial(tc.null_combine), fit_timepoints=40,
+              return_delta=True, **PARAMS)
+    _, model = _quiet(tc.features, [x, 2 * x], return_model=True, **kw)
+    y = x.copy()
+    y[:60] = np.nan
+    some = _quiet(model.transform, [y, x], return_delta=True)
+    gone = y.copy()
+    gone[60:] = np.nan  # later rows missing too: no defined row is left
+    none = _quiet(model.transform, [gone, x], return_delta=True)
+    for a, b in zip(some, none):
+        assert len(b[1]) == 2 and b[1][0].shape == a[1][0].shape
+        assert np.isnan(b[1][0]).all()
+        # replacing later rows by NaN changes no bit of the rows before
+        assert np.array_equal(a[1][0][:60], b[1][0][:60], equal_nan=True)
+        assert np.array_equal(a[1][1], b[1][1], equal_nan=True)
+        assert not np.isnan(a[1][1][5:]).any()
+
+
+def test_features_with_a_subject_without_defined_rows():
+    x = np.random.default_rng(3).normal(size=(80, 4))
+    y = x.copy()
+    y[:60] = np.nan
+    gone = np.full_like(x, np.nan)
+    # a model is fitted to the rows of all subjects: one of them suffices
+    kw = dict(order=2, causal=True, cfun=tc.autofc, rfun="PCA", delta_rfun="PCA",
+              ndims=3, fit_timepoints=40, return_delta=True, **PARAMS)
+    some = _quiet(tc.features, [y, x], **kw)
+    none = _quiet(tc.features, [gone, x], **kw)
+    for a, b in zip(some, none):
+        for k in (1, 2):
+            assert np.isnan(b[k][0]).all() and b[k][0].shape == a[k][0].shape
+            assert np.array_equal(a[k][0][:60], b[k][0][:60], equal_nan=True)
+            assert np.array_equal(a[k][1], b[k][1], equal_nan=True)
+    # a summary is fitted to each subject: no defined row, no fit
+    kw.update(rfun="weighted_strength", delta_rfun="weighted_strength", ndims=None)
+    with pytest.raises(ValueError, match="fit_timepoints"):
+        _quiet(tc.features, [gone, x], **kw)
+    kw["combine"] = __import__("functools").partial(tc.null_combine)
+    with pytest.raises(ValueError, match="fit_timepoints"):
+        _quiet(tc.features, [gone, x], **kw)
+
+
+# ----------------------------------------------------------------------------
+# a model and the reducer objects of the caller are independent
+# ----------------------------------------------------------------------------
+
+
+def _snapshot(summary):
+    import copy
+
+    return copy.deepcopy(summary.fits_)
+
+
+def _same_records(a, b):
+    assert len(a) == len(b)
+    for p, q in zip(a, b):
+        assert sorted(p) == sorted(q)
+        for name in p:
+            u, v = p[name], q[name]
+            if isinstance(u, (list, np.ndarray)):
+                if not all(np.array_equal(i, j) for i, j in zip(u, v)):
+                    return False
+            elif u != v:
+                return False
+    return True
+
+
+@pytest.mark.parametrize("streamed", [True, False])
+@pytest.mark.parametrize("refit", [None, 50])
+def test_a_model_does_not_share_its_fits_with_the_reducer_objects(streamed, refit):
+    import copy
+    import functools
+
+    x = _modular(70)
+    strength, communities = tc.WeightedStrength(signed=True), tc.Communities(n=3)
+    kw = dict(order=2, causal=True, cfun=tc.autofc, rfun=strength,
+              delta_rfun={1: communities, 2: "weighted_strength"},
+              fit_timepoints=N, refit_every=refit, return_delta=True, **PARAMS)
+    if not streamed:
+        kw["combine"] = functools.partial(tc.null_combine)
+    out, info, model = _quiet(tc.features, x, return_info=True, return_model=True, **kw)
+    assert model.info is info
+    kept_info = copy.deepcopy(info)
+    before = _quiet(model.transform, x, return_delta=True)
+    # transforming with the model does not touch the objects
+    records = _snapshot(strength), _snapshot(communities)
+    _quiet(model.transform, x[:150], return_delta=True)
+    assert _same_records(strength.fits_, records[0])
+    assert _same_records(communities.fits_, records[1])
+    # changing the objects' records changes nothing in the model
+    for record in strength.fits_:
+        record["weights"][0][:] = 0
+        record["mean_r"][0][:] = -1
+    for record in communities.fits_:
+        record["weights"][0][:] = 0
+        record["labels"][:] = 0
+    assert _identical(before, _quiet(model.transform, x, return_delta=True))
+    # nor does fitting them again, here or in another call
+    strength.fit(_quiet(tc.timecorr, _modular(71), cfun=tc.autofc, rfun=None,
+                        weights_params={"var": 9}))
+    _quiet(tc.features, _modular(72), **{**kw, "fit_timepoints": 60})
+    assert _identical(before, _quiet(model.transform, x, return_delta=True))
+    assert model.info == kept_info and info == kept_info
+    assert _identical(before, _quiet(pickle.loads(pickle.dumps(model)).transform, x,
+                                     return_delta=True))
+
+
+def test_timecorr_does_not_share_a_fit_with_the_reducer_object():
+    x = _modular(73)
+    strength = tc.WeightedStrength()
+    kw = dict(causal=True, cfun=tc.autofc, rfun=strength, fit_timepoints=N,
+              weights_params={"var": 25})
+    out = _quiet(tc.timecorr, x, **kw)
+    record = _snapshot(strength)
+    assert np.array_equal(_quiet(tc.timecorr, x, **kw), out, equal_nan=True)
+    assert _same_records(strength.fits_, record)
+
+
+# ----------------------------------------------------------------------------
+# reductions that change nothing
+# ----------------------------------------------------------------------------
+
+
+def test_a_model_with_as_many_components_as_columns_is_the_identity():
+    # hypertools returns such data as they are, and fits no model
+    x = np.random.default_rng(80).standard_normal((120, 4))
+    one = dict(causal=True, cfun=tc.autofc, fit_timepoints=60,
+               weights_params={"var": 25})
+    plain = _quiet(tc.timecorr, x, rfun=None, **one)
+    assert plain.shape == (120, 10)
+    two = dict(order=1, delta_rfun="strength", delta_weights_params={"var": 16}, **one)
+    assert np.array_equal(_quiet(tc.features, x, rfun="PCA", ndims=10, **two)[1], plain,
+                          equal_nan=True)
+    # more components than columns: zero columns are appended, as without causal
+    padded = _quiet(tc.features, x, rfun="PCA", ndims=12, **two)[1]
+    assert padded.shape == (120, 12)
+    assert np.array_equal(padded[:, :10], plain, equal_nan=True)
+    defined = ~np.isnan(plain).all(axis=1)
+    assert np.all(padded[defined, 10:] == 0) and np.isnan(padded[~defined]).all()
+    usual = _quiet(tc.features, x, order=1, cfun=tc.autofc, rfun="PCA", ndims=12,
+                   delta_rfun="strength", weights_params={"var": 25})[1]
+    assert usual.shape == (120, 12) and np.all(usual[:, 10:] == 0)
+    # one column: one correlation, itself
+    single = _quiet(tc.timecorr, x[:, :1], rfun="PCA", **one)
+    assert np.array_equal(single, _quiet(tc.timecorr, x[:, :1], rfun=None, **one),
+                          equal_nan=True)
+    assert single.shape == (120, 1)
+
+
+@pytest.mark.parametrize("refit", [None, 20])
+@pytest.mark.parametrize("columns,ndims", [(4, 10), (1, None)])
+def test_identity_reductions_through_the_orders(columns, ndims, refit):
+    x = np.random.default_rng(81).standard_normal((120, columns))
+    kw = dict(order=2, causal=True, cfun=tc.autofc, ndims=ndims, fit_timepoints=60,
+              refit_every=refit, return_delta=True, return_info=True,
+              return_model=True, **PARAMS)
+    out, info, model = _quiet(tc.features, x, rfun="PCA", delta_rfun="PCA", **kw)
+    # order 1 reduces 10 columns to 10 (1 to 1): nothing; order 2 reduces 55
+    # columns to 10 with a fitted model (1 to 1: nothing again)
+    same, same_info, _ = _quiet(tc.features, x, **kw, **(
+        dict(rfun={1: None, 2: "PCA"}, delta_rfun={1: None, 2: "PCA"})
+        if columns == 4 else dict(rfun=None, delta_rfun=None)))
+    assert _identical(out, same)
+    assert [e["output_width"] for e in info] == [e["output_width"] for e in same_info]
+    assert info[0]["output_width"] == (10 if columns == 4 else 1)
+    rows = [60] if refit is None else [60, 80, 100]
+    assert info[0]["fit_timepoints"] == 60 and info[0]["refit_rows"] == rows
+    assert info[0]["refit_kept_previous"] == []
+    assert model.refits == rows
+    assert _identical(_quiet(model.transform, x, return_delta=True),
+                      _quiet(pickle.loads(pickle.dumps(model)).transform, x,
+                             return_delta=True))
+    if refit is None:
+        assert _identical(out, _quiet(model.transform, x, return_delta=True))
+    # the guarantee
+    cut = _quiet(tc.features, x[:90], rfun="PCA", delta_rfun="PCA", **kw)[0]
+    assert _worst(out, cut, 90) <= ATOL

@@ -18,6 +18,7 @@ from .helpers import (
     _GRAPH_MEASURES,
     _MIN_SAMPLES_RTOL,
     _SUMMARY_NAMES,
+    _COMPONENT_MODELS,
     _FittedModel,
     _FitUnusable,
     _is_model,
@@ -319,30 +320,26 @@ def _defined_rows(arrays):
     return [~np.isnan(np.asarray(a)).all(axis=1) for a in arrays]
 
 
-def _on_defined(arrays, f, width):
+def _on_defined(arrays, f):
     """
     ``f`` (a list of arrays in, a list of arrays out, row by row) applied to
     the rows of ``arrays`` that are not entirely NaN; the other rows stay
-    rows of NaN.  ``width``: the number of output columns when no array has
-    such a row (None: found by reducing a row of zeros).
+    rows of NaN.  Every array is passed, at its position, also one without
+    such a row (a fit that holds one unit per subject is applied to the
+    subject at each position).
     """
     arrays = [np.asarray(a, dtype=np.float64) for a in arrays]
     defined = _defined_rows(arrays)
-    kept = [k for k, d in enumerate(defined) if d.any()]
     # every row is passed, the undefined ones as rows of zeros: a row is then
     # reduced at the same position of an array of the same shape whatever
     # the later rows hold, so replacing later rows (by NaN too) changes no
     # bit of it (the round-off of a matrix product can depend on its shape)
-    filled = [np.where(defined[k][:, None], arrays[k], 0.0) for k in kept]
-    reduced = f(filled) if kept else []
-    if reduced:
-        width = np.asarray(reduced[0]).shape[1]
-    elif width is None:
-        # no row to reduce: the width of the reduction of a row of zeros
-        width = np.asarray(f([np.zeros((1, arrays[0].shape[1]))])[0]).shape[1]
-    out = [np.full((a.shape[0], width), np.nan) for a in arrays]
-    for k, r in zip(kept, reduced):
-        out[k][defined[k]] = np.asarray(r)[defined[k]]
+    reduced = f([np.where(d[:, None], a, 0.0) for a, d in zip(arrays, defined)])
+    out = []
+    for r, d in zip(reduced, defined):
+        r = np.array(r, dtype=np.float64)
+        r[~d] = np.nan
+        out.append(r)
     return out
 
 
@@ -360,13 +357,20 @@ def _fit_reducer(corrs, rfun, ndims=None, *, order=None, path=None, append_fit=F
 
     A summary (object or name) gives a ``_FittedSummary`` (the object's
     ``fits_`` gains the fit, with ``order`` and ``path``; ``append_fit`` as
-    in ``higher_order._apply_reducer``), a model a ``helpers._FittedModel``;
-    None, a graph measure and a function of the user's are returned as they
-    are (nothing to fit).
+    in ``higher_order._apply_reducer``), a model a ``helpers._FittedModel``
+    (the identity when hypertools returns the rows as they are: no more
+    columns than components); None, a graph measure and a function of the
+    user's are returned as they are (nothing to fit).
 
-    ``ValueError`` when the rows hold no defined row to fit (a model: fewer
-    than 2), and for a model that cannot reduce rows it was not fitted on
-    or does not reproduce its training rows (to ``_REFIT_ATOL``).
+    A model is taken only when its fitted estimator has ``components_`` (a
+    linear map), reproduces its training rows (to ``_REFIT_ATOL``) and
+    reduces a few of them to the same values one at a time and in another
+    batch: together these show that it reduces a row by itself.
+
+    ``ValueError`` otherwise, and when the rows hold no defined row to fit
+    (a model: fewer than 2); ``helpers._FitUnusable``, a ``ValueError``,
+    for what can differ from one fit to the next (no defined row, a model
+    that does not reproduce its rows).
     """
     from .summaries import _auto_emitter, _FittedSummary, _from_name, _Summary
 
@@ -397,35 +401,100 @@ def _fit_reducer(corrs, rfun, ndims=None, *, order=None, path=None, append_fit=F
             del summary.fits_[:-1]
         return _FittedSummary(summary, fit)
     rfun = _exact_pca(rfun)
+    # one model for all subjects: those without a defined row add nothing
+    rows = [r for r in rows if len(r)]
     reduced, fitted = _model_reduce(rows, rfun, ndims, return_model=True)
-    label = rfun.get("model") if isinstance(rfun, dict) else rfun
-    label = getattr(label, "__name__", None) or str(label)
+    label = _model_label(rfun)
+    where = f"{name}{at}"
+    if fitted.model is None:
+        # hypertools fits no model to data with no more columns than the
+        # components asked for: it returns them as they are (and reduce
+        # appends its zero columns), which the identity does for any row
+        if all(np.array_equal(np.asarray(r)[:, :fitted.n_features], a)
+               for r, a in zip(reduced, rows)):
+            return fitted
+        raise _FitUnusable(
+            f"causal=True: the model {label!r} ({where}) cannot reduce rows it "
+            "was not fitted on (hypertools returned no fitted model), so it "
+            "cannot be fitted on the first rows and applied to later ones.  "
+            + _LINEAR_MODELS
+        )
+    if fitted.components is None:
+        raise ValueError(_not_linear_message(label, where))
     try:
-        if fitted.model is None:
-            raise NotImplementedError("hypertools returned no fitted model")
         again = fitted.apply(rows)
     except (NotImplementedError, AttributeError, TypeError) as err:
         raise _FitUnusable(
-            f"causal=True: the model {label!r} ({name}{at}) cannot reduce rows it "
+            f"causal=True: the model {label!r} ({where}) cannot reduce rows it "
             f"was not fitted on ({err}), so it cannot be fitted on the first "
-            "rows and applied to later ones.  Use a model with an out-of-sample "
-            "transform, such as 'PCA', 'IncrementalPCA' or 'FactorAnalysis'."
+            "rows and applied to later ones.  " + _LINEAR_MODELS
         ) from err
     worst = max(float(np.max(np.abs(np.asarray(r) - a), initial=0.0))
                 for r, a in zip(reduced, again))
     scale = max(1.0, max(float(np.max(np.abs(a), initial=0.0)) for a in again))
     if not worst <= _REFIT_ATOL * scale:
         raise _FitUnusable(
-            f"causal=True: the model {label!r} ({name}{at}) does not reproduce "
+            f"causal=True: the model {label!r} ({where}) does not reproduce "
             f"the rows it was fitted on when it reduces them again (they differ "
             f"by up to {worst:.3g}), so the rows it is fitted on and later rows "
-            "would not be comparable.  Use a model with an exact out-of-sample "
-            "transform, such as 'PCA', 'IncrementalPCA' or 'FactorAnalysis', "
-            "with an exact solver (a randomized one, as svd_solver='randomized' "
-            "of PCA, does not reproduce its rows)."
+            "would not be comparable.  " + _LINEAR_MODELS + "  Use an exact "
+            "solver (a randomized one, as svd_solver='randomized' of PCA, does "
+            "not reproduce its rows)."
+        )
+    # each row alone, and in other company: the same output
+    few, batch = np.vstack(rows)[:4], np.vstack(again)[:4]
+    alone = np.vstack([fitted.apply([few[i:i + 1]])[0] for i in range(len(few))])
+    turned = np.vstack(fitted.apply([few[1:], few[:1]])[::-1])
+    worst = max(float(np.max(np.abs(other - batch), initial=0.0))
+                for other in (alone, turned))
+    if not worst <= _REFIT_ATOL * scale:
+        raise ValueError(
+            f"causal=True: the model {label!r} ({where}) does not reduce its "
+            "rows row by row: a row reduced alone or with other rows differs "
+            f"(by up to {worst:.3g}) from the row as reduced with the rows of "
+            "the fit, so a row would depend on the rows after it.  "
+            + _LINEAR_MODELS
         )
     fitted.freeze_constants(again)
     return fitted
+
+
+# what the errors about a model in causal mode recommend
+_LINEAR_MODELS = (
+    "Use a model that is a linear map of the correlations of a row, with "
+    "components_: 'PCA', 'IncrementalPCA', 'TruncatedSVD', 'FastICA' or "
+    "'FactorAnalysis'; or a summary such as 'weighted_strength'."
+)
+
+
+def _model_label(rfun):
+    """The name of a model reducer (a name or a dict), for messages."""
+    label = rfun.get("model") if isinstance(rfun, dict) else rfun
+    return getattr(label, "__name__", None) or str(label)
+
+
+def _not_linear_message(label, where):
+    return (
+        f"causal=True: the model {label!r} ({where}) has no components_ (it is "
+        "not a linear map of the correlations of a row), so nothing shows "
+        "that it reduces a row in the same way whatever rows come with it "
+        "(reproducing the rows it was fitted on does not: the transform of "
+        "'UMAP' depends on the number of rows it is given).  " + _LINEAR_MODELS
+    )
+
+
+def _check_linear_model(rfun, where):
+    """
+    ``ValueError`` for a model reducer named in ``rfun`` (a name or a dict
+    with one) that is known to have no ``components_``, before anything is
+    computed (``causal=True``; a model given as an object is checked when
+    it has been fitted: ``_fit_reducer``).
+    """
+    if not _is_model(rfun):
+        return
+    label = rfun.get("model") if isinstance(rfun, dict) else rfun
+    if isinstance(label, str) and label not in _COMPONENT_MODELS:
+        raise ValueError(_not_linear_message(label, where))
 
 
 def _exact_pca(rfun):
@@ -467,10 +536,7 @@ def _apply_frozen(corrs, frozen):
         K = frozen.fit["weights"][0].shape[0]
         if arrays and np.asarray(arrays[0]).shape[1] == K * (K + 1) // 2:
             frozen.check_units(len(arrays), K)
-        width = frozen.summary._n_columns(frozen.fit, K)
-    else:
-        width = None
-    out = _on_defined(arrays, frozen.apply, width)
+    out = _on_defined(arrays, frozen.apply)
     return out if isinstance(corrs, list) else out[0]
 
 
@@ -522,6 +588,7 @@ def _causal_arguments(weights_function, weights_params, include_timepoints, cfun
             "starts), for example events=[100, 250]."
         )
     _check_rfun(rfun)
+    _check_linear_model(rfun, "rfun")
     if _needs_fit(rfun) and fit_timepoints is None:
         raise ValueError(
             f"causal=True: rfun={rfun!r} is fitted to data and needs "
@@ -788,11 +855,19 @@ def timecorr(
         unchanged (to 1e-9; bit for bit under replacement) when rows after
         ``t`` are replaced or removed, and a row ``t < n`` when rows from
         ``n`` on are.  ``n`` equal to the number of timepoints fits on
-        every row.  A model must reduce rows it was not fitted on and
-        reproduce its training rows to 1e-9 (``"PCA"``,
-        ``"IncrementalPCA"``, ``"FactorAnalysis"``, ...; ``"MDS"``,
-        ``"TSNE"``, ``"SpectralEmbedding"`` and
-        ``"LocallyLinearEmbedding"`` raise ``ValueError``); ``"PCA"`` is
+        every row.  A model must be a linear map applied to each row by itself:
+        its fitted estimator has ``components_`` (``"PCA"``,
+        ``"IncrementalPCA"``, ``"TruncatedSVD"``, ``"FastICA"``,
+        ``"FactorAnalysis"``, ...), it reproduces its training rows to
+        1e-9, and it reduces rows one at a time as it reduces them
+        together; any other model raises ``ValueError`` (``"UMAP"``,
+        ``"KernelPCA"``, ``"Isomap"``, ``"MDS"``, ``"TSNE"``,
+        ``"SpectralEmbedding"``, ``"LocallyLinearEmbedding"``: the
+        transform of some of them depends on the rows it is given
+        together).  A model asked for as many components as its input
+        has columns, or more, changes nothing (zero columns are appended
+        for the components beyond them), as without ``causal``.
+        ``"PCA"`` is
         fitted with ``svd_solver="full"`` unless a model dict gives a
         solver, because the randomized solver scikit-learn chooses for
         large inputs does not reproduce its rows.  An output column of
@@ -861,7 +936,8 @@ def timecorr(
         not an integer from 1 to the number of timepoints, or given
         without ``causal=True``; when the first ``fit_timepoints`` rows
         hold no row with defined correlations to fit (2 for a model); and
-        for a model that cannot reduce rows it was not fitted on.
+        for a model that is not a linear map applied row by row (see
+        ``fit_timepoints``).
     RuntimeError, ImportError
         As raised by ``segment`` for features entries of ``events``.
 

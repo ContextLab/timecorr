@@ -1076,3 +1076,158 @@ def test_one_row_of_a_wide_kernel_is_not_a_delta_kernel():
                     weights_function=tc.boxcar_weights, weights_params={"width": 1})
     with pytest.raises(ValueError, match="delta"):
         tc.wcorr(x[:2], x[:2], np.eye(2), causal=True)
+
+
+# ----------------------------------------------------------------------------
+# the reach of a restricted kernel, and of kernels without a limit
+# ----------------------------------------------------------------------------
+
+
+def _restricted_reach(function, params, exclude, include_zero=True, n=4000):
+    """The largest effective sample size a row of the restricted kernel has
+    with up to ``n - 1`` earlier timepoints."""
+    kernel = helpers._lag_kernel(n, function, params, "backward", include_zero, exclude)
+    # the last row, by lag: over the lags up to each one
+    w = np.abs(kernel.block(n - 1, n, 0, n))[0][::-1]
+    with np.errstate(invalid="ignore", divide="ignore"):
+        ess = np.cumsum(w) ** 2 / np.cumsum(w * w)
+    return float(np.nanmax(ess)) if not np.isnan(ess).all() else float("nan")
+
+
+def _kernel_reach(function, params, include_zero=True, exclude=None):
+    return helpers._kernel_reach(
+        helpers._lag_kernel(5, function, params, "backward", include_zero, exclude))
+
+
+def test_a_kernel_of_infinite_width_has_no_limit():
+    for include_zero in (True, False):
+        assert _kernel_reach(tc.boxcar_weights, {"width": np.inf}, include_zero) is None
+        assert _kernel_reach(tc.uniform_weights, None, include_zero) is None
+        # the lags from 4 on: still without a limit
+        assert _kernel_reach(tc.uniform_weights, None, include_zero, -3) is None
+        assert _kernel_reach(tc.boxcar_weights, {"width": np.inf}, include_zero,
+                             -3) is None
+    x = np.random.default_rng(30).standard_normal((50, 3))
+    kw = dict(causal=True, cfun=tc.autofc, weights_function=tc.boxcar_weights,
+              weights_params={"width": np.inf})
+    # more than these 50 rows hold, not more than a row can have: NaN rows
+    assert np.isnan(_quiet(tc.timecorr, x, min_samples=2000, **kw)).all()
+    out = _quiet(tc.timecorr, x, min_samples=30, **kw)
+    assert np.array_equal(np.flatnonzero(np.isnan(out).all(axis=1)), np.arange(29))
+    feats = _quiet(tc.features, x, order=1, rfun=None, delta_rfun=None,
+                   delta_weights_function=tc.boxcar_weights,
+                   delta_weights_params={"width": np.inf}, min_samples=2000, **kw)
+    assert np.isnan(feats[1]).all()
+
+
+@pytest.mark.parametrize("function,params", [
+    (tc.uniform_weights, None), (tc.boxcar_weights, {"width": np.inf}),
+    (tc.boxcar_weights, {"width": 30}), (tc.gaussian_weights, {"var": 25}),
+    (tc.laplace_weights, {"scale": 4.0}), (tc.t_weights, {"df": 2}),
+    (tc.mexican_hat_weights, {"sigma": 6.0}),
+], ids=lambda v: getattr(v, "__name__", str(v)))
+@pytest.mark.parametrize("exclude", [3, 0, -3, 40, -40])
+@pytest.mark.parametrize("include_zero", [True, False])
+def test_reach_of_a_kernel_restricted_by_exclude_timepoints(function, params, exclude,
+                                                            include_zero):
+    reach = _kernel_reach(function, params, include_zero, exclude)
+    flat = function is tc.uniform_weights or params == {"width": np.inf}
+    if flat and exclude < 0:
+        assert reach is None  # every lag beyond: no limit
+        return
+    heavy = function is tc.t_weights and exclude < 0
+    most = _restricted_reach(function, params, exclude, include_zero,
+                             n=200_000 if heavy else 4000)
+    if np.isnan(most):
+        most = 0.0  # no lag with weight (the lag 0 alone, without the diagonal)
+    assert reach == pytest.approx(most, rel=1e-3 if heavy else 1e-9, abs=1e-12)
+    if flat and exclude >= 0:
+        assert reach == exclude + 1 - (not include_zero)
+    if exclude == 0:
+        return  # the lag 0 alone: a delta kernel, which causal mode refuses
+    # the decision of timecorr: a number above it raises, one below does not
+    x = np.random.default_rng(31).standard_normal((60, 3))
+    kw = dict(causal=True, cfun=tc.autofc, weights_function=function,
+              weights_params={} if params is None else params,
+              include_zero=include_zero, exclude_timepoints=exclude)
+    with pytest.raises(ValueError, match="min_samples.*more than a row"):
+        tc.timecorr(x, min_samples=max(1.0, reach) * (1 + 1e-6) + 1e-9, **kw)
+    with pytest.raises(ValueError, match="min_samples.*more than a row"):
+        tc.timecorr(x, cfun=None, causal=True, weights_function=function,
+                    weights_params={} if params is None else params,
+                    include_zero=include_zero, exclude_timepoints=exclude,
+                    min_samples=max(1.0, reach) * (1 + 1e-6) + 1e-9)
+    if reach >= 1:
+        _quiet(tc.timecorr, x, min_samples=reach * (1 - 1e-6), **kw)
+
+
+def test_the_uniform_kernel_restricted_to_four_lags_cannot_reach_five():
+    x = np.random.default_rng(32).standard_normal((40, 3))
+    kw = dict(causal=True, cfun=tc.autofc, weights_function=tc.uniform_weights,
+              weights_params={}, exclude_timepoints=3)
+    with pytest.raises(ValueError, match=r"min_samples=5 .*is 4\b"):
+        tc.timecorr(x, min_samples=5, **kw)
+    out = _quiet(tc.timecorr, x, min_samples=4, **kw)
+    assert np.array_equal(np.flatnonzero(np.isnan(out).all(axis=1)), np.arange(3))
+
+
+def test_reach_of_wide_kernels_with_exclude_timepoints():
+    # wider than the lags that are added up, and restricted
+    assert _kernel_reach(tc.uniform_weights, None, exclude=1e8) == 1e8 + 1
+    assert _kernel_reach(tc.uniform_weights, None, False, 1e8) == 1e8
+    assert _kernel_reach(tc.boxcar_weights, {"width": np.inf}, exclude=1e8) == 1e8 + 1
+    # the lags from 6 on of the 5e8 of a boxcar
+    assert _kernel_reach(tc.boxcar_weights, {"width": 1e9}, exclude=-5) == 5e8 - 6
+    # the first 11 lags of a kernel that is flat over them
+    assert _kernel_reach(tc.gaussian_weights, {"var": 1e14}, exclude=10) == pytest.approx(
+        11, rel=1e-9)
+    assert _kernel_reach(tc.laplace_weights, {"scale": 1e9}, exclude=10) == pytest.approx(
+        11, rel=1e-6)
+    # without its first lags a wide kernel reaches nearly what it reaches whole
+    whole = _kernel_reach(tc.gaussian_weights, {"var": 1e14})
+    assert _kernel_reach(tc.gaussian_weights, {"var": 1e14}, exclude=-10) == pytest.approx(
+        whole, rel=1e-5)
+    assert _kernel_reach(tc.gaussian_weights, {"var": 1e14}, exclude=-10) < whole
+    # restricted beyond the lags added up: at most the kernel's own reach,
+    # at least the reach of the lags added up
+    for function, params in ((tc.boxcar_weights, {"width": 1e9}),
+                             (tc.gaussian_weights, {"var": 1e18}),
+                             (tc.t_weights, {"df": 1})):
+        bound = _kernel_reach(function, params, exclude=1e8)
+        assert bound is not None and bound <= _kernel_reach(function, params)
+        assert bound >= _kernel_reach(function, params, exclude=1e5) * (1 - 1e-9)
+    assert _kernel_reach(tc.boxcar_weights, {"width": 1e9}, exclude=1e8) == pytest.approx(
+        1e8 + 1, rel=1e-13)
+    # only lags beyond those added up
+    assert _kernel_reach(tc.boxcar_weights, {"width": 1e9}, exclude=-1e8) == 4e8 - 1
+    assert _kernel_reach(tc.boxcar_weights, {"width": 100}, exclude=-1e8) == 0
+    far = _kernel_reach(tc.gaussian_weights, {"var": 1e18}, exclude=-1e8)
+    assert far == pytest.approx(_kernel_reach(tc.gaussian_weights, {"var": 1e18}),
+                                rel=0.2)
+    assert _kernel_reach(tc.gaussian_weights, {"var": 25}, exclude=-1e8) == 0
+    assert _kernel_reach(tc.t_weights, {"df": 1}, exclude=-1e8) > 1e8
+
+
+def test_reach_of_a_very_wide_mexican_hat_is_known():
+    # the profile depends on lag / sigma: the reach grows in proportion
+    narrow = _kernel_reach(tc.mexican_hat_weights, {"sigma": 5000.0})
+    for sigma in (5e6, 5e9, 5e15):
+        wide = _kernel_reach(tc.mexican_hat_weights, {"sigma": sigma})
+        assert wide is not None
+        assert narrow * sigma / 5000 * 0.98 <= wide <= narrow * sigma / 5000 * 1.03
+
+
+@pytest.mark.parametrize("function,params", [
+    (tc.gaussian_weights, {"var": np.inf}), (tc.laplace_weights, {"scale": np.inf}),
+    (tc.t_weights, {"df": np.inf}), (tc.gaussian_weights, {"var": np.nan}),
+    (tc.mexican_hat_weights, {"sigma": np.inf}),
+], ids=str)
+def test_reach_with_parameters_that_are_not_finite_never_fails(function, params):
+    with np.errstate(all="ignore"):
+        w = np.asarray(helpers._lag_kernel(50, function, params, "backward")
+                       .block(0, 50, 0, 50))
+        reach = _kernel_reach(function, params)
+    if not np.any(np.nan_to_num(w, nan=0.0, posinf=0.0)):
+        assert reach == 0  # a kernel without weight reaches nothing
+    else:
+        assert reach is None or reach > 0

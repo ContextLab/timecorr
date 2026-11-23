@@ -44,7 +44,6 @@ from .helpers import (
 from .higher_order import (
     _constant_columns,
     _fit_pass,
-    _no_components_message,
     _output_elements,
     _step_info,
     _two_path_step,
@@ -211,16 +210,6 @@ _COLUMN_PER_COMPONENT = "mixing_"
 _MATCH_RTOL = 1e-9
 
 
-def _components(fitted):
-    """``components_`` of a ``_FittedModel`` as a 2-D array, or None."""
-    estimator = getattr(fitted.model, "model_", fitted.model)
-    components = getattr(estimator, "components_", None)
-    if components is None:
-        return None
-    components = np.asarray(components, dtype=np.float64)
-    return components if components.ndim == 2 else None
-
-
 def _assignment(score):
     """For each row of a square score matrix, the column of the one-to-one
     assignment with the largest total score."""
@@ -238,20 +227,21 @@ def _match_model(new, previous, order, path):
     |cosine| between component vectors), takes its place, and is negated
     when the cosine is negative; the columns frozen as constant
     (``constants``) follow, and the padding stays last.  ``new`` itself
-    when nothing moves.  ``_FitUnusable`` when the numbers of components or
-    of padded columns differ; ``ValueError`` when the reordered model does
-    not give the reordered outputs.
+    when nothing moves, and for the identity (a model with as many
+    components as columns).  Every model of a causal fit has components
+    (``timecorr._fit_reducer``).  ``_FitUnusable`` when the numbers of
+    components or of padded columns differ; ``ValueError`` when the
+    reordered model does not give the reordered outputs.
     """
-    a, b = _components(new), _components(previous)
-    if a is None or b is None:
-        label = type(getattr(new.model, "model_", new.model)).__name__
-        raise ValueError(_no_components_message(
-            label, "rfun" if path == "analysis" else "delta_rfun", order))
-    if a.shape != b.shape or new.pad != previous.pad:
+    a, b = new.components, previous.components
+    if a is None and b is None and new.pad == previous.pad:
+        return new  # the identity (no more columns than components) stays
+    if a is None or b is None or a.shape != b.shape or new.pad != previous.pad:
+        shapes = [None if c is None else c.shape[0] for c in (a, b)]
         raise _FitUnusable(
-            f"refit at order {order} ({path}): the model has {a.shape[0]} "
+            f"refit at order {order} ({path}): the model has {shapes[0]} "
             f"components and {new.pad} padded columns; the fit before "
-            f"{b.shape[0]} and {previous.pad}."
+            f"{shapes[1]} and {previous.pad}."
         )
     c = a.shape[0]
     norms = np.linalg.norm(a, axis=1)[:, None] * np.linalg.norm(b, axis=1)[None, :]
@@ -264,8 +254,8 @@ def _match_model(new, previous, order, path):
     signs = np.where(cosine[source, np.arange(c)] < 0, -1.0, 1.0)
     if np.array_equal(source, np.arange(c)) and np.all(signs > 0):
         return new
-    model = copy.deepcopy(new.model)
-    estimator = getattr(model, "model_", model)
+    matched = _FittedModel(new.model, new.n_features, new.pad)  # a copy
+    estimator = matched.estimator
     fitted = np.asarray(estimator.components_)
     estimator.components_ = np.ascontiguousarray(signs[:, None] * fitted[source])
     for name in _PER_COMPONENT:
@@ -276,7 +266,8 @@ def _match_model(new, previous, order, path):
     if isinstance(value, np.ndarray) and value.ndim == 2 and value.shape[1] == c:
         setattr(estimator, _COLUMN_PER_COMPONENT,
                 np.ascontiguousarray(value[:, source] * signs))
-    matched = _FittedModel(model, new.n_features, new.pad)
+    # as a pickle restores it, like every fitted model (see _FittedModel)
+    matched = _FittedModel(matched.model, new.n_features, new.pad)
     if new.constants is not None:
         columns, means, tol = (np.array(v) for v in new.constants)
         real = columns < c
@@ -431,12 +422,6 @@ def _refit(model, settings, subjects, single, events, return_delta, refit_every,
     returned, the rows of the fits and those whose fit was left out).
     """
     steps = model._steps
-    for k, step in steps.items():
-        for path, fitted in step.items():
-            if isinstance(fitted, _FittedModel) and _components(fitted) is None:
-                label = type(getattr(fitted.model, "model_", fitted.model)).__name__
-                raise ValueError(_no_components_message(
-                    label, "rfun" if path == "analysis" else "delta_rfun", k))
     n, T = settings["fit_timepoints"], subjects[0].shape[0]
     rows = [n] + list(range(n + refit_every, T, refit_every))
     fit_settings = _refit_settings(settings, steps)

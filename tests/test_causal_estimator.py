@@ -156,6 +156,12 @@ def test_rows_do_not_depend_on_later_rows_with_min_samples(case, include_zero, k
         part = _call([_perturb(x, n, mode, rng) for x in data], case, kernel,
                      include_zero, min_samples=min_samples)
         assert _max_difference(full, part, n) <= ATOL
+        if mode != "remove":
+            # (rows a later NaN leaves undefined do not change the columns,
+            # and so the sums, of the chunk of kernel rows they are in)
+            for f, p in zip(_as_list(full), _as_list(part)):
+                assert np.array_equal(np.asarray(f)[:n], np.asarray(p)[:n],
+                                      equal_nan=True)
 
 
 @pytest.mark.parametrize("missing", [0, 0.002])
@@ -813,13 +819,11 @@ def _level_step(where, seed=0, n=120, K=3, step=1e4):
     return x
 
 
-# Removing later rows changes the shapes of the estimator's sums, so their
-# round-off: an entry then moves by about eps times its condition number,
-# (distance of the samples from the centering reference of the chunk of
-# kernel rows / their spread)**2.  After a step of 1e4 standard deviations
-# inside a chunk that is 1e8 eps (measured: up to 1.6e-7); after a step of
-# 100, 1e4 eps (measured: 2.5e-11).  Replacing later rows changes no shape and no bit.
-REMOVE_ATOL = {1e2: ATOL, 1e4: 1e-6}
+# The estimator centers the data anew for every group of 16 kernel rows, on
+# the kernel-weighted mean at the group's first row, so rows long after a
+# step are as well conditioned as rows before it (centered once per chunk of
+# 128 rows, removing later rows moved a row after a step of 1e4 standard
+# deviations by up to 1.6e-7; now at most 6e-13 up to steps of 1e8).
 
 
 def test_a_later_nan_does_not_change_an_ill_conditioned_row():
@@ -846,7 +850,7 @@ def test_a_later_nan_does_not_change_an_ill_conditioned_row():
 @pytest.mark.parametrize("where", [0, 60, 150])
 @pytest.mark.parametrize("case", ["autofc", "isfc-null", "wisfc-corrmean", "smooth"])
 @pytest.mark.parametrize("missing", [False, True])
-@pytest.mark.parametrize("step", [1e2, 1e4])
+@pytest.mark.parametrize("step", [1e4, 1e8])
 def test_rows_of_a_level_step_do_not_depend_on_later_rows(case, where, include_zero,
                                                           mode, missing, step):
     data = [_level_step(where, seed=s, n=T, K=4, step=step)
@@ -861,8 +865,9 @@ def test_rows_of_a_level_step_do_not_depend_on_later_rows(case, where, include_z
                      include_zero)
         rows = n if include_zero or mode == "remove" else n + 1
         if mode == "remove":
-            worst = _max_difference(full, part, rows)
-            assert worst <= REMOVE_ATOL[step]
+            # (smoothed values are as large as the step: a few of their ulps)
+            atol = max(ATOL, 8 * np.spacing(step)) if case == "smooth" else ATOL
+            assert _max_difference(full, part, rows) <= atol
         else:
             # replacement changes no bit of an earlier row
             for f, p in zip(_as_list(full), _as_list(part)):

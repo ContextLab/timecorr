@@ -1036,6 +1036,7 @@ class _KernelRows:
                 self._peak[t0:t1] = np.maximum(w.max(axis=1), -w.min(axis=1))
                 self._first[t0:t1] = c0 + np.argmax(w != 0, axis=1)
         self.zero = None
+        self.zero_cols = None
         self._scale = None
         self.spans = None
         self._cache = {}
@@ -1050,11 +1051,21 @@ class _KernelRows:
         """Set the rows in ``mask`` to 0 (before ``prepare``)."""
         self.zero = np.asarray(mask, dtype=bool)
 
+    def zero_columns(self, mask):
+        """
+        Set the columns in ``mask`` to 0 (before ``prepare``): timepoints
+        that no row weights (the causal estimator's timepoints without a
+        sample).
+        """
+        mask = np.asarray(mask, dtype=bool)
+        self.zero_cols = mask if mask.any() else None
+
     def prepare(self, finite, always=False):
         """
         Rescale the extreme rows and choose each chunk's columns
-        (``always``: the columns where the chunk has weight, however much of
-        the kernel they cover, as the causal estimator needs).
+        (``always``: the columns where the chunk has weight before
+        ``zero_rows``, however much of the kernel they cover, as the causal
+        estimator needs).
         """
         T_out = self.shape[0]
         T = self.shape[1] if len(self.shape) == 2 else 0
@@ -1071,8 +1082,17 @@ class _KernelRows:
         self._kept = set()
         slices = None
         if len(self.shape) == 2:
-            slices = (_time_slices(self, finite, True) if always
-                      else _time_slices(self, finite))
+            if always:
+                # from the kernel before any row or column is set to 0:
+                # which rows the causal estimator leaves undefined and which
+                # timepoints have no sample depends on the data, and the
+                # columns of a chunk (the shapes of its sums) must not
+                zero, cols = self.zero, self.zero_cols
+                self.zero = self.zero_cols = None
+                slices = _time_slices(self, finite, True)
+                self.zero, self.zero_cols = zero, cols
+            else:
+                slices = _time_slices(self, finite)
         if slices is None:
             slices = [(t0, t1, 0, T) for t0, t1, _, _, _ in self._chunks]
         self.spans = slices
@@ -1101,24 +1121,32 @@ class _KernelRows:
             self._kept.add(id(block))  # cached arrays are never dropped
         return block
 
-    def _row_state(self, t0, t1):
-        """The zeroed rows and scales of rows t0:t1, as part of a cache key."""
+    def _row_state(self, t0, t1, c0=0, c1=0):
+        """
+        The zeroed rows and scales of rows t0:t1 and the zeroed columns
+        among c0:c1, as part of a cache key.
+        """
         zero = None if self.zero is None else self.zero[t0:t1].tobytes()
         scale = None if self._scale is None else self._scale[t0:t1].tobytes()
-        return zero, scale
+        cols = None
+        if self.zero_cols is not None and self.zero_cols[c0:c1].any():
+            cols = self.zero_cols[c0:c1].tobytes()
+        return zero, scale, cols
 
     def _final(self, i):
         """
-        Chunk i over its columns: NaN weights 0, the zeroed rows 0, the
-        extreme rows rescaled.  Chunks with equal blocks, equal zeroed rows
-        and equal scales share one array (do not modify it).
+        Chunk i over its columns: NaN weights 0, the zeroed rows and
+        columns 0, the extreme rows rescaled.  Chunks with equal blocks,
+        equal zeroed rows and columns and equal scales share one array (do
+        not modify it).
         """
         t0, t1, c0, c1, key = self._chunks[i]
         zero = None if self.zero is None else self.zero[t0:t1]
         scale = None if self._scale is None else self._scale[t0:t1]
         # a chunk without a shared key (at an edge or an event boundary) is
         # kept under its own index
-        key = ("final", ("chunk", i) if key is None else key) + self._row_state(t0, t1)
+        key = (("final", ("chunk", i) if key is None else key)
+               + self._row_state(t0, t1, c0, c1))
         hit = self._cache.get(key)
         if hit is not None:
             return hit
@@ -1128,6 +1156,8 @@ class _KernelRows:
         w[np.isnan(w)] = 0
         if zero is not None:
             w[zero] = 0
+        if key[-1] is not None:
+            w[:, self.zero_cols[c0:c1]] = 0
         if scale is not None:
             rows = scale != 1.0
             if rows.any():
@@ -1140,7 +1170,8 @@ class _KernelRows:
         # chunks with equal blocks, equal rows zeroed and rescaled (as in
         # _final) and the same span relative to t0 have equal blocks
         key = (("chunk", i) if key is None
-               else (key, c0 - t0, c1 - t0) + self._row_state(t0, t1))
+               else (key, c0 - t0, c1 - t0)
+               + self._row_state(t0, t1, *self._chunks[i][2:4]))
         hit = self._cache.get((key, kind))
         if hit is not None:
             return hit
@@ -1693,15 +1724,25 @@ def _causal_zero_variance(var, msq, s, mean):
     )
 
 
+# The causal estimator centers the data anew for every group of this many
+# kernel rows (see ``_group_reference``): a few standard deviations of a
+# kernel as narrow as a Gaussian of variance 25.  Each group multiplies the
+# centered columns over all the columns its chunk weights, so a chunk that
+# weights more than ``_CAUSAL_SPAN`` columns (a kernel with weight at every
+# lag, such as ``laplace_weights``) has proportionally larger groups, up to
+# the whole chunk.
+_CAUSAL_GROUP = 16
+_CAUSAL_SPAN = 512
+
+
 def _causal_reference(x, c0, t0, c1):
     """
-    The centering reference of the columns of ``x`` for a chunk of kernel
-    rows that starts at row ``t0`` and weights rows ``c0:c1``: the mean of
-    each column's observed samples in rows ``c0:t0`` (before every row of the
-    chunk); for a column without any, its first observed sample in rows
-    ``c0:c1`` (0 when it has none).  A row of the chunk that has samples of
-    the column has that first sample in its past, so no row's reference
-    holds a sample from its future.
+    A centering reference of the columns of ``x`` for kernel rows from
+    ``t0`` on that weight rows ``c0:c1``: the mean of each column's observed
+    samples in rows ``c0:t0`` (before every such row); for a column without
+    any, its first observed sample in rows ``c0:c1`` (0 when it has none).
+    A kernel row that has samples of the column has that first sample in
+    its past, so no row's reference holds a sample from its future.
     """
     past = x[c0:max(c0, t0)]
     ok = ~np.isnan(past)
@@ -1714,6 +1755,57 @@ def _causal_reference(x, c0, t0, c1):
         first = span[ok.argmax(axis=0), np.arange(span.shape[1])]
         ref[none] = np.where(ok.any(axis=0), first, 0.0)
     return ref
+
+
+def _group_reference(x, weights, c0, g0, c1):
+    """
+    The centering reference of the columns of ``x`` for a group of kernel
+    rows that starts at row ``g0`` and weights rows ``c0:c1``: the
+    kernel-weighted mean of each column's observed samples at row ``g0``
+    (``weights``: the absolute weights of that row over ``c0:c1``), which
+    every row of the group may read and which lies within the samples the
+    group weights.  For a column without a weighted sample at row ``g0``
+    (the first rows of a series or of an event, a row left undefined):
+    ``_causal_reference``.
+
+    A correlation does not depend on the reference; a reference close to
+    the samples a row weights keeps its sums well conditioned.
+    """
+    span = x[c0:c1]
+    ok = ~np.isnan(span)
+    num = weights @ np.where(ok, span, 0.0)
+    den = weights @ ok.astype(np.float64)
+    ref = _safe_divide(num, den)
+    none = den == 0
+    if none.any():
+        ref[none] = _causal_reference(x[:, none], c0, g0, c1)
+    return ref
+
+
+def _causal_groups(rows):
+    """
+    ``(i, g0, g1, c0, c1)`` for the groups of consecutive rows ``g0:g1`` of
+    each chunk ``i`` of a prepared ``_KernelRows`` whose kernel has no
+    weight above its diagonal: the group's weights lie in columns ``c0:c1``
+    (the chunk's columns before row ``g1``).  A group has ``_CAUSAL_GROUP``
+    rows, times the number of ``_CAUSAL_SPAN`` columns the chunk weights
+    (rounded up), at most the chunk.
+    """
+    groups = []
+    for i, (t0, t1, c0, c1) in enumerate(rows.spans):
+        size = _CAUSAL_GROUP * max(1, -(-(c1 - c0) // _CAUSAL_SPAN))
+        for g0 in range(t0, t1, size):
+            g1 = min(t1, g0 + size)
+            if min(c1, g1) > c0:
+                groups.append((i, g0, g1, c0, min(c1, g1)))
+    return groups
+
+
+def _group_block(rows, group, kind):
+    """The rows and columns of a group of ``_causal_groups`` (a new array)."""
+    i, g0, g1, c0, c1 = group
+    t0 = rows.spans[i][0]
+    return np.ascontiguousarray(rows._block(i, kind)[g0 - t0 : g1 - t0, : c1 - c0])
 
 
 def _causal_setup(a, b, rows, autocorrelation, min_samples):
@@ -1729,11 +1821,15 @@ def _causal_setup(a, b, rows, autocorrelation, min_samples):
       both ``a`` and ``b`` have a sample) are set to 0 here and to NaN in the
       output;
     - every chunk of ``CHUNK`` rows is multiplied with the columns where it
-      has weight, whatever fraction of the kernel they cover;
-    - each chunk centers the data on its own reference
-      (``_causal_reference``), and the zero-variance rule compares a
+      has weight, whatever fraction of the kernel they cover, a group of
+      ``_CAUSAL_GROUP`` rows at a time (``_causal_groups``);
+    - each group centers the data on its own reference
+      (``_group_reference``), and the zero-variance rule compares a
       variance with the kernel-weighted mean square about that reference
       and with the kernel-weighted mean (``_causal_zero_variance``);
+    - a timepoint where ``a`` or ``b`` has no sample at all (a row of NaN,
+      as the undefined rows of an earlier order are) has weight 0 in every
+      row;
     - a row is computed with the sums for complete data exactly when no
       timepoint it weights has a NaN sample (``"plain"``), and with the
       pairwise sums otherwise.  NaN samples are set to 0 after centering, so
@@ -1747,20 +1843,25 @@ def _causal_setup(a, b, rows, autocorrelation, min_samples):
     Ka, Kb = a.shape[1], b.shape[1]
     nan_a = np.isnan(a)
     nan_b = nan_a if autocorrelation else np.isnan(b)
-    defined = _causal_defined(
-        rows.kernel, ~nan_a.all(axis=1) & ~nan_b.all(axis=1), min_samples
-    )
+    # timepoints without a sample of ``a`` or of ``b``: no pair of features
+    # has one there, so no row weights them (their kernel columns are 0)
+    missing = nan_a.all(axis=1) | nan_b.all(axis=1)
+    defined = _causal_defined(rows.kernel, ~missing, min_samples)
     rows.zero_rows(~defined)
+    rows.zero_columns(missing)
     rows.prepare(True, always=True)
-    # the timepoints with a NaN sample, and their number before each row
-    with_nan = (nan_a.any(axis=1) | nan_b.any(axis=1)).astype(np.float64)
+    # the timepoints with a NaN sample, their number before each row, and
+    # those among them that rows can weight
+    with_nan = nan_a.any(axis=1) | nan_b.any(axis=1)
     nan_before = np.concatenate([[0], np.cumsum(with_nan)])
+    with_nan = (with_nan & ~missing).astype(np.float64)
     del nan_a, nan_b
-    n = len(rows.spans)
+    groups = _causal_groups(rows)
+    n = len(groups)
     state = {
         "causal": True, "T": a.shape[0], "rows": rows, "a": a, "b": b,
-        "defined": defined,
-        # chunks whose columns hold a NaN sample; chunks with a row that
+        "defined": defined, "groups": groups,
+        # groups whose columns hold a NaN sample; groups with a row that
         # weights one; the rows that weight none
         "dirty": np.zeros(n, dtype=bool),
         "nan": np.zeros(n, dtype=bool),
@@ -1781,7 +1882,7 @@ def _causal_setup(a, b, rows, autocorrelation, min_samples):
         })
     active = np.zeros(T_out, dtype=bool)
 
-    def moments(x, ref, dirty, A, W, s, t0, t1, side):
+    def moments(x, ref, dirty, A, W, s, g0, g1, side):
         x = x - ref
         if dirty:
             x[np.isnan(x)] = 0
@@ -1789,30 +1890,29 @@ def _causal_setup(a, b, rows, autocorrelation, min_samples):
         msq = A @ x**2
         var = msq - s * mean**2
         zero = _causal_zero_variance(var, msq, s, mean + ref)
-        state["m" + side][t0:t1] = mean
-        state["w" + side][t0:t1] = W @ x
-        state["v" + side][t0:t1] = np.where(zero, 0.0, var)
-        state["z" + side][t0:t1] = zero
+        state["m" + side][g0:g1] = mean
+        state["w" + side][g0:g1] = W @ x
+        state["v" + side][g0:g1] = np.where(zero, 0.0, var)
+        state["z" + side][g0:g1] = zero
 
-    for i, (t0, t1, c0, c1) in enumerate(rows.spans):
-        if c1 <= c0:
-            continue
-        A = rows._block(i, "a")
+    for g, group in enumerate(groups):
+        _, g0, g1, c0, c1 = group
+        A = _group_block(rows, group, "a")
         s = A.sum(axis=1)[:, np.newaxis]
-        active[t0:t1] = s[:, 0] > 0
-        dirty = state["dirty"][i] = nan_before[c1] > nan_before[c0]
+        active[g0:g1] = s[:, 0] > 0
+        dirty = state["dirty"][g] = nan_before[c1] > nan_before[c0]
         if dirty:
-            plain = (rows._block(i, "s") @ with_nan[c0:c1]) == 0
-            state["plain"][t0:t1] = plain
-            state["nan"][i] = not plain.all()
-        state["ref_a"][i] = _causal_reference(a, c0, t0, c1)
+            plain = (_group_block(rows, group, "s") @ with_nan[c0:c1]) == 0
+            state["plain"][g0:g1] = plain
+            state["nan"][g] = not plain.all()
+        state["ref_a"][g] = _group_reference(a, A[0], c0, g0, c1)
         if not autocorrelation:
-            state["ref_b"][i] = _causal_reference(b, c0, t0, c1)
-        W = rows._block(i, "w")
-        state["sw"][t0:t1, 0] = W.sum(axis=1)
-        moments(a[c0:c1], state["ref_a"][i], dirty, A, W, s, t0, t1, "a")
+            state["ref_b"][g] = _group_reference(b, A[0], c0, g0, c1)
+        W = _group_block(rows, group, "w")
+        state["sw"][g0:g1, 0] = W.sum(axis=1)
+        moments(a[c0:c1], state["ref_a"][g], dirty, A, W, s, g0, g1, "a")
         if not autocorrelation:
-            moments(b[c0:c1], state["ref_b"][i], dirty, A, W, s, t0, t1, "b")
+            moments(b[c0:c1], state["ref_b"][g], dirty, A, W, s, g0, g1, "b")
     state["active"] = active
     # the sums for complete data set the block size; the pairwise sums of
     # the rows that need them are computed in blocks of their own
@@ -1822,19 +1922,16 @@ def _causal_setup(a, b, rows, autocorrelation, min_samples):
     return state
 
 
-def _causal_pairwise(state, i, xa, ok_a, xb, ok_b, ref_a, ref_b):
+def _causal_pairwise(A, W, S, xa, ok_a, xb, ok_b, ref_a, ref_b):
     """
-    The pairwise sums of chunk ``i`` of the causal estimator for the
-    centered, zero-filled columns ``xa`` and ``xb`` (``ok_a``, ``ok_b``:
-    their observed samples): ``(r, undefined, zero, few)``, each of shape
-    (rows of the chunk, columns of ``xa``, columns of ``xb``).
+    The pairwise sums of a group of rows of the causal estimator (``A``,
+    ``W``, ``S``: the group's absolute weights, weights and support) for
+    the centered, zero-filled columns ``xa`` and ``xb`` (``ok_a``,
+    ``ok_b``: their observed samples): ``(r, undefined, zero, few)``, each
+    of shape (rows of the group, columns of ``xa``, columns of ``xb``).
     """
-    rows = state["rows"]
-    t0, t1, c0, c1 = rows.spans[i]
-    L = c1 - c0
-    sub = (t1 - t0, xa.shape[1], xb.shape[1])
-    A = rows._block(i, "a")
-    W = rows._block(i, "w")
+    L = xa.shape[0]
+    sub = (A.shape[0], xa.shape[1], xb.shape[1])
     pair_ok = ok_a[:, :, np.newaxis] & ok_b[:, np.newaxis, :]
     x = xa[:, :, np.newaxis] * pair_ok
     y = xb[:, np.newaxis, :] * pair_ok
@@ -1859,7 +1956,7 @@ def _causal_pairwise(state, i, xa, ok_a, xb, ok_b, ref_a, ref_b):
     )
     var_a, var_b, zero = (v.reshape(sub) for v in (var_a, var_b, zero))
     # two samples always give r = +-1: fewer than 3 is undefined
-    few = (rows._block(i, "s") @ terms[:, :m]).reshape(sub) < 3
+    few = (S @ terms[:, :m]).reshape(sub) < 3
     und = zero | few
     return _correlation_ratio(num, var_a, var_b, und, sub), und, zero, few
 
@@ -1867,10 +1964,10 @@ def _causal_pairwise(state, i, xa, ok_a, xb, ok_b, ref_a, ref_b):
 def _causal_block(state, i0, i1, j0):
     """
     ``_wcorr_block`` for the causal estimator (``state`` from
-    ``_causal_setup``): the same sums, a chunk of kernel rows at a time,
+    ``_causal_setup``): the same sums, a group of kernel rows at a time,
     each over its own columns and about its own centering reference.  Every
-    chunk computes the sums for complete data, on the data with NaN samples
-    set to 0; a chunk with rows that weight a NaN sample also computes the
+    group computes the sums for complete data, on the data with NaN samples
+    set to 0; a group with rows that weight a NaN sample also computes the
     pairwise sums, which those rows take.
     """
     rows = state["rows"]
@@ -1882,58 +1979,59 @@ def _causal_block(state, i0, i1, j0):
     few_any = np.zeros(shape[0], dtype=bool)
     # rows of ``a`` per block of pairwise sums
     step = _wcorr_block_rows(state["T"], shape[2], _WCORR_NAN_PRODUCTS)
-    for i, (t0, t1, c0, c1) in enumerate(rows.spans):
-        if c1 <= c0:
-            continue
+    for g, group in enumerate(state["groups"]):
+        _, g0, g1, c0, c1 = group
         L = c1 - c0
-        sub = (t1 - t0,) + shape[1:]
-        ref_a = state["ref_a"][i, i0:i1]
-        ref_b = state["ref_b"][i, j0:]
+        sub = (g1 - g0,) + shape[1:]
+        ref_a = state["ref_a"][g, i0:i1]
+        ref_b = state["ref_b"][g, j0:]
         xa = a[c0:c1, i0:i1] - ref_a
         xb = b[c0:c1, j0:] - ref_b
-        if state["dirty"][i]:
+        if state["dirty"][g]:
             ok_a = ~np.isnan(xa)
             ok_b = ~np.isnan(xb)
             xa[~ok_a] = 0
             xb[~ok_b] = 0
-        W = rows._block(i, "w")
+        W = _group_block(rows, group, "w")
         prod = (xa[:, :, np.newaxis] * xb[:, np.newaxis, :]).reshape(L, -1)
         cross = (W @ prod).reshape(sub)
         del prod
-        ma_i = state["ma"][t0:t1, i0:i1, np.newaxis]
-        mb_j = state["mb"][t0:t1, np.newaxis, j0:]
+        ma_i = state["ma"][g0:g1, i0:i1, np.newaxis]
+        mb_j = state["mb"][g0:g1, np.newaxis, j0:]
         num = (
             cross
-            - ma_i * state["wb"][t0:t1, np.newaxis, j0:]
-            - mb_j * state["wa"][t0:t1, i0:i1, np.newaxis]
-            + ma_i * mb_j * state["sw"][t0:t1, :, np.newaxis]
+            - ma_i * state["wb"][g0:g1, np.newaxis, j0:]
+            - mb_j * state["wa"][g0:g1, i0:i1, np.newaxis]
+            + ma_i * mb_j * state["sw"][g0:g1, :, np.newaxis]
         )
-        var_a = state["va"][t0:t1, i0:i1, np.newaxis]
-        var_b = state["vb"][t0:t1, np.newaxis, j0:]
-        zero = (state["za"][t0:t1, i0:i1, np.newaxis]
-                | state["zb"][t0:t1, np.newaxis, j0:])
-        r_chunk = _correlation_ratio(num, var_a, var_b, zero, sub)
+        var_a = state["va"][g0:g1, i0:i1, np.newaxis]
+        var_b = state["vb"][g0:g1, np.newaxis, j0:]
+        zero = (state["za"][g0:g1, i0:i1, np.newaxis]
+                | state["zb"][g0:g1, np.newaxis, j0:])
+        r_group = _correlation_ratio(num, var_a, var_b, zero, sub)
         und = zero
-        if state["nan"][i]:
+        if state["nan"][g]:
             # the rows that weight a NaN sample take the pairwise sums
-            need = ~state["plain"][t0:t1]
+            need = ~state["plain"][g0:g1]
+            A = _group_block(rows, group, "a")
+            S = _group_block(rows, group, "s")
             und = zero.copy()
             zero = zero.copy()
             few = np.zeros(sub, dtype=bool)
             for k0 in range(0, sub[1], step):
                 k1 = min(sub[1], k0 + step)
                 pr, pu, pz, pf = _causal_pairwise(
-                    state, i, xa[:, k0:k1], ok_a[:, k0:k1], xb, ok_b,
+                    A, W, S, xa[:, k0:k1], ok_a[:, k0:k1], xb, ok_b,
                     ref_a[k0:k1], ref_b,
                 )
-                r_chunk[need, k0:k1] = pr[need]
+                r_group[need, k0:k1] = pr[need]
                 und[need, k0:k1] = pu[need]
                 zero[need, k0:k1] = pz[need]
                 few[need, k0:k1] = pf[need]
-            few_any[t0:t1] = few.reshape(sub[0], -1).any(axis=1)
-        zero_all[t0:t1] = zero.reshape(sub[0], -1).all(axis=1)
-        r[t0:t1] = r_chunk
-        undefined[t0:t1] = und
+            few_any[g0:g1] = few.reshape(sub[0], -1).any(axis=1)
+        zero_all[g0:g1] = zero.reshape(sub[0], -1).all(axis=1)
+        r[g0:g1] = r_group
+        undefined[g0:g1] = und
     return r, undefined, zero_all, few_any
 
 
@@ -2180,16 +2278,29 @@ def wcorr(a, b, weights, *, causal=False, min_samples=None):
     after ``t``: the correlations at ``t`` are unchanged (to 1e-9) when the
     samples after ``t`` are replaced by any values, NaN and inf included, or
     removed (and, when the kernel gives ``t`` itself no weight, when the
-    samples at ``t`` change).  The kernel must give no weight to later
-    timepoints.  The estimate is the same formula, with these differences:
+    samples at ``t`` change).  Replacing later samples changes no bit of
+    an earlier timepoint; removing them changes the shapes of the last
+    sums and so their round-off (measured: at most 6e-13, on series with
+    an offset, a random walk, and steps of up to 1e8 standard
+    deviations).  The kernel must give no weight to later timepoints.  The estimate is the same formula, with these differences:
 
-    - Data are centered, a chunk of 128 kernel rows at a time, on the mean
-      of each feature's samples in the rows that the chunk weights and that
-      come before the chunk (its first observed sample when there are
-      none), not on the mean over all timepoints; the 1e-10 rule above
+    - Data are centered, a group of 16 timepoints at a time (more for a
+      kernel that weights more than 512 timepoints), on the kernel-weighted
+      mean of each feature at the group's first timepoint (where that
+      timepoint has no weighted sample of the feature: the mean of its
+      samples before the group among those the group weights, or its first
+      sample), not on the mean over all timepoints; the 1e-10 rule above
       compares the variance with the kernel-weighted mean square about that
       reference.  A correlation does not depend on the reference; it only
       conditions the sums.
+    - A feature whose kernel-weighted standard deviation at a timepoint is
+      below 1e-9 times the magnitude of its kernel-weighted mean also
+      counts as having zero variance there: a feature that is constant up
+      to the round-off of whatever computed it.
+    - A timepoint is computed with the sums for complete data when none of the
+      timepoints it weights has a NaN sample, and with pairwise sums
+      otherwise, whatever the later samples are.  A timepoint where ``a``
+      or ``b`` has no sample at all has no weight in any row.
     - Infinite samples and samples above 1e150 in magnitude are missing
       data, like NaN.
     - A timepoint with fewer than 3 observed samples with non-zero weight
@@ -2203,7 +2314,9 @@ def wcorr(a, b, weights, *, causal=False, min_samples=None):
     - ``a`` and ``b`` are an autocorrelation (diagonal set to 1) only when
       they are the same object; equal values in two arrays are not compared.
     - A delta kernel raises ``ValueError`` (its z-scores use every
-      timepoint).
+      timepoint).  A series of one timepoint is not a delta kernel, and a
+      kernel row without weight is an undefined timepoint (NaN), not an
+      error: every prefix of a series can be computed.
 
     Parameters
     ----------
@@ -2252,8 +2365,8 @@ def wcorr(a, b, weights, *, causal=False, min_samples=None):
     Raises
     ------
     ValueError
-        If the inputs do not have T rows / T kernel columns, or if every row of
-        the kernel is zero.  With ``causal=True``: if the kernel has weight
+        If the inputs do not have T rows / T kernel columns, or (without
+        ``causal``) if every row of the kernel is zero.  With ``causal=True``: if the kernel has weight
         above its diagonal or is a delta kernel, or if ``min_samples`` is
         not None or a finite number >= 1.  If ``min_samples`` is given
         without ``causal=True``.

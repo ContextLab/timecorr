@@ -1,5 +1,5 @@
 pydata-wrangler
-hypertools>=0.8
+hypertools>=1.1
 numpy
 scipy
 scikit-learn

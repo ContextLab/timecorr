@@ -213,7 +213,7 @@ pip install --upgrade git+https://github.com/ContextLab/timecorr.git
 
 Python 3.10 or later. The toolbox is currently supported on Mac and Linux.  It has not been tested on Windows (and we expect key functionality not to work properly on Windows systems).
 
-Dependencies (installed by pip): pydata-wrangler, hypertools>=0.8, numpy, scipy, scikit-learn, pandas, matplotlib. Optional: polars (for polars DataFrame input); hmmlearn, used only by `tc.segment`, which installs it on demand the first time it is needed (the `segment` extra, `pip install "timecorr[segment]"`; setting `TIMECORR_AUTO_INSTALL=0` turns automatic installation off); and the `test`, `docs` (building the documentation) and `tutorials` (what the real-data tutorial notebooks import) extras (`pip install "timecorr[test]"`, `pip install "timecorr[docs]"`, `pip install "timecorr[tutorials]"`).
+Dependencies (installed by pip): pydata-wrangler, hypertools>=1.1, numpy, scipy, scikit-learn, pandas, matplotlib. Optional: polars (for polars DataFrame input); hmmlearn, used only by `tc.segment`, which installs it on demand the first time it is needed (the `segment` extra, `pip install "timecorr[segment]"`; setting `TIMECORR_AUTO_INSTALL=0` turns automatic installation off); and the `test`, `docs` (building the documentation) and `tutorials` (what the real-data tutorial notebooks import) extras (`pip install "timecorr[test]"`, `pip install "timecorr[docs]"`, `pip install "timecorr[tutorials]"`).
 
 # Citing this toolbox
 

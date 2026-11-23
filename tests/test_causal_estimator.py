@@ -795,3 +795,135 @@ def test_new_arguments_are_keyword_only():
         tc.isfc(X, w, True)
     with pytest.raises(TypeError):
         tc.wisfc(X, w, 1.0, True)
+
+
+# ----------------------------------------------------------------------------
+# the arithmetic of row t does not depend on later rows
+# ----------------------------------------------------------------------------
+
+
+def _level_step(where, seed=0, n=120, K=3, step=1e4):
+    """Rows before ``where`` (at least the first) near 0, the others near ``step``."""
+    x = np.random.default_rng(seed).normal(size=(n, K))
+    if where == 0:
+        x[0] = 0
+        x[1:] += step
+    else:
+        x[where:] += step
+    return x
+
+
+# Removing later rows changes the shapes of the estimator's sums, so their
+# round-off: an entry then moves by about eps times its condition number,
+# (distance of the samples from the centering reference of the chunk of
+# kernel rows / their spread)**2.  After a step of 1e4 standard deviations
+# inside a chunk that is 1e8 eps (measured: up to 1.6e-7); after a step of
+# 100, 1e4 eps (measured: 2.5e-11).  Replacing later rows changes no shape and no bit.
+REMOVE_ATOL = {1e2: ATOL, 1e4: 1e-6}
+
+
+def test_a_later_nan_does_not_change_an_ill_conditioned_row():
+    # the case that showed two arithmetic paths: a chunk of kernel rows took
+    # the path for NaN samples when any of its rows had one
+    x = _level_step(0)
+    y = x.copy()
+    y[100:] = np.nan
+    w = tc.gaussian_weights(120, {"var": 25}, direction="backward")
+    a = _quiet(tc.wcorr, x, x, w, causal=True)
+    b = _quiet(tc.wcorr, y, y, w, causal=True)
+    assert np.array_equal(a[:, :, :100], b[:, :, :100], equal_nan=True)
+    # without the diagonal, row 40 as NaN changes no row up to 40
+    y = x.copy()
+    y[40] = np.nan
+    kw = dict(causal=True, cfun=tc.autofc, weights_params={"var": 25},
+              include_zero=False)
+    assert np.array_equal(_quiet(tc.timecorr, x, **kw)[:41],
+                          _quiet(tc.timecorr, y, **kw)[:41], equal_nan=True)
+
+
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("include_zero", [True, False])
+@pytest.mark.parametrize("where", [0, 60, 150])
+@pytest.mark.parametrize("case", ["autofc", "isfc-null", "wisfc-corrmean", "smooth"])
+@pytest.mark.parametrize("missing", [False, True])
+@pytest.mark.parametrize("step", [1e2, 1e4])
+def test_rows_of_a_level_step_do_not_depend_on_later_rows(case, where, include_zero,
+                                                          mode, missing, step):
+    data = [_level_step(where, seed=s, n=T, K=4, step=step)
+            for s in range(CASES[case][1])]
+    if missing:
+        for s, x in enumerate(data):
+            x[np.random.default_rng(50 + s).random(x.shape) < 0.01] = np.nan
+    full = _call(data, case, "gaussian", include_zero)
+    rng = np.random.default_rng(31)
+    for n in (1, 2, 3, 40, 61, 100, 127, 128, 129, 151, 200, 257, 299):
+        part = _call([_perturb(x, n, mode, rng) for x in data], case, "gaussian",
+                     include_zero)
+        rows = n if include_zero or mode == "remove" else n + 1
+        if mode == "remove":
+            worst = _max_difference(full, part, rows)
+            assert worst <= REMOVE_ATOL[step]
+        else:
+            # replacement changes no bit of an earlier row
+            for f, p in zip(_as_list(full), _as_list(part)):
+                assert np.array_equal(np.asarray(f)[:rows], np.asarray(p)[:rows],
+                                      equal_nan=True)
+
+
+@pytest.mark.parametrize("kernel", sorted(KERNELS))
+@pytest.mark.parametrize("include_zero", [True, False])
+@pytest.mark.parametrize("case", sorted(CASES))
+def test_replacing_later_rows_with_nan_or_inf_changes_no_bit(case, include_zero, kernel):
+    data = _subjects(CASES[case][1])
+    full = _call(data, case, kernel, include_zero)
+    rng = np.random.default_rng(19)
+    for mode in ("nan", "inf"):
+        for n in CUTS:
+            part = _call([_perturb(x, n, mode, rng) for x in data], case, kernel,
+                         include_zero)
+            rows = n if include_zero else n + 1
+            for f, p in zip(_as_list(full), _as_list(part)):
+                assert np.array_equal(np.asarray(f)[:rows], np.asarray(p)[:rows],
+                                      equal_nan=True)
+
+
+# ----------------------------------------------------------------------------
+# every prefix of a series runs
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("kernel", sorted(KERNELS))
+@pytest.mark.parametrize("include_zero", [True, False])
+@pytest.mark.parametrize("case", sorted(CASES))
+def test_every_prefix_runs_and_equals_the_first_rows(case, include_zero, kernel):
+    data = _subjects(CASES[case][1], seed=60)
+    full = _call(data, case, kernel, include_zero)
+    for n in list(range(1, 13)) + [40, 128, 129, 200]:
+        part = _call([x[:n] for x in data], case, kernel, include_zero)
+        assert all(np.asarray(p).shape[0] == n for p in _as_list(part))
+        assert _max_difference(full, part, n) <= ATOL
+    one = _as_list(_call([x[:1] for x in data], case, kernel, include_zero))
+    if CASES[case][0] is not None:
+        assert all(np.isnan(p).all() for p in one)
+
+
+def test_one_row_of_a_wide_kernel_is_not_a_delta_kernel():
+    x = np.random.default_rng(70).standard_normal((30, 3))
+    # as arrays and through the correlation functions
+    for n in (1, 2, 3):
+        w = tc.gaussian_weights(n, {"var": 25}, direction="backward")
+        assert np.isnan(_quiet(tc.wcorr, x[:n], x[:n], w, causal=True)[:, :, :2]).all()
+        assert np.isnan(_quiet(tc.autofc, x[:n], w, causal=True)[:2]).all()
+        assert np.isnan(_quiet(tc.isfc, [x[:n], x[:n] + 1], w, causal=True)[0][:2]).all()
+        w0 = tc.gaussian_weights(n, {"var": 25}, direction="backward",
+                                 include_zero=False)
+        assert np.isnan(_quiet(tc.wcorr, x[:n], x[:n], w0, causal=True)).all()
+    # kernels that are delta kernels at every length still raise
+    with pytest.raises(ValueError, match="delta"):
+        tc.timecorr(x, causal=True, cfun=tc.autofc, weights_function=tc.boxcar_weights,
+                    weights_params={"width": 1})
+    with pytest.raises(ValueError, match="delta"):
+        tc.timecorr(x[:1], causal=True, cfun=tc.autofc,
+                    weights_function=tc.boxcar_weights, weights_params={"width": 1})
+    with pytest.raises(ValueError, match="delta"):
+        tc.wcorr(x[:2], x[:2], np.eye(2), causal=True)

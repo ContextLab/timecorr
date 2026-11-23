@@ -26,6 +26,7 @@ from timecorr.higher_order import two_path_step
 
 from .test_causal_estimator import (
     _as_list,
+    _grid,
     _max_difference,
     _perturb,
     _quiet,
@@ -150,7 +151,10 @@ def _same_fits(a, b):
 # the guarantee
 # ----------------------------------------------------------------------------
 
-CASES = [(c, True) for c in sorted(CONFIGS)] + [(c, False) for c in WITHOUT_ZERO]
+# every configuration runs in every selection, those of WITHOUT_ZERO without
+# the diagonal; with it they are slow (other configurations have the diagonal)
+CASES = [pytest.param(c, True, marks=pytest.mark.slow if c in WITHOUT_ZERO else ())
+         for c in sorted(CONFIGS)] + [(c, False) for c in WITHOUT_ZERO]
 
 
 @pytest.mark.parametrize("config,include_zero", CASES)
@@ -609,9 +613,8 @@ TIMECORR_REDUCERS = {
 }
 
 
-@pytest.mark.parametrize("include_zero", [True, False])
-@pytest.mark.parametrize("reducer", sorted(TIMECORR_REDUCERS))
-@pytest.mark.parametrize("subjects", [1, 3])
+@pytest.mark.parametrize("subjects,reducer,include_zero", _grid(
+    [1, 3], sorted(TIMECORR_REDUCERS), [True, False]))
 def test_timecorr_fits_its_reducer_on_the_first_rows(subjects, reducer, include_zero):
     data = [_series(70 + s, n=T, K=5) for s in range(subjects)]
     data = data[0] if subjects == 1 else data

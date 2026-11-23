@@ -57,9 +57,14 @@ CONFIGS = {
 }
 # no rule changes a fit: nothing is matched, no structure is carried over
 EXACT = ["strength", "strength-isfc", "split", "mixed"]
-GUARANTEED = [("auto", True), ("auto", False), ("auto-isfc", True),
-              ("pca", True), ("pca", False), ("pca-subjects", True),
-              ("strength", True), ("strength", False), ("strength-isfc", False)]
+# (every configuration, and both values of include_zero, run in every
+# selection; the second value of three configurations is slow)
+_SLOW = pytest.mark.slow
+GUARANTEED = [pytest.param("auto", True, marks=_SLOW), ("auto", False),
+              ("auto-isfc", True), ("pca", True),
+              pytest.param("pca", False, marks=_SLOW), ("pca-subjects", True),
+              pytest.param("strength", True, marks=_SLOW), ("strength", False),
+              ("strength-isfc", False)]
 
 
 def _data(config, seed=0, n=T):

@@ -11,6 +11,7 @@ random walk and NaN samples.  Real computations; nothing is mocked.
 """
 
 import functools
+import itertools
 import re
 import warnings
 
@@ -49,6 +50,63 @@ CASES = {
     "smooth-subjects": (None, 3, tc.null_combine),
 }
 MODES = ("finite", "nan", "inf", "remove")
+
+
+def _grid(*factors, pairs=True, keep=None):
+    """
+    One ``pytest.param`` for every combination of the levels of ``factors``
+    (lists, in the order of the test's arguments), for
+    ``pytest.mark.parametrize``.  A covering subset runs in every selection:
+    with ``pairs``, every pair of levels of two factors is in one of its
+    combinations; without, every level of every factor.  So do the
+    combinations for which ``keep(*levels)`` is true (those that have found
+    a defect).  The others are marked ``slow``: the whole grid runs with
+    ``-m slow`` added, and no combination is left out.
+
+    The subset is chosen greedily and deterministically: the combination
+    that adds the most uncovered pairs (or levels), then the one whose
+    levels were chosen least often, then the first in the order of
+    ``itertools.product``.
+    """
+    size = 2 if pairs and len(factors) > 1 else 1
+    places = list(itertools.combinations(range(len(factors)), size))
+    combos = list(itertools.product(*[range(len(f)) for f in factors]))
+    covers = [{(p, tuple(c[i] for i in p)) for p in places} for c in combos]
+    missing = set().union(*covers)
+    used = [[0] * len(f) for f in factors]
+    chosen = set()
+    while missing:
+        best = max(
+            (j for j in range(len(combos)) if j not in chosen),
+            key=lambda j: (len(covers[j] & missing),
+                           -sum(used[i][level] for i, level in enumerate(combos[j]))))
+        chosen.add(best)
+        missing -= covers[best]
+        for i, level in enumerate(combos[best]):
+            used[i][level] += 1
+    params = []
+    for j, c in enumerate(combos):
+        levels = [f[i] for f, i in zip(factors, c)]
+        fast = j in chosen or (keep is not None and keep(*levels))
+        params.append(pytest.param(*levels, marks=() if fast else pytest.mark.slow))
+    return params
+
+
+def test_grid_keeps_every_combination_and_covers_every_pair():
+    factors = (["a", "b", "c"], [True, False], [1, 2, 3, 4])
+    for pairs in (True, False):
+        params = _grid(*factors, pairs=pairs, keep=lambda x, y, z: x == "c" and z == 4)
+        assert [p.values for p in params] == list(itertools.product(*factors))
+        fast = [p.values for p in params if not p.marks]
+        assert all([m.name for m in p.marks] in ([], ["slow"]) for p in params)
+        assert 0 < len(fast) < len(params)
+        assert ("c", True, 4) in fast and ("c", False, 4) in fast
+        for i, j in ((0, 1), (0, 2), (1, 2)) if pairs else ():
+            assert ({(v[i], v[j]) for v in fast}
+                    == set(itertools.product(factors[i], factors[j])))
+        for i, f in enumerate(factors):
+            assert {v[i] for v in fast} == set(f)
+    assert len([p for p in _grid(*factors, pairs=False) if not p.marks]) == 4
 
 
 def _quiet(f, *args, **kwargs):
@@ -117,10 +175,8 @@ def _max_difference(full, part, rows):
 # ----------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("kernel", sorted(KERNELS))
-@pytest.mark.parametrize("include_zero", [True, False])
-@pytest.mark.parametrize("case", sorted(CASES))
+@pytest.mark.parametrize("case,include_zero,kernel,mode", _grid(
+    sorted(CASES), [True, False], sorted(KERNELS), MODES))
 def test_rows_do_not_depend_on_later_rows(case, include_zero, kernel, mode):
     data = _subjects(CASES[case][1])
     full = _call(data, case, kernel, include_zero)
@@ -134,10 +190,9 @@ def test_rows_do_not_depend_on_later_rows(case, include_zero, kernel, mode):
     assert defined > 0  # the comparison is not between NaN rows only
 
 
-@pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("kernel", sorted(KERNELS))
-@pytest.mark.parametrize("include_zero", [True, False])
-@pytest.mark.parametrize("case", ["autofc", "isfc-null", "wisfc-corrmean", "smooth"])
+@pytest.mark.parametrize("case,include_zero,kernel,mode", _grid(
+    ["autofc", "isfc-null", "wisfc-corrmean", "smooth"], [True, False],
+    sorted(KERNELS), MODES))
 def test_rows_do_not_depend_on_later_rows_with_min_samples(case, include_zero, kernel,
                                                            mode):
     min_samples = KERNELS[kernel][2]
@@ -164,11 +219,9 @@ def test_rows_do_not_depend_on_later_rows_with_min_samples(case, include_zero, k
                                       equal_nan=True)
 
 
-@pytest.mark.parametrize("missing", [0, 0.002])
-@pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("kernel", sorted(KERNELS))
-@pytest.mark.parametrize("include_zero", [True, False])
-@pytest.mark.parametrize("case", ["autofc", "isfc-corrmean", "wisfc-null", "smooth"])
+@pytest.mark.parametrize("case,include_zero,kernel,mode,missing", _grid(
+    ["autofc", "isfc-corrmean", "wisfc-null", "smooth"], [True, False],
+    sorted(KERNELS), MODES, [0, 0.002]))
 def test_rows_do_not_depend_on_later_rows_with_few_missing_samples(
         case, include_zero, kernel, mode, missing):
     # without NaN samples (and with NaN samples in some chunks of kernel rows
@@ -186,9 +239,8 @@ def test_rows_do_not_depend_on_later_rows_with_few_missing_samples(
     assert not np.isnan(np.asarray(_as_list(full)[0])[20:]).any()
 
 
-@pytest.mark.parametrize("mode", ["finite", "nan", "inf"])
-@pytest.mark.parametrize("kernel", sorted(KERNELS))
-@pytest.mark.parametrize("case", sorted(CASES))
+@pytest.mark.parametrize("case,kernel,mode", _grid(
+    sorted(CASES), sorted(KERNELS), ["finite", "nan", "inf"]))
 def test_without_the_diagonal_row_t_does_not_depend_on_row_t(case, kernel, mode):
     data = _subjects(CASES[case][1])
     full = _call(data, case, kernel, include_zero=False)
@@ -200,9 +252,8 @@ def test_without_the_diagonal_row_t_does_not_depend_on_row_t(case, kernel, mode)
         assert _max_difference(full, part, n + 1) <= ATOL
 
 
-@pytest.mark.parametrize("kernel", sorted(KERNELS))
-@pytest.mark.parametrize("include_zero", [True, False])
-@pytest.mark.parametrize("case", sorted(CASES))
+@pytest.mark.parametrize("case,include_zero,kernel", _grid(
+    sorted(CASES), [True, False], sorted(KERNELS)))
 def test_replacing_later_rows_with_finite_values_changes_no_bit(case, include_zero,
                                                                kernel):
     data = _subjects(CASES[case][1])
@@ -937,12 +988,14 @@ def test_a_later_nan_does_not_change_an_ill_conditioned_row():
                           _quiet(tc.timecorr, y, **kw)[:41], equal_nan=True)
 
 
-@pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("include_zero", [True, False])
-@pytest.mark.parametrize("where", [0, 60, 150])
-@pytest.mark.parametrize("case", ["autofc", "isfc-null", "wisfc-corrmean", "smooth"])
-@pytest.mark.parametrize("missing", [False, True])
-@pytest.mark.parametrize("step", [1e4, 1e8])
+# (the cases that showed the defects, a step of 1e4 at the first row and
+# mid-series under every perturbation, with and without the diagonal, run in
+# every selection)
+@pytest.mark.parametrize("case,where,include_zero,mode,missing,step", _grid(
+    ["autofc", "isfc-null", "wisfc-corrmean", "smooth"], [0, 60, 150], [True, False],
+    MODES, [False, True], [1e4, 1e8],
+    keep=lambda case, where, include_zero, mode, missing, step: (
+        step == 1e4 and not missing and case in ("autofc", "smooth"))))
 def test_rows_of_a_level_step_do_not_depend_on_later_rows(case, where, include_zero,
                                                           mode, missing, step):
     data = [_level_step(where, seed=s, n=T, K=4, step=step)
@@ -967,9 +1020,8 @@ def test_rows_of_a_level_step_do_not_depend_on_later_rows(case, where, include_z
                                       equal_nan=True)
 
 
-@pytest.mark.parametrize("kernel", sorted(KERNELS))
-@pytest.mark.parametrize("include_zero", [True, False])
-@pytest.mark.parametrize("case", sorted(CASES))
+@pytest.mark.parametrize("case,include_zero,kernel", _grid(
+    sorted(CASES), [True, False], sorted(KERNELS)))
 def test_replacing_later_rows_with_nan_or_inf_changes_no_bit(case, include_zero, kernel):
     data = _subjects(CASES[case][1])
     full = _call(data, case, kernel, include_zero)

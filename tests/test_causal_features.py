@@ -24,6 +24,7 @@ from .test_causal_estimator import (
     SUBJECT_WEIGHTS,
     _as_list,
     _expected_undefined,
+    _grid,
     _max_difference,
     _perturb,
     _quiet,
@@ -261,9 +262,9 @@ def _defined_rows(out):
     return int(np.sum(~np.isnan(np.asarray(_as_list(out)[0])).all(axis=1)))
 
 
-@pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("include_zero", [True, False])
-@pytest.mark.parametrize("config", sorted(CONFIGS))
+@pytest.mark.parametrize("config,include_zero,mode", _grid(
+    sorted(CONFIGS), [True, False], MODES, pairs=False,
+    keep=lambda config, include_zero, mode: config == "strength"))
 def test_rows_do_not_depend_on_later_rows(config, include_zero, mode):
     data = _data(config)
     highest = CONFIGS[config][2]
@@ -282,10 +283,10 @@ def test_rows_do_not_depend_on_later_rows(config, include_zero, mode):
         assert _worst(full, part, rows, orders) <= atol
 
 
-@pytest.mark.parametrize("mode", ["finite", "nan", "inf"])
-@pytest.mark.parametrize("include_zero", [True, False])
-@pytest.mark.parametrize("config", ["unreduced", "strength", "eigenvector", "isfc",
-                                    "wisfc", "events", "min-samples"])
+@pytest.mark.parametrize("config,include_zero,mode", _grid(
+    ["unreduced", "strength", "eigenvector", "isfc", "wisfc", "events", "min-samples"],
+    [True, False], ["finite", "nan", "inf"], pairs=False,
+    keep=lambda config, include_zero, mode: config == "strength"))
 def test_replacing_later_rows_changes_no_bit(config, include_zero, mode):
     data = _data(config, seed=20)
     full = _run(data, config, include_zero=include_zero)
@@ -300,8 +301,7 @@ def test_replacing_later_rows_changes_no_bit(config, include_zero, mode):
                     assert np.array_equal(a[:rows], b[:rows], equal_nan=True)
 
 
-@pytest.mark.parametrize("mode", MODES)
-@pytest.mark.parametrize("include_zero", [True, False])
+@pytest.mark.parametrize("include_zero,mode", _grid([True, False], MODES, pairs=False))
 def test_order_four_unreduced(include_zero, mode):
     # 3 features: 6, 21, 231 and 26,796 columns at orders 1 to 4
     n = 150
@@ -769,6 +769,7 @@ def test_default_is_not_causal():
 # ----------------------------------------------------------------------------
 
 
+@pytest.mark.slow
 def test_order_three_of_5033_by_49_takes_seconds():
     x = np.random.default_rng(0).standard_normal((5033, 49))
     kw = dict(order=3, rfun="strength", delta_rfun="strength",

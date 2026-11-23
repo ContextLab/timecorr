@@ -213,7 +213,10 @@ inf included), and to 1e-9 when later rows are removed, for outputs that depend
 continuously on the correlations (no reduction, ``"strength"``, the summaries,
 and linear models such as PCA once fitted); the eigenvector-based graph
 measures (``"eigenvector_centrality"``, the PageRank measures) can differ by
-more under removal at a correlation matrix whose leading eigenvalues coincide.
+more under removal at a correlation matrix whose leading eigenvalues coincide,
+and the t statistics of ``tstat_combine`` where the subjects' correlations
+nearly coincide (always with two subjects and ``isfc``): they divide by the
+spread across subjects, and agree to about 1e-9 of their magnitude instead.
 With ``include_zero=False`` the row is also unchanged when row ``t`` itself
 changes. The calls without ``causal=True`` are not changed by it.
 
@@ -268,15 +271,22 @@ changes. The calls without ``causal=True`` are not changed by it.
   (``"UMAP"``, ``"KernelPCA"``, ``"Isomap"``, ``"MDS"``, ``"TSNE"``,
   ``"SpectralEmbedding"``, ``"LocallyLinearEmbedding"``). ``"PCA"`` is fitted with ``svd_solver="full"`` unless a model
   dict gives a solver. An output column of a model that is constant on the
-  training rows up to round-off is returned as its training mean at every row.
+  training rows up to round-off is frozen: at any row, a value within that
+  tolerance of the column's training mean is returned as exactly that mean,
+  and other values (rows that do vary along it) are returned as computed. A
+  model reads the rows without any missing value; a row with a NaN, as a
+  smoothed row (``cfun=None``) can be, is a row of NaN in its output.
   Summary columns that are constant up to round-off are not set to their means,
   and no warning reports them.
 - **Refits.** ``refit_every=m`` (``features``) fits the reducers again at rows
   ``n + j * m``, each time on all rows before; the rows from one fit to the
   next are those of a call with that fit alone. The widths, the number of
   communities and the choice of an automatic feeding step are those of the
-  first fit; a later fit that cannot have them is not used (the fit before
-  stays; ``"refit_kept_previous"`` of ``return_info`` lists its row). The
+  first fit (a communities step looks for its number of communities of 2 or
+  more nodes with the first fit's number of clusters and up to 5 more or
+  fewer); a later fit that cannot have them is not used (the fit before
+  stays; ``"refit_kept_previous"`` of ``return_info`` lists its row, and one
+  ``UserWarning`` names it). The
   components of a model and the communities of ``Communities`` are matched to
   those of the fit before.
 - **Not covered.** ``cfun=tc.wisfc`` raises ``ValueError`` (its default subject
@@ -284,7 +294,7 @@ changes. The calls without ``causal=True`` are not changed by it.
   subject_weights=...)`` is accepted); ``events`` must be boundaries (features
   to segment raise ``ValueError``), and that the boundaries are known at their
   own time is the caller's responsibility. A function of your own (``cfun``,
-  ``rfun``, ``delta_rfun``) is called as without ``causal``, with one
+  ``combine``, ``rfun``, ``delta_rfun``) is called as without ``causal``, with one
   ``UserWarning`` that the guarantee does not cover what it does. The decoders
   have no causal form.
 

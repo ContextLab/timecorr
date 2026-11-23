@@ -23,7 +23,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     changes the correlations by round-off, and the eigenvector-based graph
     measures (`"eigenvector_centrality"`, `"pagerank_centrality"`,
     `"pagerank_centrality_abs"`) can differ by more at a correlation matrix
-    whose leading eigenvalues coincide;
+    whose leading eigenvalues coincide, and the t statistics of
+    `tc.tstat_combine` where the subjects' correlations nearly coincide
+    (always with two subjects and `tc.isfc`): they divide by the spread
+    across subjects and agree to about 1e-9 of their magnitude instead (0.12
+    on 3.8e7 in the case measured; replacement changes no bit);
   - with `include_zero=False`, row `t` is also unchanged when row `t` itself
     changes;
   - with a fitted reducer (`fit_timepoints=n`, below) this holds for rows
@@ -74,7 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     the data are ignored); a kernel array, or a kernel function of your own,
     with weight above the diagonal; a reducer that is fitted to data without
     `fit_timepoints`;
-  - a function of your own as `cfun`, `rfun` or `delta_rfun` is called as
+  - a function of your own as `cfun`, `combine`, `rfun` or `delta_rfun` is called as
     without `causal`, with one `UserWarning` that the guarantee does not cover
     what it does (removal is not covered either for a kernel function of your
     own whose weights depend on the number of timepoints);
@@ -83,6 +87,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     includes the steps streamed with
     `functools.partial(tc.wisfc, subject_weights=...)`, which are streamed in
     causal mode only;
+  - without `max_memory_gb`, a streamed step reads every recording in the
+    blocks of one with NaN samples, so that NaN samples after a row change
+    no bit of it;
+  - `tc.timecorr(..., causal=True, cfun=None)` (smoothing) does not use
+    `rfun`, as without `causal`, and asks for no `fit_timepoints`;
   - the decoders have no causal mode.
 - `fit_timepoints=n` (keyword-only; `timecorr`, `features`, `two_path_step`;
   needs `causal=True`): every reducer that is fitted to data is fitted on rows
@@ -93,6 +102,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   strength on those rows. None and the graph measures need no fit. The fits
   of a series and of a longer series with the same first `n` rows are equal
   bit for bit.
+  - A model is fitted on, and applied to, the rows without any missing value:
+    a row with a NaN (a smoothed row of `cfun=None` in `features` can have
+    some) is a row of NaN in its output. (hypertools fills missing values in
+    from every row it is given.)
   - A model must be a linear map applied to each row by itself. The guarantee
     covers `"PCA"`, `"IncrementalPCA"`, `"TruncatedSVD"`, `"FastICA"` and
     `"FactorAnalysis"` (scikit-learn's classes of those names, by exact

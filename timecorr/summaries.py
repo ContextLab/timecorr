@@ -1395,7 +1395,12 @@ class _Units:
         if self.estimator:
             self.subjects = [_causal_clean(x) for x in self.subjects]
         self.undefined = [None] * len(self.subjects)
-        self.has_nan = any(bool(np.isnan(x).any()) for x in self.subjects)
+        # (decides the rows per block when no memory limit is given.  With
+        # the causal estimator every recording is read in the blocks of one
+        # with NaN samples: the round-off of a row depends on its block,
+        # and NaN samples after a row must not change a bit of it)
+        self.has_nan = bool(self.estimator) or any(
+            bool(np.isnan(x).any()) for x in self.subjects)
         S = len(self.subjects)
         if grouping is None:
             self.kernels, self.group_of = _subject_kernels(kernels, S)

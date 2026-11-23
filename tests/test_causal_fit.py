@@ -1158,3 +1158,28 @@ def test_a_model_reads_complete_rows_only():
     step = _quiet(two_path_step, x, cfun=None, rfun="PCA", delta_rfun=None, fit_timepoints=30,
                   delta_weights_params={"var": 25}, **kernel)[0]
     assert np.array_equal(step, out[1], equal_nan=True)
+
+
+# ----------------------------------------------------------------------------
+# later NaN samples and the blocks of a streamed summary (review, finding 3)
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("reducer", [tc.WeightedStrength, lambda: tc.Communities(n=4)],
+                         ids=["weighted-strength", "communities"])
+def test_later_nan_samples_do_not_change_the_blocks_of_a_streamed_summary(reducer):
+    # without max_memory_gb the rows per block followed from whether the
+    # whole recording holds a NaN sample, and the round-off of a row from
+    # its block: NaN samples after row t changed bits of row t
+    x = np.random.RandomState(0).randn(150, 100)
+    later = x.copy()
+    later[101:] = np.nan
+    kw = dict(order=1, causal=True, cfun=tc.autofc, rfun=reducer(), fit_timepoints=40,
+              max_memory_gb=None, weights_params={"var": 25},
+              delta_weights_params={"var": 25})
+    out, model = _quiet(tc.features, x, return_model=True, **kw)
+    changed = _quiet(tc.features, later, **kw)
+    assert np.array_equal(changed[1][:101], out[1][:101], equal_nan=True)
+    applied = [_quiet(model.transform, data)[1] for data in (x, later)]
+    assert np.array_equal(applied[0], out[1], equal_nan=True)
+    assert np.array_equal(applied[1][:101], applied[0][:101], equal_nan=True)

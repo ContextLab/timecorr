@@ -53,8 +53,8 @@ setup(
         # what the real-data tutorial notebooks import (htfa_network_animations,
         # stocks, trajectories); the other notebooks need only timecorr
         "tutorials": [
-            "htfa[plot,brain3d]>=0.1.0",
-            "hypertools>=1.1",
+            "htfa[plot,brain3d]>=0.2.0",
+            "hypertools>=1.2",
             "pyvista>=0.43",
             "imageio-ffmpeg",
             "pillow",

@@ -75,9 +75,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     {'bbox_inches': None}` (the same 600 x 450 picture as the PNG they wrote
     to a buffer before).
   - `htfa_network_animations`, `stocks` and `trajectories` load their data
-    with `tc.datasets`, write their videos with `tc.render_video` (frames in
-    a temporary folder; before: under `$TIMECORR_DATA`) into `tc.media_dir()`
-    and show them with `tc.show_video`. `stocks` keeps the two `Siccodes`
+    with `tc.datasets`, write their videos into `tc.media_dir()` and show
+    them with `tc.show_video`; `stocks` draws its frames with
+    `tc.render_video` (frames in a temporary folder; before: under
+    `$TIMECORR_DATA`). `stocks` keeps the two `Siccodes`
     text files of the library in the cache (before: their zip archives).
   - `htfa_network_animations` and `stocks` read the communities from the
     `"labels"` of `return_info` and no longer run `tc.features` a second
@@ -94,6 +95,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     header. Without one the documentation server answered HTTP 403, so the
     notebook reported that no full-quality video was online.
 
+- Tutorials on the toolboxes' own animation calls (the `tutorials` extra now
+  needs `htfa[plot,brain3d]>=0.2.0` and `hypertools>=1.2`):
+  `htfa_network_animations.ipynb` draws each video with one
+  `htfa.animate_network` call (per-node colors, per-frame radii, two views,
+  caption, legend rows, parallel frames) in place of its own scene, frame
+  composition and retry code; the brains are 8 to 10% larger in the frame, and
+  in the videos of orders 1 and 2 the edge legend sits one row lower.
+  `trajectories.ipynb` draws each video with one
+  `hyp.plot(..., panels=..., animate=True)` call; the videos show the line up
+  to the current sample faint and the last 30 samples solid, without the head
+  marker, the thicker tail and the one-second hold of the earlier videos, and
+  the notebook no longer filters hypertools' messages (fixed in hypertools
+  1.2).
 - Tutorial `docs/tutorial/trajectories.ipynb`: the trajectories are drawn in
   hypertools' own cubes with `hyp.plot(..., panels=...)`, after reducing each
   order to three dimensions with `hyp.reduce` and rescaling each component to

@@ -119,6 +119,8 @@ from .timecorr import (
     _needs_fit,
     _restricted,
     _shaped_kernel,
+    _uncovered_model,
+    _warn_uncovered_models,
     timecorr,
 )
 
@@ -1817,7 +1819,10 @@ def two_path_step(
         linear models such as PCA once fitted); the eigenvector-based
         graph measures (``"eigenvector_centrality"``, the PageRank
         measures) can differ by more at a correlation matrix whose leading
-        eigenvalues coincide.  Default: False.  With ``causal=True``:
+        eigenvalues coincide.  With ``cfun=None`` the steps smooth their
+        input, and smoothed values agree to round-off relative to the
+        magnitude of the data (see ``timecorr``).  Default: False.  With
+        ``causal=True``:
 
         - both paths use backward kernels (``include_timepoints`` may be
           left out; ``"forward"``/``"post"`` raises ``ValueError``), and
@@ -1838,7 +1843,8 @@ def two_path_step(
           ``"pagerank_centrality_abs"``) need no fit.  A function of your
           own (as ``cfun``, ``rfun`` or ``delta_rfun``) is called as
           without ``causal``, with one ``UserWarning`` that the guarantee
-          does not cover what it does;
+          does not cover what it does; so is a model outside the list
+          under ``fit_timepoints``, with one ``UserWarning`` of its own;
         - ``cfun=tc.wisfc`` raises ``ValueError`` (its default subject
           weights use the whole recording);
           ``functools.partial(tc.wisfc, subject_weights=...)`` is accepted;
@@ -1889,16 +1895,21 @@ def two_path_step(
         ``t`` are replaced or removed, and a row ``t < n`` (in sample: the
         fits have read rows after it) when rows from ``n`` on are replaced
         or removed.  ``n`` equal to the number of timepoints fits on every
-        row.  A model must be a linear map applied to each row by itself:
-        its fitted estimator has ``components_`` (``"PCA"``,
-        ``"IncrementalPCA"``, ``"TruncatedSVD"``, ``"FastICA"``,
-        ``"FactorAnalysis"``, ...), it reproduces its training rows to
-        1e-9, and it reduces rows one at a time as it reduces them
-        together; any other model raises ``ValueError`` (``"UMAP"``,
-        ``"KernelPCA"``, ``"Isomap"``, ``"MDS"``, ``"TSNE"``,
-        ``"SpectralEmbedding"``, ``"LocallyLinearEmbedding"``: the
-        transform of some of them depends on the rows it is given
-        together).  A model asked for as many components as its input
+        row.  A model must be a linear map applied to each row by itself.  The
+        guarantee covers ``"PCA"``, ``"IncrementalPCA"``, ``"TruncatedSVD"``,
+        ``"FastICA"`` and ``"FactorAnalysis"`` (scikit-learn's classes of those
+        names, by exact class: a subclass is not one).  Any other model whose
+        fitted estimator has ``components_``, reproduces its training rows to
+        1e-9 and reduces rows one at a time as it reduces them together
+        (``"MiniBatchDictionaryLearning"``, a class of your own) is used with
+        one ``UserWarning`` per call that the guarantee does not cover what its
+        transform does: those checks read a few training rows and cannot show
+        how it reduces later rows.  A model without ``components_``, or that
+        fails a check, raises ``ValueError`` (``"UMAP"``, ``"KernelPCA"``,
+        ``"Isomap"``, ``"MDS"``, ``"TSNE"``, ``"SpectralEmbedding"``,
+        ``"LocallyLinearEmbedding"``: the transform of some of them depends on
+        the rows it is given together).
+        A model asked for as many components as its input
         has columns, or more, changes nothing (zero columns are appended
         for the components beyond them), as without ``causal``.
         ``"PCA"`` is fitted with ``svd_solver="full"``
@@ -2426,6 +2437,11 @@ def _check_causal(*, function, include_timepoints, weights_function,
             "own; the guarantee that row t does not depend on later rows does "
             f"not cover what {'it does' if one else 'they do'}."
         )
+    _warn_uncovered_models([
+        (_uncovered_model(resolved[k]), f"{name} at order {k}")
+        for name, resolved in (("rfun", analysis_rfun), ("delta_rfun", feeding_rfun))
+        for k in sorted(resolved)
+    ])
 
 
 def _check_refit_every(refit_every, causal, fit_timepoints):
@@ -2930,7 +2946,10 @@ def features(
         linear models such as PCA once fitted); the eigenvector-based
         graph measures (``"eigenvector_centrality"``, the PageRank
         measures) can differ by more at a correlation matrix whose leading
-        eigenvalues coincide.  Default: False.  With ``causal=True``:
+        eigenvalues coincide.  With ``cfun=None`` the steps smooth their
+        input, and smoothed values agree to round-off relative to the
+        magnitude of the data (see ``timecorr``).  Default: False.  With
+        ``causal=True``:
 
         - both paths use backward kernels (``include_timepoints`` may be
           left out; ``"forward"``/``"post"`` raises ``ValueError``), and
@@ -2951,7 +2970,8 @@ def features(
           ``"pagerank_centrality_abs"``) need no fit.  A function of your
           own (as ``cfun``, ``rfun`` or ``delta_rfun``) is called as
           without ``causal``, with one ``UserWarning`` that the guarantee
-          does not cover what it does;
+          does not cover what it does; so is a model outside the list
+          under ``fit_timepoints``, with one ``UserWarning`` of its own;
         - ``cfun=tc.wisfc`` raises ``ValueError`` (its default subject
           weights use the whole recording);
           ``functools.partial(tc.wisfc, subject_weights=...)`` is accepted;
@@ -3002,16 +3022,21 @@ def features(
         ``t`` are replaced or removed, and a row ``t < n`` (in sample: the
         fits have read rows after it) when rows from ``n`` on are replaced
         or removed.  ``n`` equal to the number of timepoints fits on every
-        row.  A model must be a linear map applied to each row by itself:
-        its fitted estimator has ``components_`` (``"PCA"``,
-        ``"IncrementalPCA"``, ``"TruncatedSVD"``, ``"FastICA"``,
-        ``"FactorAnalysis"``, ...), it reproduces its training rows to
-        1e-9, and it reduces rows one at a time as it reduces them
-        together; any other model raises ``ValueError`` (``"UMAP"``,
-        ``"KernelPCA"``, ``"Isomap"``, ``"MDS"``, ``"TSNE"``,
-        ``"SpectralEmbedding"``, ``"LocallyLinearEmbedding"``: the
-        transform of some of them depends on the rows it is given
-        together).  A model asked for as many components as its input
+        row.  A model must be a linear map applied to each row by itself.  The
+        guarantee covers ``"PCA"``, ``"IncrementalPCA"``, ``"TruncatedSVD"``,
+        ``"FastICA"`` and ``"FactorAnalysis"`` (scikit-learn's classes of those
+        names, by exact class: a subclass is not one).  Any other model whose
+        fitted estimator has ``components_``, reproduces its training rows to
+        1e-9 and reduces rows one at a time as it reduces them together
+        (``"MiniBatchDictionaryLearning"``, a class of your own) is used with
+        one ``UserWarning`` per call that the guarantee does not cover what its
+        transform does: those checks read a few training rows and cannot show
+        how it reduces later rows.  A model without ``components_``, or that
+        fails a check, raises ``ValueError`` (``"UMAP"``, ``"KernelPCA"``,
+        ``"Isomap"``, ``"MDS"``, ``"TSNE"``, ``"SpectralEmbedding"``,
+        ``"LocallyLinearEmbedding"``: the transform of some of them depends on
+        the rows it is given together).
+        A model asked for as many components as its input
         has columns, or more, changes nothing (zero columns are appended
         for the components beyond them), as without ``causal``.
         ``"PCA"`` is fitted with ``svd_solver="full"``

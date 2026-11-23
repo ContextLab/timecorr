@@ -353,6 +353,34 @@ def test_smoothing_agrees_with_the_backward_kernel_of_causal_false():
     assert np.max(np.abs(causal[defined] - plain[defined])) <= 1e-12
 
 
+def test_smoothed_values_agree_to_round_off_of_the_magnitude_of_the_data():
+    # smoothing returns values on the scale of the data: at a level of 1e8
+    # (values spaced 1.5e-8 apart) an absolute 1e-9 cannot hold.  Each chunk
+    # of rows is centered on a mean of earlier samples, so the sums are
+    # exact to the round-off of the variation: removal changed these rows by
+    # 2 units in the last place before, and changes them by at most 1 now
+    x = np.random.default_rng(0).normal(size=(300, 2)) + 1e8
+    kw = dict(causal=True, cfun=None, weights_params={"var": 25})
+    full = _quiet(tc.timecorr, x, **kw)
+    assert np.spacing(1e8) > ATOL
+    for n in (1, 2, 3, 40, 61, 127, 128, 129, 200, 257, 299):
+        assert _max_difference(full, _quiet(tc.timecorr, x[:n], **kw), n) <= np.spacing(1e8)
+    rng = np.random.default_rng(1)
+    for mode in ("finite", "nan", "inf"):
+        for n in (61, 128, 200):
+            part = _quiet(tc.timecorr, _perturb(x, n, mode, rng), **kw)
+            assert np.array_equal(full[:n], part[:n], equal_nan=True)
+    # the smoothed variation is that of the series without its level
+    plain = _quiet(tc.timecorr, x - 1e8, **kw)
+    assert np.nanmax(np.abs((full - 1e8) - plain)) <= np.spacing(1e8)
+    # what the documentation of ``causal`` states is what the tests allow
+    # (test_rows_of_a_level_step_do_not_depend_on_later_rows: 8 units)
+    doc = " ".join(tc.timecorr.__doc__.split())
+    assert ("to 1e-9 or 8 units in the last place of the largest magnitude of the "
+            "data, whichever is larger") in doc
+    assert 8 * np.spacing(1e8) < 1.2e-7
+
+
 def test_default_is_not_causal():
     x = np.random.default_rng(2).standard_normal((80, 4))
     kw = dict(cfun=tc.autofc, weights_params={"var": 20})
@@ -1010,7 +1038,8 @@ def test_rows_of_a_level_step_do_not_depend_on_later_rows(case, where, include_z
                      include_zero)
         rows = n if include_zero or mode == "remove" else n + 1
         if mode == "remove":
-            # (smoothed values are as large as the step: a few of their ulps)
+            # (smoothed values are as large as the step: a few of their
+            # ulps, the bound that the documentation of ``causal`` states)
             atol = max(ATOL, 8 * np.spacing(step)) if case == "smooth" else ATOL
             assert _max_difference(full, part, rows) <= atol
         else:

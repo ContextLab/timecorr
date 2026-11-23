@@ -255,6 +255,10 @@ def _match_model(new, previous, order, path):
     if np.array_equal(source, np.arange(c)) and np.all(signs > 0):
         return new
     matched = _FittedModel(new.model, new.n_features, new.pad)  # a copy
+    if matched.model is new.model:
+        # (a model that cannot be pickled, as one of a class defined in a
+        # function, was taken as it is: reorder a copy, not the fit itself)
+        matched.model = copy.deepcopy(new.model)
     estimator = matched.estimator
     fitted = np.asarray(estimator.components_)
     estimator.components_ = np.ascontiguousarray(signs[:, None] * fitted[source])
@@ -669,8 +673,9 @@ class FeaturesModel:
 
         Every row is computed causally, as by the ``features`` call that
         made the model: row ``t`` of every output uses rows ``0..t`` of
-        ``data`` and the frozen fits only, so it is unchanged (to 1e-9; see
-        ``features``) when later rows are replaced or removed, and
+        ``data`` and the frozen fits only, so it is unchanged (to 1e-9 for
+        features built from correlations; see ``features``) when later rows
+        are replaced or removed, and
         ``transform`` of the data of the fit returns what that call
         returned.
 

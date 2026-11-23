@@ -13,6 +13,7 @@ computations; nothing is mocked.
 
 import inspect
 import pickle
+import re
 import subprocess
 import sys
 import warnings
@@ -803,7 +804,100 @@ def test_a_model_whose_transform_is_not_row_by_row_raises():
                   rfun={"model": BatchCentered}).shape == (100, 4)
 
 
-@pytest.mark.parametrize("model", LINEAR)
+GUARANTEED_MODELS = LINEAR + ["FactorAnalysis"]
+NOT_COVERED = "causal=True: the model .* is not one of the models the guarantee covers"
+SOME_NOT_COVERED = "causal=True: the models .* not among the models the guarantee covers"
+
+
+def _model_warnings(f, *args, **kwargs):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = f(*args, **kwargs)
+    return out, [str(w.message) for w in caught
+                 if "the models the guarantee covers" in str(w.message)]
+
+
+def test_a_model_outside_the_list_runs_with_one_warning():
+    from sklearn.decomposition import PCA
+
+    class BatchPCA(PCA):
+        """Passes every probe of the fit (they reduce training rows only)
+        and reads the rows it is given together when there are more."""
+
+        def transform(self, X):
+            out = super().transform(X)
+            if len(X) > self.n_samples_:
+                out -= out.mean(axis=0)
+            return out
+
+    class SamePCA(PCA):
+        """A subclass that changes nothing is still not the listed class."""
+
+    x = np.random.default_rng(61).standard_normal((100, 4))
+    kw = dict(causal=True, cfun=tc.autofc, fit_timepoints=40,
+              weights_params={"var": 25})
+    listed = ("PCA, IncrementalPCA, TruncatedSVD, FastICA and FactorAnalysis")
+    for model in (BatchPCA, SamePCA, "MiniBatchDictionaryLearning"):
+        out, messages = _model_warnings(tc.timecorr, x, rfun={"model": model}, **kw)
+        # (rows of BatchPCA may depend on later rows: that is what the
+        # warning says, and nothing is asserted about them)
+        assert out.shape == (100, 4)
+        assert len(messages) == 1
+        assert re.search(NOT_COVERED, messages[0]) and listed in messages[0]
+        assert getattr(model, "__name__", model) in messages[0]
+        assert "rfun" in messages[0]
+    # a model of another name that cannot reduce one row alone: no probe
+    # shows that it reduces rows one by one
+    with pytest.raises(ValueError, match="'SparsePCA'.*row by row.*one row alone"):
+        _quiet(tc.timecorr, x, rfun="SparsePCA", **kw)
+    # features and two_path_step: once for the call, whatever the number of
+    # orders, paths and fits
+    more = dict(delta_weights_params={"var": 16}, ndims=2, **kw)
+    # (a refit cannot match the components of BatchPCA to the fit before;
+    # those of SamePCA, a class that cannot be pickled, it reorders in a copy)
+    for first, extra in ((BatchPCA, {}), (SamePCA, {}), (SamePCA, {"refit_every": 20})):
+        out, messages = _model_warnings(
+            tc.features, x, order=2, rfun={"model": first},
+            delta_rfun={"model": SamePCA}, **more, **extra)
+        assert out[2].shape == (100, 2)
+        assert len(messages) == 1
+        assert re.search(SOME_NOT_COVERED if first is BatchPCA else NOT_COVERED,
+                         messages[0])
+        for name in (first.__name__, "SamePCA", "rfun at order 1",
+                     "delta_rfun at order 2"):
+            assert name in messages[0]
+    out, messages = _model_warnings(
+        two_path_step, x, rfun="PCA", delta_rfun={"model": BatchPCA}, **more)
+    assert len(messages) == 1 and "delta_rfun" in messages[0]
+    assert "(rfun" not in messages[0]
+    # without causal: no warning
+    assert _model_warnings(tc.timecorr, x, cfun=tc.autofc,
+                           rfun={"model": BatchPCA})[1] == []
+
+
+@pytest.mark.parametrize("model", GUARANTEED_MODELS)
+def test_the_listed_models_do_not_warn(model):
+    import sklearn.decomposition
+
+    cls = getattr(sklearn.decomposition, model)
+    x = np.random.default_rng(65).standard_normal((100, 4))
+    kw = dict(causal=True, cfun=tc.autofc, fit_timepoints=40,
+              weights_params={"var": 25})
+    for rfun in (model, {"model": model}, {"model": cls}):
+        assert _model_warnings(tc.timecorr, x, rfun=rfun, **kw)[1] == []
+    (out, fitted), messages = _model_warnings(
+        tc.features, x, order=2, rfun=model, delta_rfun={"model": model}, ndims=3,
+        delta_weights_params={"var": 16}, refit_every=30, return_model=True, **kw)
+    assert messages == []
+    # the list is of exact classes: what hypertools fits for these names
+    assert type(fitted.fits[(1, "analysis")].model_) is cls
+    for name in ("timecorr", "features", "two_path_step"):
+        doc = {"timecorr": tc.timecorr, "features": tc.features,
+               "two_path_step": two_path_step}[name].__doc__
+        assert f'``"{model}"``' in doc
+
+
+@pytest.mark.parametrize("model", GUARANTEED_MODELS)
 def test_linear_models_are_taken_and_guaranteed(model):
     x = np.random.default_rng(62).standard_normal((T, 5))
     kw = dict(order=2, causal=True, cfun=tc.autofc, rfun=model, delta_rfun=model,

@@ -51,7 +51,11 @@ def _causal_smooth(x, weights, min_samples):
     """
     ``_kernel_smooth`` for ``causal=True``: the same kernel-weighted means of
     a kernel without weight on later timepoints, each chunk of rows over the
-    columns where it has weight.  Infinite samples and samples above 1e150
+    columns where it has weight.  The samples of a chunk are centered on the
+    weighted mean of its first row (which weights no later sample) and the
+    mean is added back, so the round-off of the sums is relative to the
+    variation of the data in the chunk, not to its level; the values
+    themselves are still rounded at their own magnitude.  Infinite samples and samples above 1e150
     in magnitude are missing, like NaN.  An entry whose feature has no
     weighted sample or, with ``min_samples`` (not None), an effective sample
     size ``(sum |w|)**2 / sum w**2`` (over the feature's observed samples in
@@ -74,13 +78,22 @@ def _causal_smooth(x, weights, min_samples):
         with np.errstate(invalid="ignore"):
             w = np.divide(w, peak, out=np.zeros_like(w), where=peak != 0)
             den = w @ valid[c0:c1]
-            num = w @ observed[c0:c1]
             defined = den > 0
+            # the chunk's samples are centered on its first row's weighted
+            # mean (of samples that row weights: none after it), so the
+            # round-off of the sums is relative to the variation of the
+            # data, not to its level
+            first = np.zeros(den.shape[1])
+            np.divide(w[0] @ observed[c0:c1], den[0], out=first, where=defined[0])
+            centered = observed[c0:c1] - first
+            centered *= valid[c0:c1]
+            num = w @ centered
             if min_samples is not None:
                 ess = np.divide(den**2, (w * w) @ valid[c0:c1],
                                 out=np.zeros_like(den), where=defined)
                 defined &= ess >= min_samples * (1 - _MIN_SAMPLES_RTOL)
         np.divide(num, den, out=out[t0:t1], where=defined)
+        out[t0:t1] += first
     undefined = np.isnan(out).any(axis=1)
     if undefined.any():
         warnings.warn(
@@ -443,8 +456,16 @@ def _fit_reducer(corrs, rfun, ndims=None, *, order=None, path=None, append_fit=F
         )
     # each row alone, and in other company: the same output
     few, batch = np.vstack(rows)[:4], np.vstack(again)[:4]
-    alone = np.vstack([fitted.apply([few[i:i + 1]])[0] for i in range(len(few))])
-    turned = np.vstack(fitted.apply([few[1:], few[:1]])[::-1])
+    try:
+        alone = np.vstack([fitted.apply([few[i:i + 1]])[0] for i in range(len(few))])
+        turned = np.vstack(fitted.apply([few[1:], few[:1]])[::-1])
+    except Exception as err:
+        raise ValueError(
+            f"causal=True: the model {label!r} ({where}) does not reduce its "
+            f"rows row by row: it cannot reduce one row alone ({err}), so "
+            "nothing shows that a row does not depend on the rows after it.  "
+            + _LINEAR_MODELS
+        ) from err
     worst = max(float(np.max(np.abs(other - batch), initial=0.0))
                 for other in (alone, turned))
     if not worst <= _REFIT_ATOL * scale:
@@ -463,8 +484,70 @@ def _fit_reducer(corrs, rfun, ndims=None, *, order=None, path=None, append_fit=F
 _LINEAR_MODELS = (
     "Use a model that is a linear map of the correlations of a row, with "
     "components_: 'PCA', 'IncrementalPCA', 'TruncatedSVD', 'FastICA' or "
-    "'FactorAnalysis'; or a summary such as 'weighted_strength'."
+    "'FactorAnalysis' (the models the guarantee covers); or a summary such "
+    "as 'weighted_strength'."
 )
+
+
+# the models the causal guarantee covers: scikit-learn's classes of these
+# names, which hypertools fits for them.  Their ``transform`` is a fixed
+# linear map of each row.  A fitted estimator is one of them by its exact
+# class: a subclass can pass every probe of ``_fit_reducer`` (they reduce
+# training rows only) and still reduce a row differently with later rows.
+_GUARANTEED_MODELS = ("PCA", "IncrementalPCA", "TruncatedSVD", "FastICA",
+                      "FactorAnalysis")
+_GUARANTEED_TEXT = (
+    f"scikit-learn's {', '.join(_GUARANTEED_MODELS[:-1])} and "
+    f"{_GUARANTEED_MODELS[-1]}, by exact class: a subclass is not one"
+)
+
+
+def _uncovered_model(rfun):
+    """
+    The label of a model reducer (a name or a dict) that is not one of
+    ``_GUARANTEED_MODELS``: another name, or a class or object that is not
+    exactly one of those scikit-learn classes.  None for a model of the
+    list and for a reducer that is not a model.
+    """
+    if not _is_model(rfun):
+        return None
+    model = rfun.get("model") if isinstance(rfun, dict) else rfun
+    if isinstance(model, str):
+        covered = model in _GUARANTEED_MODELS
+    else:
+        import sklearn.decomposition
+
+        classes = [getattr(sklearn.decomposition, name) for name in _GUARANTEED_MODELS]
+        cls = model if isinstance(model, type) else type(model)
+        covered = any(cls is c for c in classes)
+    return None if covered else _model_label(rfun)
+
+
+def _warn_uncovered_models(found):
+    """
+    One ``UserWarning`` for the models of a causal call that are outside
+    ``_GUARANTEED_MODELS``: ``found`` is a list of ``(label, where)``, as
+    ``(_uncovered_model(rfun), "rfun at order 1")``; entries with a label
+    of None are models of the list.  Such a model is used when it passes
+    the probes of ``_fit_reducer``, like a function of the user's.
+    """
+    places = {}
+    for label, where in found:
+        if label is not None:
+            places.setdefault(label, []).append(where)
+    if not places:
+        return
+    named = [f"{label!r} ({', '.join(where)})" for label, where in places.items()]
+    one = len(named) == 1
+    _warn_user(
+        f"causal=True: the model{'' if one else 's'} "
+        f"{', '.join(named[:-1])}{'' if one else ' and '}{named[-1]} "
+        f"{'is not one of' if one else 'are not among'} the models the guarantee "
+        f"covers ({_GUARANTEED_TEXT}).  "
+        f"{'It is' if one else 'They are'} used as given: the guarantee that row "
+        "t does not depend on later rows does not cover what "
+        f"{'its transform does' if one else 'their transforms do'}."
+    )
 
 
 def _model_label(rfun):
@@ -611,6 +694,7 @@ def _causal_arguments(weights_function, weights_params, include_timepoints, cfun
             "not cover what "
             f"{'it does' if len(theirs) == 1 else 'they do'}."
         )
+    _warn_uncovered_models([(_uncovered_model(rfun), "rfun")])
     return include_timepoints, cfun
 
 
@@ -784,8 +868,13 @@ def timecorr(
         linear models such as PCA once fitted); the eigenvector-based
         graph measures (``"eigenvector_centrality"``, the PageRank
         measures) can differ by more at a correlation matrix whose leading
-        eigenvalues coincide.  Keyword only.  Default: False.  With
-        ``causal=True``:
+        eigenvalues coincide.  Smoothed values (``cfun=None``) are on the
+        scale of the data, not bounded like correlations: when later rows
+        are removed they agree to round-off relative to the magnitude of
+        the data, that is to 1e-9 or 8 units in the last place of the
+        largest magnitude of the data, whichever is larger (1.2e-7 for
+        data near 1e8); replacement still changes no bit.  Keyword only.
+        Default: False.  With ``causal=True``:
 
         - the kernel is backward: ``include_timepoints`` 'all' (the
           default) means 'backward', and 'forward' / 'post' raise
@@ -801,7 +890,8 @@ def timecorr(
           timepoint, so ``cfun=tc.wisfc`` raises ``ValueError``).  Any
           other function is called as without ``causal``, with a
           ``UserWarning`` that the guarantee does not cover it; the same
-          holds for a callable ``rfun``;
+          holds for a callable ``rfun``, and for a model outside the list
+          under ``fit_timepoints``;
         - ``events`` must be boundaries; features to segment raise
           ``ValueError``.  That the boundaries themselves were chosen
           without later data is the caller's responsibility.  The warm-up
@@ -855,16 +945,21 @@ def timecorr(
         unchanged (to 1e-9; bit for bit under replacement) when rows after
         ``t`` are replaced or removed, and a row ``t < n`` when rows from
         ``n`` on are.  ``n`` equal to the number of timepoints fits on
-        every row.  A model must be a linear map applied to each row by itself:
-        its fitted estimator has ``components_`` (``"PCA"``,
-        ``"IncrementalPCA"``, ``"TruncatedSVD"``, ``"FastICA"``,
-        ``"FactorAnalysis"``, ...), it reproduces its training rows to
-        1e-9, and it reduces rows one at a time as it reduces them
-        together; any other model raises ``ValueError`` (``"UMAP"``,
-        ``"KernelPCA"``, ``"Isomap"``, ``"MDS"``, ``"TSNE"``,
-        ``"SpectralEmbedding"``, ``"LocallyLinearEmbedding"``: the
-        transform of some of them depends on the rows it is given
-        together).  A model asked for as many components as its input
+        every row.  A model must be a linear map applied to each row by itself.
+        The guarantee covers ``"PCA"``, ``"IncrementalPCA"``,
+        ``"TruncatedSVD"``, ``"FastICA"`` and ``"FactorAnalysis"``
+        (scikit-learn's classes of those names, by exact class: a subclass is
+        not one).  Any other model whose fitted estimator has ``components_``,
+        reproduces its training rows to 1e-9 and reduces rows one at a time as
+        it reduces them together (``"MiniBatchDictionaryLearning"``, a class of
+        your own) is used with one ``UserWarning`` per call that the guarantee
+        does not cover what its transform does: those checks read a few
+        training rows and cannot show how it reduces later rows.  A model
+        without ``components_``, or that fails a check, raises ``ValueError``
+        (``"UMAP"``, ``"KernelPCA"``, ``"Isomap"``, ``"MDS"``, ``"TSNE"``,
+        ``"SpectralEmbedding"``, ``"LocallyLinearEmbedding"``: the transform of
+        some of them depends on the rows it is given together).
+        A model asked for as many components as its input
         has columns, or more, changes nothing (zero columns are appended
         for the components beyond them), as without ``causal``.
         ``"PCA"`` is

@@ -5,6 +5,181 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - Unreleased
+
+### Added
+
+- Causal mode: `causal=True` (keyword-only; default False) in `tc.timecorr`,
+  `tc.features` and `tc.two_path_step`, and in the estimator and correlation
+  functions `tc.wcorr`, `tc.autofc`, `tc.isfc` and `tc.wisfc`. Row `t` of
+  every output is computed from rows `0..t` of the data only. What is
+  documented and tested:
+  - when the rows after `t` are replaced by any values (finite, NaN or inf),
+    row `t` is unchanged bit for bit, with every supported reducer;
+  - when the rows after `t` are removed, row `t` is unchanged to 1e-9
+    (absolute) for outputs that depend continuously on the correlations: no
+    reduction, `"strength"`, the summaries (`tc.WeightedStrength`,
+    `tc.Communities`) and the linear models listed below once fitted. Removal
+    changes the correlations by round-off, and the eigenvector-based graph
+    measures (`"eigenvector_centrality"`, `"pagerank_centrality"`,
+    `"pagerank_centrality_abs"`) can differ by more at a correlation matrix
+    whose leading eigenvalues coincide;
+  - with `include_zero=False`, row `t` is also unchanged when row `t` itself
+    changes;
+  - with a fitted reducer (`fit_timepoints=n`, below) this holds for rows
+    `t >= n`; a row `t < n` is unchanged when rows from `n` on are replaced or
+    removed;
+  - smoothed values (`cfun=None`) are on the scale of the data: under removal
+    they agree to round-off relative to the magnitude of the data (to 1e-9 or
+    8 units in the last place of the largest magnitude of the data, whichever
+    is larger); replacement changes no bit;
+  - a series of any length runs (one row included), and its output is the
+    first rows of the output of a longer series.
+
+  Largest differences recorded during development (`tests/test_causal_*.py`
+  hold the checks): under replacement 0.0 in every case (the estimator;
+  `features` at orders 1 to 4; fitted reducers; refits); under removal 1.6e-13
+  for the estimator, at most 7.8e-12 for `features` with reducers that need
+  no fit (at most 5.6e-13 on series with level steps of up to 1e8 standard
+  deviations), 2.2e-14 with fitted reducers, and at most 2.9e-15 with refits,
+  cuts at and around a refit row included.
+- In causal mode:
+  - the kernels are backward (`include_timepoints` may be left out;
+    `"forward"` / `"post"` raises `ValueError`), and kernel parameters must be
+    given, in `features` for both paths and every order: widths are not chosen
+    from the data (`weights_params=None` raises `ValueError`; `{}` for a
+    kernel without parameters);
+  - `inf`, `-inf` and samples with `|x| > 1e150` are missing data, like NaN;
+  - a timepoint with fewer than 3 observed timepoints in its kernel row is a
+    row of NaN (the rows that are 0 without `causal`), the diagonal included.
+    `min_samples` (keyword-only, default None) also sets the effective sample
+    size `(sum |w|)**2 / sum w**2` a row needs (compared with a relative
+    tolerance of 1e-12); a number that a built-in kernel of the call cannot
+    reach with any number of earlier timepoints raises `ValueError` before
+    anything is computed. In `features` the NaN rows of an order's feeding
+    features are missing data for the next order, so each order has more of
+    them; reducers skip them and return them as NaN;
+  - a feature whose kernel-weighted standard deviation at a timepoint is below
+    1e-9 of the magnitude of its kernel-weighted mean has correlation 0 with
+    every feature there (a column constant up to round-off);
+  - these raise `ValueError`, with a message that names an alternative:
+    `tc.eye_weights` on either path (co-fluctuations use series z-scored over
+    the whole recording: use a kernel with a width); `cfun=tc.wisfc` (its
+    default subject weights use the whole recording: use
+    `functools.partial(tc.wisfc, subject_weights=...)`); `events` given as
+    features to segment (give boundaries; that they are known at their own
+    time is the caller's responsibility; boundaries at or beyond the end of
+    the data are ignored); a kernel array, or a kernel function of your own,
+    with weight above the diagonal; a reducer that is fitted to data without
+    `fit_timepoints`;
+  - a function of your own as `cfun`, `rfun` or `delta_rfun` is called as
+    without `causal`, with one `UserWarning` that the guarantee does not cover
+    what it does (removal is not covered either for a kernel function of your
+    own whose weights depend on the number of timepoints);
+  - the decoders have no causal mode.
+- `fit_timepoints=n` (keyword-only; `timecorr`, `features`, `two_path_step`;
+  needs `causal=True`): every reducer that is fitted to data is fitted on rows
+  `0..n-1` and then applied, unchanged, to every row: hypertools models,
+  `tc.WeightedStrength`, `tc.Communities` (with `n=None` its shift null runs
+  on those rows) and the automatic reducers of `features` (`"auto"`, the
+  defaults), whose feeding step chooses between communities and weighted
+  strength on those rows. None and the graph measures need no fit. The fits
+  of a series and of a longer series with the same first `n` rows are equal
+  bit for bit.
+  - A model must be a linear map applied to each row by itself. The guarantee
+    covers `"PCA"`, `"IncrementalPCA"`, `"TruncatedSVD"`, `"FastICA"` and
+    `"FactorAnalysis"` (scikit-learn's classes of those names, by exact
+    class: a subclass is not one). Any other model whose fitted estimator has
+    `components_`, reproduces its training rows to 1e-9 and reduces rows one
+    at a time as it reduces them together is used with one `UserWarning` per
+    call that the guarantee does not cover what its transform does. A model
+    without `components_`, or that fails a check, raises `ValueError`
+    (`"UMAP"`, `"KernelPCA"`, `"Isomap"`, `"MDS"`, `"TSNE"`,
+    `"SpectralEmbedding"`, `"LocallyLinearEmbedding"`).
+  - `"PCA"` is fitted with `svd_solver="full"` in causal mode unless a model
+    dict gives a solver (the randomized solver that scikit-learn chooses for
+    large inputs failed the check that a model reproduces its training rows,
+    by 0.225 in the case measured).
+  - An output column of a model that is constant on the training rows up to
+    round-off (for example a principal component along which those rows do
+    not vary) is frozen: a value within that tolerance of the column's
+    training mean is returned as exactly that mean (without this, a null PCA
+    component changed order 2 by 2.8 under removal in the case measured).
+  - Output columns of a summary that are constant up to round-off are not set
+    to their means in causal mode, and no constant-output warning is issued;
+    `"constant_columns"` of `return_info` still lists constant columns.
+- `refit_every=m` (keyword-only; `features`; needs `fit_timepoints=n`): the
+  reducers are fitted again at rows `s_j = n + j * m`, each time on rows
+  `0..s_j - 1`; rows `s_j` to `s_{j+1} - 1` of every output are those of the
+  same call with `fit_timepoints=s_j` and no refit, and rows before `n` are
+  those of the first fit. The widths, the number of communities and the
+  choice of an automatic feeding step are those of the first fit; a later fit
+  that cannot have them is not used, the fit before stays for its rows (at
+  every order), and `return_info` lists the row (`"refit_kept_previous"`). The
+  components of a model are matched to those of the fit before (largest sum of
+  absolute cosines; a component is negated when its cosine is negative), and
+  the communities of `tc.Communities` by the most shared nodes. Each fit is a
+  pass over its rows and one over all rows.
+- `tc.FeaturesModel` (`timecorr/model.py`) and `return_model=True` in
+  `features` (needs `causal=True`): the call also returns the fitted pipeline
+  (the order, kernels, `cfun`, `combine`, `include_zero`, `min_samples`,
+  `ndims`, `max_memory_gb`, and the reducers of every order and path as
+  fitted). `model.transform(data, return_delta=False, return_info=False, *,
+  events=None)` computes the features of other data with the same number of
+  columns and any number of rows, causally and without fitting anything;
+  `transform` of the data of the call returns what the call returned. With
+  `refit_every` the model holds the last fit. Attributes include
+  `fit_timepoints`, `refits`, `fits` and `info`. A model can be pickled when
+  the arguments of the call can (not with a lambda or a local function);
+  unpickling needs the same versions of timecorr, hypertools and
+  scikit-learn. A pipeline with a fitted summary takes the number of subjects
+  it was fitted with.
+- `tc.features(..., causal=True, return_info=True)`: every entry also has
+  `"weights_params"` (the kernel parameters of the step) and `"warmup_rows"`
+  (the number of rows of the step's output that are entirely NaN; one number
+  per subject for list outputs); the entry of a step whose reducer was fitted
+  has `"fit_timepoints"`, `"refit_rows"` and `"refit_kept_previous"`. Entries
+  of calls without `causal=True` are unchanged.
+- Timings recorded during development, on 5,033 timepoints of 49 features:
+  `timecorr` with `causal=True` 0.32 s (0.2 s for the same backward kernel
+  without `causal`; 1.77 s with 0.1% of the samples NaN); `features` at order
+  3 with `"strength"` 1.85 s (1.15 s with a backward kernel and without
+  `causal`); `features` at order 3 with the default reducers and
+  `fit_timepoints=2500` 7.97 s and, in a later measurement, 9.8 s,
+  `model.transform` 1.80 s, and `refit_every=250` (11 fits) 68.9 s. On 2,700 timepoints of 500 features,
+  order 2 with the default reducers took 161 s.
+- Tutorial `docs/tutorial/causal.ipynb` ("Causal features: no look-ahead"), on
+  the daily returns of the 49 Industry Portfolios
+  (`tc.datasets.industry_returns`): the look-ahead of a call without `causal`,
+  reducers fitted on a training span and applied to later days with
+  `model.transform`, warm-up rows and `min_samples`, refits, and what causal
+  mode does not accept. Its Colab cell installs `timecorr>=0.4.0`.
+- `tests/test_packaging.py`: the declared hypertools requirement is at least
+  1.1, and the installed `hypertools.reduce` has `random_state`,
+  `return_model` and `model`.
+
+### Changed
+
+- Calls without `causal=True` return what they returned in 0.3.1: the
+  stored-output tests (`tests/test_legacy_pipeline.py`,
+  `tests/test_legacy_timecorr.py`, `tests/test_kernels_reference.py`,
+  `tests/test_chunked_kernels.py`) pass unchanged. `min_samples`,
+  `fit_timepoints`, `refit_every` or `return_model=True` given without
+  `causal=True` raise `ValueError`.
+- `install_requires`: `hypertools>=1.1` (was `hypertools>=0.8`; see Fixed).
+  The `tutorials` extra keeps `hypertools>=1.2`.
+
+### Fixed
+
+- Versions 0.3.0 and 0.3.1 declared `hypertools>=0.8`, but
+  `timecorr.helpers.reduce` calls `hypertools.reduce(..., random_state=0)`,
+  an argument that hypertools has from version 1.0 on. With hypertools 0.8.x
+  installed, every call that reduces with a model, the default `tc.features`
+  call included, raised `TypeError: reduce() got an unexpected keyword
+  argument 'random_state'`. The declared floor (`setup.py`,
+  `requirements.txt`) is now 1.1, the oldest version the test suite runs
+  with.
+
 ## [0.3.1] - 2026-11-23
 
 ### Added

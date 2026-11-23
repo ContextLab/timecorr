@@ -18,4 +18,5 @@ the quickstart.
    tutorial/decoding
    tutorial/htfa_network_animations
    tutorial/stocks
+   tutorial/causal
    tutorial/trajectories

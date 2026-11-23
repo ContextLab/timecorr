@@ -747,7 +747,7 @@ def test_new_arguments_are_keyword_only_and_documented(function):
     parameters = inspect.signature(f).parameters
     for name in ("causal", "min_samples"):
         assert parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
-        assert f"\n    {name} : " in f.__doc__
+        assert f"\n{name} : " in inspect.getdoc(f)
     assert parameters["causal"].default is False
     assert parameters["min_samples"].default is None
     assert "fit_timepoints" in f.__doc__

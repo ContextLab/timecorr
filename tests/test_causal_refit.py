@@ -720,7 +720,7 @@ def test_new_argument_is_keyword_only_and_documented():
     parameter = inspect.signature(tc.features).parameters["refit_every"]
     assert parameter.kind is inspect.Parameter.KEYWORD_ONLY
     assert parameter.default is None
-    assert "\n    refit_every : " in tc.features.__doc__
+    assert "\nrefit_every : " in inspect.getdoc(tc.features)
     assert "refit_every" not in inspect.signature(two_path_step).parameters
     assert "refit_every" not in inspect.signature(tc.timecorr).parameters
     for name in ("refit_rows", "refit_kept_previous"):

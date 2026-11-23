@@ -722,7 +722,7 @@ def test_new_arguments_are_keyword_only_and_documented(function, names):
     parameters = inspect.signature(function).parameters
     for name in names:
         assert parameters[name].kind is inspect.Parameter.KEYWORD_ONLY
-        assert f"\n    {name} : " in function.__doc__
+        assert f"\n{name} : " in inspect.getdoc(function)
     assert parameters["fit_timepoints"].default is None
     assert list(parameters)[-len(names):] == names
     for section in ("Parameters", "Returns", "Examples"):

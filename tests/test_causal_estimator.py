@@ -1411,8 +1411,9 @@ def test_tstat_combine_is_exact_under_replacement_and_conditioned_under_removal(
     assert np.array_equal(np.isnan(cut), np.isnan(full[:51]))
     finite = np.isfinite(cut) & np.isfinite(full[:51])
     assert np.array_equal(np.isfinite(cut), np.isfinite(full[:51]))
+    # not required to 1e-9 (the documented exception; 0.12 on 3.8e7 was
+    # measured on macOS, 0 on Linux), but to 1e-8 of the magnitude
     difference = np.abs(cut[finite] - full[:51][finite])
-    assert difference.max() > ATOL  # not to 1e-9: the documented exception
     assert np.max(difference / np.maximum(1.0, np.abs(cut[finite]))) <= 1e-8
     # subjects whose correlations differ: to 1e-9 of the magnitude, and
     # to 1e-9 itself for statistics of ordinary size

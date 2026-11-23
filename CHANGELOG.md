@@ -29,7 +29,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - with a fitted reducer (`fit_timepoints=n`, below) this holds for rows
     `t >= n`; a row `t < n` is unchanged when rows from `n` on are replaced or
     removed;
-  - smoothed values (`cfun=None`) are on the scale of the data: under removal
+  - smoothed values (`cfun=None`) are on the scale of the data (each chunk of
+    128 rows is centered on the kernel-weighted mean at its first row, which
+    is added back, never on a mean over later rows): under removal
     they agree to round-off relative to the magnitude of the data (to 1e-9 or
     8 units in the last place of the largest magnitude of the data, whichever
     is larger); replacement changes no bit;
@@ -76,6 +78,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     without `causal`, with one `UserWarning` that the guarantee does not cover
     what it does (removal is not covered either for a kernel function of your
     own whose weights depend on the number of timepoints);
+  - with `max_memory_gb`, a step of a later order that is streamed and cannot
+    fit raises `MemoryError` before order 1 runs, as without `causal`; this
+    includes the steps streamed with
+    `functools.partial(tc.wisfc, subject_weights=...)`, which are streamed in
+    causal mode only;
   - the decoders have no causal mode.
 - `fit_timepoints=n` (keyword-only; `timecorr`, `features`, `two_path_step`;
   needs `causal=True`): every reducer that is fitted to data is fitted on rows
@@ -112,10 +119,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reducers are fitted again at rows `s_j = n + j * m`, each time on rows
   `0..s_j - 1`; rows `s_j` to `s_{j+1} - 1` of every output are those of the
   same call with `fit_timepoints=s_j` and no refit, and rows before `n` are
-  those of the first fit. The widths, the number of communities and the
-  choice of an automatic feeding step are those of the first fit; a later fit
-  that cannot have them is not used, the fit before stays for its rows (at
-  every order), and `return_info` lists the row (`"refit_kept_previous"`). The
+  those of the first fit. The output columns are those of the first fit: the
+  choice of an automatic feeding step (the shift null runs in the first fit
+  only), the number of components of a model, and the number of output
+  columns of a communities step, which is its number of communities of 2 or
+  more nodes. The number of clusters is not fixed: a later fit clusters its
+  rows with the first fit's number of clusters `n0` and then, while it has
+  not that many communities of 2 or more nodes, with `n0 + 1`, `n0 - 1`,
+  `n0 + 2`, `n0 - 2`, ... up to `n0 + 5` and `n0 - 5` (between 2 and the
+  number of features), and takes the first clustering that has them. A later
+  fit that cannot have the columns of the first is not used: the fit before
+  stays for its rows (at every order), `return_info` lists the row
+  (`"refit_kept_previous"`), and one `UserWarning` per call names the rows
+  left out and the step (order and path) that could not be fitted. The
   components of a model are matched to those of the fit before (largest sum of
   absolute cosines; a component is negated when its cosine is negative), and
   the communities of `tc.Communities` by the most shared nodes. Each fit is a
@@ -138,8 +154,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `"weights_params"` (the kernel parameters of the step) and `"warmup_rows"`
   (the number of rows of the step's output that are entirely NaN; one number
   per subject for list outputs); the entry of a step whose reducer was fitted
-  has `"fit_timepoints"`, `"refit_rows"` and `"refit_kept_previous"`. Entries
-  of calls without `causal=True` are unchanged.
+  has `"fit_timepoints"`, `"refit_rows"` and `"refit_kept_previous"`. With
+  `refit_every`, what describes a fit is that of the last fit; when that fit
+  took another number of clusters than the `n` of a `tc.Communities` object,
+  `"effective"` shows the object with the number taken (for example
+  `Communities(n=5, ...)` for `tc.Communities(n=6)`). Entries of calls without
+  `causal=True` are unchanged.
 - Timings recorded during development, on 5,033 timepoints of 49 features:
   `timecorr` with `causal=True` 0.32 s (0.2 s for the same backward kernel
   without `causal`; 1.77 s with 0.1% of the samples NaN); `features` at order

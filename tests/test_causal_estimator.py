@@ -152,7 +152,7 @@ def test_rows_do_not_depend_on_later_rows_with_min_samples(case, include_zero, k
     assert nan_rows.sum() > default or (kernel == "t" and nan_rows.sum() == default)
     assert not nan_rows[30:].all()
     rng = np.random.default_rng(27)
-    for n in CUTS[1:]:  # (a series of 3 rows cannot reach the number: ValueError)
+    for n in CUTS:  # (the first 3 rows alone cannot reach the number: NaN rows)
         part = _call([_perturb(x, n, mode, rng) for x in data], case, kernel,
                      include_zero, min_samples=min_samples)
         assert _max_difference(full, part, n) <= ATOL
@@ -345,30 +345,120 @@ def test_default_nan_rows_are_the_zero_rows_of_causal_false(kernel, include_zero
     assert not np.isnan(smooth[1:]).any()
 
 
+def _reach(weights_function, weights_params, include_zero=True, n=4000):
+    """The largest effective sample size of a row with ``n`` earlier timepoints."""
+    w = weights_function(n, weights_params, direction="backward",
+                         include_zero=include_zero)[-1]
+    return float(np.abs(w).sum() ** 2 / (w**2).sum())
+
+
+@pytest.mark.parametrize("include_zero", [True, False])
 @pytest.mark.parametrize("kernel", sorted(KERNELS))
-def test_a_min_samples_that_no_row_reaches_raises(kernel):
+def test_a_min_samples_that_no_row_reaches_raises(kernel, include_zero):
     n = 120
     x = np.random.default_rng(15).standard_normal((n, 4))
     weights_function, weights_params, reached = KERNELS[kernel]
-    w = weights_function(n, weights_params, direction="backward")
-    most = float(np.max(w.sum(axis=1) ** 2 / (w**2).sum(axis=1)))
+    # what a row reaches with any number of earlier timepoints
+    most = _reach(weights_function, weights_params, include_zero)
+    assert helpers._kernel_reach(helpers._lag_kernel(
+        7, weights_function, weights_params, "backward", include_zero
+    )) == pytest.approx(most, rel=1e-9)
     kw = dict(causal=True, weights_function=weights_function,
-              weights_params=weights_params)
+              weights_params=weights_params, include_zero=include_zero)
     shown = re.escape(f"{most:.4g}")
     for cfun in (tc.autofc, tc.isfc, None):
         with pytest.raises(ValueError, match=rf"min_samples.*{shown}"):
             tc.timecorr(x, cfun=cfun, min_samples=most * 1.01, **kw)
-        out = _quiet(tc.timecorr, x, cfun=cfun, min_samples=most, **kw)
-        assert not np.isnan(out[-1]).any()  # the tolerance: the maximum is reached
-        assert not np.isnan(_quiet(tc.timecorr, x, cfun=cfun, min_samples=reached,
+        low = min(reached, most * 0.99)
+        assert not np.isnan(_quiet(tc.timecorr, x, cfun=cfun, min_samples=low,
                                    **kw)[-1]).any()
-    with pytest.raises(ValueError, match=rf"min_samples.*{shown}"):
-        tc.wcorr(x, x, w, causal=True, min_samples=most + 1)
     # missing data may leave every row below a number the kernel reaches
     y = x.copy()
     y[::2] = np.nan
-    assert np.isnan(_quiet(tc.timecorr, y, cfun=tc.autofc, min_samples=most,
+    assert np.isnan(_quiet(tc.timecorr, y, cfun=tc.autofc, min_samples=most * 0.99,
                            **kw)).all()
+
+
+@pytest.mark.parametrize("kernel", sorted(KERNELS))
+@pytest.mark.parametrize("cfun", [tc.autofc, None])
+def test_whether_min_samples_raises_does_not_depend_on_the_length(kernel, cfun):
+    weights_function, weights_params, reached = KERNELS[kernel]
+    most = _reach(weights_function, weights_params)
+    kw = dict(causal=True, cfun=cfun, weights_function=weights_function,
+              weights_params=weights_params)
+    x = np.random.default_rng(16).standard_normal((400, 3))
+    for n in (3, 4, 10, 60, 400):
+        # a number the kernel reaches, though not within n rows: no error, and
+        # the rows that do not reach it are NaN
+        out = _quiet(tc.timecorr, x[:n], min_samples=most * 0.999, **kw)
+        assert out.shape[0] == n
+        if n <= 10 and kernel != "t":
+            assert np.isnan(out).all()
+        # a number no row of any series reaches: the same error at every length
+        with pytest.raises(ValueError, match="min_samples"):
+            tc.timecorr(x[:n], min_samples=most * 1.001, **kw)
+
+
+def test_three_rows_cannot_reach_six_samples_and_are_nan():
+    x = np.random.default_rng(17).standard_normal((300, 4))
+    kw = dict(causal=True, weights_params={"var": 25}, min_samples=6)
+    for cfun in (tc.autofc, None):
+        full = _quiet(tc.timecorr, x, cfun=cfun, **kw)
+        short = _quiet(tc.timecorr, x[:3], cfun=cfun, **kw)
+        assert np.isnan(short).all() and np.isnan(full[:3]).all()
+        assert not np.isnan(full[100:]).any()
+    w = tc.gaussian_weights(3, {"var": 25}, direction="backward")
+    assert np.isnan(_quiet(tc.wcorr, x[:3], x[:3], w, causal=True, min_samples=6)).all()
+
+
+def test_kernels_without_a_lag_profile_never_raise_for_min_samples():
+    n = 60
+    x = np.random.default_rng(18).standard_normal((n, 4))
+    w = tc.gaussian_weights(n, {"var": 9}, direction="backward")
+    most = float(np.max(w.sum(axis=1) ** 2 / (w**2).sum(axis=1)))
+    # an array: every row is below the number, so every row is NaN
+    assert np.isnan(_quiet(tc.wcorr, x, x, w, causal=True, min_samples=most + 1)).all()
+    assert np.isnan(_quiet(tc.autofc, x, w, causal=True, min_samples=most + 1)).all()
+    assert helpers._kernel_reach(helpers.as_kernel(w)) is None
+    # a kernel function of the user's
+    for cfun in (tc.autofc, None):
+        out = _quiet(
+            tc.timecorr, x, causal=True, cfun=cfun, weights_params={"var": 9},
+            min_samples=most + 1,
+            weights_function=lambda T, p: tc.gaussian_weights(T, p, direction="backward"))
+        assert np.isnan(out).all()
+    # the same kernel, built in: the error
+    with pytest.raises(ValueError, match="min_samples"):
+        tc.timecorr(x, causal=True, cfun=tc.autofc, weights_params={"var": 9},
+                    min_samples=most + 1)
+
+
+def test_reach_of_the_built_in_kernels():
+    def reach(function, params, **kwargs):
+        return helpers._kernel_reach(
+            helpers._lag_kernel(5, function, params, "backward", **kwargs))
+
+    # equal weights at every lag: no limit
+    assert reach(tc.uniform_weights, None) is None
+    x = np.random.default_rng(19).standard_normal((40, 3))
+    out = _quiet(tc.timecorr, x, causal=True, cfun=tc.autofc, min_samples=30,
+                 weights_function=tc.uniform_weights, weights_params={})
+    assert np.array_equal(np.flatnonzero(np.isnan(out).all(axis=1)), np.arange(29))
+    # a boxcar over the lags 0..14, and without the diagonal
+    assert reach(tc.boxcar_weights, {"width": 30}) == pytest.approx(15)
+    assert reach(tc.boxcar_weights, {"width": 30}, include_zero=False) == pytest.approx(14)
+    # exclude_timepoints: the lags 0..4, and the lags from 5 on
+    assert reach(tc.boxcar_weights, {"width": 30}, exclude=4) == pytest.approx(5)
+    assert reach(tc.boxcar_weights, {"width": 30}, exclude=-4) == pytest.approx(10)
+    # a wide Gaussian: sd * 2 * sqrt(pi) / 2 of a half kernel, about 1.77 sd
+    wide = reach(tc.gaussian_weights, {"var": 1e6})
+    assert wide == pytest.approx(_reach(tc.gaussian_weights, {"var": 1e6}, n=9000),
+                                 rel=1e-9)
+    assert 1700 < wide < 1800
+    # event boundaries do not change what a kernel can reach
+    kernel = helpers._lag_kernel(50, tc.gaussian_weights, {"var": 25}, "backward")
+    labels = np.repeat([0, 1], 25)
+    assert helpers._kernel_reach(kernel.with_events(labels)) == helpers._kernel_reach(kernel)
 
 
 def test_three_equal_weights_are_three_samples():

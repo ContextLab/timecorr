@@ -1,4 +1,5 @@
 # coding: utf-8
+import functools
 import inspect
 import numbers
 import os
@@ -501,7 +502,8 @@ def _lag_kernel(T, weights_function, weights_params, include="all", include_zero
         return None
     params = defaults if weights_params is None else weights_params
     return LagKernel(profile(np.arange(int(T), dtype=np.int64), params), include,
-                     include_zero, exclude)
+                     include_zero, exclude,
+                     lag_profile=functools.partial(profile, params=params))
 
 
 def _as_kernel_array(weights):
@@ -1465,22 +1467,80 @@ def _check_min_samples(min_samples, causal):
     return float(min_samples)
 
 
-def _check_reachable(ess, min_samples):
+# ``_kernel_reach`` evaluates a lag profile at up to this many lags.
+_REACH_LAGS = 2 ** 22
+
+
+def _kernel_reach(kernel):
     """
-    ``ValueError`` when no row of a fully observed kernel, with effective
-    sample sizes ``ess``, reaches ``min_samples``.
+    The largest effective sample size ``(sum |w|)**2 / sum w**2`` a row of a
+    backward kernel can have with any number of earlier timepoints: the
+    largest over the lags ``0..n`` (from 1 without the diagonal, within
+    ``exclude_timepoints``), for every n.  It does not depend on the length
+    of the series.
+
+    None when it is not known or has no limit: a kernel without a lag
+    profile function (an array, a kernel function of the user's), and a
+    profile whose sums have not converged within ``_REACH_LAGS`` lags
+    (``uniform_weights``).  The result is kept on the kernel.
     """
-    with np.errstate(invalid="ignore"):
-        reached = np.any(ess >= min_samples * (1 - _MIN_SAMPLES_RTOL))
-    if not reached:
-        finite = ess[np.isfinite(ess)]
-        most = float(finite.max()) if finite.size else 0.0
-        raise ValueError(
-            f"min_samples={min_samples:g} is more than any row of the kernel "
-            f"has: its largest effective sample size ((sum |w|)**2 / sum w**2 "
-            f"over a row) is {most:.4g}.  Pass a min_samples of at most that, a "
-            "wider kernel, or leave min_samples out."
-        )
+    profile = getattr(kernel, "lag_profile", None)
+    if profile is None or kernel.include != "backward":
+        return None
+    cached = getattr(kernel, "_reach", None)
+    if cached is not None:
+        return cached[0]
+    reach = None
+    n = 1024
+    while n <= _REACH_LAGS:
+        with np.errstate(over="ignore", invalid="ignore"):
+            a = np.abs(np.asarray(profile(np.arange(n, dtype=np.int64)), dtype=np.float64))
+        a[~np.isfinite(a)] = 0
+        if not kernel.include_zero:
+            a[0] = 0
+        if kernel.exclude is not None:
+            x = int(min(abs(kernel.exclude), n))
+            if kernel.exclude >= 0:
+                a[x + 1:] = 0
+            else:
+                a[:x + 1] = 0
+        peak = a.max()
+        if peak > 0:
+            a /= peak  # so that tiny weights do not underflow when squared
+            total = np.cumsum(a)
+            squares = np.cumsum(a * a)
+            # converged: the later half of the lags adds nothing to the sums
+            if total[-1] - total[n // 2 - 1] <= 1e-15 * total[-1]:
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    ess = total**2 / squares
+                reach = float(np.nanmax(ess))
+                break
+        n *= 2
+    else:
+        if peak == 0:
+            reach = 0.0
+    kernel._reach = (reach,)
+    return reach
+
+
+def _check_reachable(kernel, min_samples):
+    """
+    ``ValueError`` when no row of ``kernel``, however many timepoints come
+    before it, reaches ``min_samples`` (``_kernel_reach``; never for a kernel
+    without a lag profile function).  The decision does not depend on the
+    length of the series: rows of a short series that do not reach
+    ``min_samples`` are undefined, not an error.
+    """
+    most = _kernel_reach(as_kernel(kernel))
+    if most is None or most >= min_samples * (1 - _MIN_SAMPLES_RTOL):
+        return
+    raise ValueError(
+        f"min_samples={min_samples:g} is more than a row of the kernel can "
+        "have: with any number of earlier timepoints its largest effective "
+        f"sample size ((sum |w|)**2 / sum w**2 over a row) is {most:.4g}.  "
+        "Pass a min_samples of at most that, a wider kernel, or leave "
+        "min_samples out."
+    )
 
 
 def _causal_clean(x):
@@ -1583,15 +1643,14 @@ def _causal_defined(kernel, observed, min_samples, min_count=3):
     least ``min_samples`` (relative tolerance ``_MIN_SAMPLES_RTOL``).
 
     ``observed`` is a boolean vector over the T timepoints (a timepoint with
-    no sample at all is not observed).  ``ValueError`` when no row of the
-    fully observed kernel reaches ``min_samples``.
+    no sample at all is not observed).  ``ValueError`` when the kernel
+    cannot reach ``min_samples`` at any length (``_check_reachable``).
     """
+    if min_samples is not None:
+        _check_reachable(kernel, min_samples)
     count, ess = _kernel_samples(kernel, observed)
     defined = count >= min_count
     if min_samples is not None:
-        _check_reachable(
-            ess if np.all(observed) else _kernel_samples(kernel)[1], min_samples
-        )
         with np.errstate(invalid="ignore"):
             defined &= ess >= min_samples * (1 - _MIN_SAMPLES_RTOL)
     return defined
@@ -2070,8 +2129,8 @@ def wcorr(a, b, weights, *, causal=False, min_samples=None):
         With ``causal=True``, the effective sample size
         ``(sum |w|)**2 / sum w**2`` a timepoint needs (a number >= 1,
         compared with a relative tolerance of 1e-12, so three equal weights
-        are 3 samples); timepoints below it are NaN too.  A number that no
-        row of the kernel reaches raises ``ValueError``.  Keyword only.
+        are 3 samples); timepoints below it are NaN too (every timepoint,
+        when no row of the array reaches the number).  Keyword only.
         Default: None (only the rule of 3 samples).
 
     Returns
@@ -2102,9 +2161,8 @@ def wcorr(a, b, weights, *, causal=False, min_samples=None):
         If the inputs do not have T rows / T kernel columns, or if every row of
         the kernel is zero.  With ``causal=True``: if the kernel has weight
         above its diagonal or is a delta kernel, or if ``min_samples`` is
-        not None or a finite number >= 1, or is more than the largest
-        effective sample size of the kernel's rows.  If ``min_samples`` is
-        given without ``causal=True``.
+        not None or a finite number >= 1.  If ``min_samples`` is given
+        without ``causal=True``.
 
     Examples
     --------
@@ -2358,8 +2416,8 @@ def wisfc(data, timepoint_weights, subject_weights=None, *, causal=False,
         timepoints where the subject and its reference each have a sample
         is a row of NaN.  A number (>= 1) is also the effective sample size
         ``(sum |w|)**2 / sum w**2`` a timepoint needs over those timepoints
-        (rows below it are NaN); one that no row of a kernel reaches raises
-        ``ValueError``.  Keyword only.  Default: None.
+        (rows below it are NaN; every row, when no row of the array reaches
+        the number).  Keyword only.  Default: None.
 
     Returns
     -------
@@ -2396,9 +2454,8 @@ def wisfc(data, timepoint_weights, subject_weights=None, *, causal=False,
         every row of the kernel is zero, or a list of kernels does not have
         one kernel per subject.  With ``causal=True``: if a
         kernel has weight above its diagonal or is a delta kernel, if ``subject_weights`` is None, or if
-        ``min_samples`` is not None or a finite number >= 1, or is more
-        than any row of a kernel reaches.  If ``min_samples`` is given
-        without ``causal=True``.
+        ``min_samples`` is not None or a finite number >= 1.  If
+        ``min_samples`` is given without ``causal=True``.
 
     Notes
     -----
@@ -2673,8 +2730,8 @@ def isfc(data, timepoint_weights, *, causal=False, min_samples=None):
         timepoints where the subject and its reference each have a sample
         is a row of NaN.  A number (>= 1) is also the effective sample size
         ``(sum |w|)**2 / sum w**2`` a timepoint needs over those timepoints
-        (rows below it are NaN); one that no row of a kernel reaches raises
-        ``ValueError``.  Keyword only.  Default: None.
+        (rows below it are NaN; every row, when no row of the array reaches
+        the number).  Keyword only.  Default: None.
 
     Returns
     -------
@@ -2712,9 +2769,8 @@ def isfc(data, timepoint_weights, *, causal=False, min_samples=None):
         every row of the kernel is zero, or a list of kernels does not have
         one kernel per subject.  With ``causal=True``: if a
         kernel has weight above its diagonal or is a delta kernel, or if
-        ``min_samples`` is not None or a finite number >= 1, or is more
-        than any row of a kernel reaches.  If ``min_samples`` is given
-        without ``causal=True``.
+        ``min_samples`` is not None or a finite number >= 1.  If
+        ``min_samples`` is given without ``causal=True``.
 
     Notes
     -----
@@ -2778,8 +2834,8 @@ def autofc(data, timepoint_weights, *, causal=False, min_samples=None):
         timepoints where the subject and its reference each have a sample
         is a row of NaN.  A number (>= 1) is also the effective sample size
         ``(sum |w|)**2 / sum w**2`` a timepoint needs over those timepoints
-        (rows below it are NaN); one that no row of a kernel reaches raises
-        ``ValueError``.  Keyword only.  Default: None.
+        (rows below it are NaN; every row, when no row of the array reaches
+        the number).  Keyword only.  Default: None.
 
     Returns
     -------
@@ -2812,9 +2868,8 @@ def autofc(data, timepoint_weights, *, causal=False, min_samples=None):
         every row of the kernel is zero, or a list of kernels does not have
         one kernel per subject.  With ``causal=True``: if a
         kernel has weight above its diagonal or is a delta kernel, or if
-        ``min_samples`` is not None or a finite number >= 1, or is more
-        than any row of a kernel reaches.  If ``min_samples`` is given
-        without ``causal=True``.
+        ``min_samples`` is not None or a finite number >= 1.  If
+        ``min_samples`` is given without ``causal=True``.
 
     Examples
     --------

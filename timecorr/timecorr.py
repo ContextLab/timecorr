@@ -23,7 +23,6 @@ from .helpers import (
     _check_causal_kernel,
     _check_min_samples,
     _check_rfun,
-    _kernel_samples,
     _lag_kernel,
     _warn_user,
     autofc,
@@ -50,11 +49,11 @@ def _causal_smooth(x, weights, min_samples):
     weighted sample or, with ``min_samples`` (not None), an effective sample
     size ``(sum |w|)**2 / sum w**2`` (over the feature's observed samples in
     the kernel row) below it is NaN; one warning reports how many timepoints
-    have one.  ``ValueError`` when no row of the kernel reaches
-    ``min_samples``.
+    have one.  ``ValueError`` when the kernel cannot reach ``min_samples``
+    with any number of earlier timepoints (``_check_reachable``).
     """
     if min_samples is not None:
-        _check_reachable(_kernel_samples(as_kernel(weights))[1], min_samples)
+        _check_reachable(weights, min_samples)
     x = _causal_clean(x)
     valid = ~np.isnan(x)
     observed = np.where(valid, x, 0.0)
@@ -549,8 +548,12 @@ def timecorr(
         ``(sum |w|)**2 / sum w**2`` a timepoint needs over those
         timepoints, compared with a relative tolerance of 1e-12 (three
         equal weights are 3 samples); rows below it are NaN too.  A number
-        that no row of the kernel reaches raises ``ValueError`` (a backward
-        Gaussian of variance 25 has at most 9.4 effective samples).  With
+        that a built-in kernel cannot reach with any number of earlier
+        timepoints raises ``ValueError`` (a backward Gaussian of variance
+        25 has at most 9.4 effective samples), whatever the length of the
+        data; the rows of a short recording that do not reach a number the
+        kernel can reach are NaN, as are all rows when a kernel function
+        of your own never reaches it.  With
         ``cfun=None`` a value is NaN when its feature has no weighted
         sample, or fewer effective samples than the number.  Features with
         zero variance still give correlations of 0.  Keyword only.
@@ -603,7 +606,7 @@ def timecorr(
         raised by ``segment`` for features entries of ``events``.  With
         ``causal=True``, for the arguments listed under ``causal`` that have
         no causal form, and for a ``min_samples`` that is not None or a
-        finite number >= 1, or that no row of the kernel reaches; for
+        finite number >= 1, or that a built-in kernel cannot reach; for
         ``min_samples`` given without ``causal=True``.
     NotImplementedError
         With ``causal=True``, for an ``rfun`` that is fitted to data.

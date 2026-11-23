@@ -11,6 +11,7 @@ random walk and NaN samples.  Real computations; nothing is mocked.
 """
 
 import functools
+import re
 import warnings
 
 import numpy as np
@@ -26,14 +27,13 @@ ATOL = 1e-9
 T = 300
 CUTS = (3, 40, 127, 128, 129, 200, 257, 299)
 
-# name: (kernel function, parameters, min_samples).  The t kernel has weight
-# at every lag but is narrow whatever its df: a backward row has at most 2.6
-# effective samples (2.1 without the diagonal), so it is tested with
-# min_samples=2 (with the default of 3 every row is NaN).
+# name: (kernel function, parameters, a min_samples that its rows reach).
+# The t kernel has weight at every lag but is narrow whatever its df: a
+# backward row has at most 2.6 effective samples (2.1 without the diagonal).
 KERNELS = {
-    "gaussian": (tc.gaussian_weights, {"var": 25}, 3),
-    "laplace": (tc.laplace_weights, {"scale": 8}, 3),
-    "boxcar": (tc.boxcar_weights, {"width": 30}, 3),
+    "gaussian": (tc.gaussian_weights, {"var": 25}, 6),
+    "laplace": (tc.laplace_weights, {"scale": 8}, 6),
+    "boxcar": (tc.boxcar_weights, {"width": 30}, 6),
     "t": (tc.t_weights, {"df": 3}, 2),
 }
 SUBJECT_WEIGHTS = np.array([[0.0, 1.0, 0.5], [0.3, 0.0, 1.0], [1.0, 2.0, 0.0]])
@@ -88,11 +88,11 @@ def _perturb(x, n, mode, rng):
 
 def _call(data, case, kernel, include_zero=True, **kwargs):
     cfun, n_subjects, combine = CASES[case]
-    weights_function, weights_params, min_samples = KERNELS[kernel]
+    weights_function, weights_params, _ = KERNELS[kernel]
     x = data[0] if n_subjects == 1 else data
     return _quiet(tc.timecorr, x, causal=True, cfun=cfun, combine=combine,
                   weights_function=weights_function, weights_params=weights_params,
-                  include_zero=include_zero, min_samples=min_samples, **kwargs)
+                  include_zero=include_zero, **kwargs)
 
 
 def _as_list(out):
@@ -134,6 +134,30 @@ def test_rows_do_not_depend_on_later_rows(case, include_zero, kernel, mode):
     assert defined > 0  # the comparison is not between NaN rows only
 
 
+@pytest.mark.parametrize("mode", MODES)
+@pytest.mark.parametrize("kernel", sorted(KERNELS))
+@pytest.mark.parametrize("include_zero", [True, False])
+@pytest.mark.parametrize("case", ["autofc", "isfc-null", "wisfc-corrmean", "smooth"])
+def test_rows_do_not_depend_on_later_rows_with_min_samples(case, include_zero, kernel,
+                                                           mode):
+    min_samples = KERNELS[kernel][2]
+    data = _subjects(CASES[case][1], seed=40)
+    full = _call(data, case, kernel, include_zero, min_samples=min_samples)
+    plain = _call(data, case, kernel, include_zero)
+    nan_rows = np.isnan(np.asarray(_as_list(full)[0])).all(axis=1)
+    # the number asks for more than the default rule (except for the narrow
+    # t kernel, whose third row already has 2 effective samples), and rows
+    # reach it
+    default = np.isnan(np.asarray(_as_list(plain)[0])).all(axis=1).sum()
+    assert nan_rows.sum() > default or (kernel == "t" and nan_rows.sum() == default)
+    assert not nan_rows[30:].all()
+    rng = np.random.default_rng(27)
+    for n in CUTS[1:]:  # (a series of 3 rows cannot reach the number: ValueError)
+        part = _call([_perturb(x, n, mode, rng) for x in data], case, kernel,
+                     include_zero, min_samples=min_samples)
+        assert _max_difference(full, part, n) <= ATOL
+
+
 @pytest.mark.parametrize("missing", [0, 0.002])
 @pytest.mark.parametrize("mode", MODES)
 @pytest.mark.parametrize("kernel", sorted(KERNELS))
@@ -153,9 +177,7 @@ def test_rows_do_not_depend_on_later_rows_with_few_missing_samples(
                      include_zero)
         rows = n if include_zero or mode == "remove" else n + 1
         assert _max_difference(full, part, rows) <= ATOL
-    # (with the narrow t kernel, a missing sample leaves a feature of the
-    # smoothed data below min_samples for a row or two)
-    assert np.isnan(np.asarray(_as_list(full)[0])[20:]).mean() < 0.01
+    assert not np.isnan(np.asarray(_as_list(full)[0])[20:]).any()
 
 
 @pytest.mark.parametrize("mode", ["finite", "nan", "inf"])
@@ -270,7 +292,7 @@ def test_smoothing_agrees_with_the_backward_kernel_of_causal_false():
     causal = _quiet(tc.timecorr, x, causal=True, **kw)
     plain = _quiet(tc.timecorr, x, include_timepoints="backward", **kw)
     defined = ~np.isnan(causal)
-    assert defined[5:].all() and not defined[:2].any()
+    assert defined.all()  # one weighted sample defines a smoothed value
     assert np.max(np.abs(causal[defined] - plain[defined])) <= 1e-12
 
 
@@ -278,7 +300,7 @@ def test_default_is_not_causal():
     x = np.random.default_rng(2).standard_normal((80, 4))
     kw = dict(cfun=tc.autofc, weights_params={"var": 20})
     assert np.array_equal(_quiet(tc.timecorr, x, **kw),
-                          _quiet(tc.timecorr, x, causal=False, min_samples=3, **kw))
+                          _quiet(tc.timecorr, x, causal=False, min_samples=None, **kw))
     w = tc.gaussian_weights(80, {"var": 20})
     assert np.array_equal(_quiet(tc.wcorr, x, x, w),
                           _quiet(tc.wcorr, x, x, w, causal=False))
@@ -296,7 +318,57 @@ def _expected_undefined(w, observed, min_samples, min_count=3):
     with np.errstate(invalid="ignore", divide="ignore"):
         ess = a.sum(axis=1) ** 2 / (a**2).sum(axis=1)
     ess = np.nan_to_num(ess)
+    if min_samples is None:
+        return count < min_count
     return (count < min_count) | (ess < min_samples * (1 - 1e-12))
+
+
+@pytest.mark.parametrize("kernel", sorted(KERNELS))
+@pytest.mark.parametrize("include_zero", [True, False])
+def test_default_nan_rows_are_the_zero_rows_of_causal_false(kernel, include_zero):
+    x = np.random.default_rng(14).standard_normal((120, 4))
+    weights_function, weights_params, _ = KERNELS[kernel]
+    kw = dict(cfun=tc.autofc, weights_function=weights_function,
+              weights_params=weights_params, include_zero=include_zero)
+    causal = _quiet(tc.timecorr, x, causal=True, **kw)
+    plain = _quiet(tc.timecorr, x, include_timepoints="backward", **kw)
+    nan_rows = np.isnan(causal).all(axis=1)
+    assert np.array_equal(nan_rows, (plain == 0).all(axis=1))
+    assert np.array_equal(np.flatnonzero(nan_rows),
+                          np.arange(2 if include_zero else 3))
+    assert not np.isnan(causal[~nan_rows]).any()
+    assert np.max(np.abs(causal[~nan_rows] - plain[~nan_rows])) <= ATOL
+    # smoothing: a value is undefined only without any weighted sample
+    smooth = _quiet(tc.timecorr, x, causal=True, **{**kw, "cfun": None})
+    assert np.array_equal(np.flatnonzero(np.isnan(smooth).all(axis=1)),
+                          np.arange(0 if include_zero else 1))
+    assert not np.isnan(smooth[1:]).any()
+
+
+@pytest.mark.parametrize("kernel", sorted(KERNELS))
+def test_a_min_samples_that_no_row_reaches_raises(kernel):
+    n = 120
+    x = np.random.default_rng(15).standard_normal((n, 4))
+    weights_function, weights_params, reached = KERNELS[kernel]
+    w = weights_function(n, weights_params, direction="backward")
+    most = float(np.max(w.sum(axis=1) ** 2 / (w**2).sum(axis=1)))
+    kw = dict(causal=True, weights_function=weights_function,
+              weights_params=weights_params)
+    shown = re.escape(f"{most:.4g}")
+    for cfun in (tc.autofc, tc.isfc, None):
+        with pytest.raises(ValueError, match=rf"min_samples.*{shown}"):
+            tc.timecorr(x, cfun=cfun, min_samples=most * 1.01, **kw)
+        out = _quiet(tc.timecorr, x, cfun=cfun, min_samples=most, **kw)
+        assert not np.isnan(out[-1]).any()  # the tolerance: the maximum is reached
+        assert not np.isnan(_quiet(tc.timecorr, x, cfun=cfun, min_samples=reached,
+                                   **kw)[-1]).any()
+    with pytest.raises(ValueError, match=rf"min_samples.*{shown}"):
+        tc.wcorr(x, x, w, causal=True, min_samples=most + 1)
+    # missing data may leave every row below a number the kernel reaches
+    y = x.copy()
+    y[::2] = np.nan
+    assert np.isnan(_quiet(tc.timecorr, y, cfun=tc.autofc, min_samples=most,
+                           **kw)).all()
 
 
 def test_three_equal_weights_are_three_samples():
@@ -311,7 +383,8 @@ def test_three_equal_weights_are_three_samples():
     # the default is 3
     assert np.array_equal(out, _quiet(tc.timecorr, x, **kw), equal_nan=True)
     # a little more than 3 samples asks for more than the window has
-    assert np.isnan(_quiet(tc.timecorr, x, min_samples=3.001, **kw)).all()
+    with pytest.raises(ValueError, match="min_samples"):
+        tc.timecorr(x, min_samples=3.001, **kw)
     # the same kernel as an array, in wcorr
     w = np.tril(np.ones((60, 60))) - np.tril(np.ones((60, 60)), -3)
     r = _quiet(tc.wcorr, x, x, w, causal=True)
@@ -321,8 +394,8 @@ def test_three_equal_weights_are_three_samples():
 
 
 @pytest.mark.parametrize("include_zero", [True, False])
-@pytest.mark.parametrize("var, min_samples", [(25, 3), (25, 8), (25, 10), (100, 10),
-                                              (25, 0)])
+@pytest.mark.parametrize("var, min_samples", [(25, None), (25, 1), (25, 3), (25, 8),
+                                              (100, 10)])
 def test_warm_up_rows_are_those_below_the_rules(include_zero, var, min_samples):
     n = 150
     x = np.random.default_rng(4).standard_normal((n, 4))
@@ -333,21 +406,15 @@ def test_warm_up_rows_are_those_below_the_rules(include_zero, var, min_samples):
     expected = _expected_undefined(w, np.ones(n), min_samples)
     assert np.array_equal(np.isnan(out).all(axis=1), expected)
     assert not np.isnan(out[~expected]).any()
-    if (var, min_samples) == (25, 10):
-        # a backward Gaussian of variance 25 has fewer than 10 effective
-        # samples (9.4 with the diagonal) in every row
-        ess = w[-1].sum() ** 2 / (w[-1] ** 2).sum()
-        assert 8 < ess < 10 and expected.all()
-        return
     first = int(np.flatnonzero(~expected)[0])
     assert np.array_equal(np.flatnonzero(expected), np.arange(first))
-    if min_samples >= 8:
-        assert first > 5  # more leading rows than the three-sample rule gives
-    if min_samples == 3:
+    if min_samples in (None, 1):
+        assert first == (2 if include_zero else 3)  # fewer than 3 samples
+    elif min_samples == 3:
         # three unequal weights are fewer than 3 effective samples
         assert first == (3 if include_zero else 4)
-    if min_samples == 0:
-        assert first == (2 if include_zero else 3)  # fewer than 3 samples
+    else:
+        assert first > 5  # more leading rows than the three-sample rule gives
 
 
 def test_rows_without_samples_do_not_count_as_observed():
@@ -365,24 +432,13 @@ def test_rows_without_samples_do_not_count_as_observed():
     assert expected[45:55].all() and not expected[70:].any()
 
 
-def test_a_kernel_too_narrow_for_min_samples_gives_no_defined_row():
-    x = np.random.default_rng(3).standard_normal((80, 3))
-    kw = dict(causal=True, weights_function=tc.t_weights, weights_params={"df": 3})
-    for cfun in (tc.autofc, None):
-        with pytest.warns(UserWarning, match="80"):
-            out = tc.timecorr(x, cfun=cfun, **kw)
-        assert np.isnan(out).all()
-        assert not np.isnan(_quiet(tc.timecorr, x, cfun=cfun, min_samples=2,
-                                   **kw)[10:]).any()
-
-
 def test_zero_variance_entries_stay_zero():
     x = np.random.default_rng(6).standard_normal((100, 4))
     x[:, 1] = 7.0
     out = _quiet(tc.timecorr, x, causal=True, cfun=tc.autofc,
                  weights_params={"var": 25})
-    assert np.isnan(out[:3]).all() and not np.isnan(out[3:]).any()
-    full = tc.vec2mat(out[3:])  # (K, K, T - 3)
+    assert np.isnan(out[:2]).all() and not np.isnan(out[2:]).any()
+    full = tc.vec2mat(out[2:])  # (K, K, T - 2)
     assert np.all(full[1, :, :] == 0) and np.all(full[:, 1, :] == 0)
     assert np.all(full[[0, 2, 3], [0, 2, 3], :] == 1)
     assert np.any(full[0, 2, :] != 0)
@@ -397,11 +453,16 @@ def test_warning_names_the_undefined_rows():
         out = tc.timecorr(x, causal=True, cfun=tc.autofc, min_samples=8,
                           weights_params={"var": 25})
     assert np.array_equal(np.flatnonzero(np.isnan(out).all(axis=1)), np.arange(n8))
-    with pytest.warns(UserWarning, match=r"^3 of 90 timepoints .* NaN"):
+    with pytest.warns(UserWarning, match=r"^2 of 90 timepoints .* NaN") as record:
         tc.wcorr(x, x, w, causal=True)
-    with pytest.warns(UserWarning, match=r"^2 of 90 timepoints .* NaN"):
-        tc.autofc(x, w, causal=True, min_samples=0)
+    assert "min_samples" not in str(record[0].message)
+    with pytest.warns(UserWarning, match=r"^3 of 90 timepoints .*min_samples=3.* NaN"):
+        tc.autofc(x, w, causal=True, min_samples=3)
     with pytest.warns(UserWarning, match=r"[Ss]moothing .* 3 timepoint"):
+        tc.timecorr(x, causal=True, cfun=None, weights_params={"var": 25},
+                    min_samples=3)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # every smoothed value is defined
         tc.timecorr(x, causal=True, cfun=None, weights_params={"var": 25})
     # one warning per call
     with warnings.catch_warnings(record=True) as caught:
@@ -442,7 +503,7 @@ def test_correlation_functions_called_directly():
         expected = _quiet(tc.timecorr, data, cfun=cfun, **kw)
         got = _quiet(direct)
         for e, g in zip(expected, got):
-            assert np.isnan(g[:3]).all() and not np.isnan(g[3:]).any()
+            assert np.isnan(g[:2]).all() and not np.isnan(g[2:]).any()
             assert np.allclose(e, g, atol=1e-12, rtol=0, equal_nan=True)
     # a single array, and wcorr
     one = _quiet(tc.autofc, data[0], w, causal=True, min_samples=6)
@@ -614,12 +675,12 @@ def test_graph_measures_run_on_the_defined_rows(rfun):
                        atol=1e-12, rtol=0)
     # and in a list of subjects
     outs = _quiet(tc.timecorr, [X, X[::-1].copy()], rfun=rfun, **OK)
-    assert len(outs) == 2 and np.isnan(outs[1][:3]).all()
-    assert not np.isnan(outs[1][3:]).any()
+    assert len(outs) == 2 and np.isnan(outs[1][:2]).all()
+    assert not np.isnan(outs[1][2:]).any()
 
 
-@pytest.mark.parametrize("bad", [-1, np.nan, np.inf, "3", None, True])
-def test_min_samples_must_be_a_number(bad):
+@pytest.mark.parametrize("bad", [-1, 0, 0.5, np.nan, np.inf, "3", True])
+def test_min_samples_must_be_none_or_a_number_from_1(bad):
     with pytest.raises(ValueError, match="min_samples"):
         tc.timecorr(X, min_samples=bad, **OK)
     w = tc.gaussian_weights(60, {"var": 9}, direction="backward")

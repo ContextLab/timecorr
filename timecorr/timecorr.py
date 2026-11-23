@@ -19,9 +19,11 @@ from .helpers import (
     _abs_weights,
     _as_kernel_array,
     _causal_clean,
+    _check_reachable,
     _check_causal_kernel,
     _check_min_samples,
     _check_rfun,
+    _kernel_samples,
     _lag_kernel,
     _warn_user,
     autofc,
@@ -44,11 +46,15 @@ def _causal_smooth(x, weights, min_samples):
     ``_kernel_smooth`` for ``causal=True``: the same kernel-weighted means of
     a kernel without weight on later timepoints, each chunk of rows over the
     columns where it has weight.  Infinite samples and samples above 1e150
-    in magnitude are missing, like NaN.  An entry whose feature has an
-    effective sample size ``(sum |w|)**2 / sum w**2`` (over the feature's
-    observed samples in the kernel row) below ``min_samples``, or no weighted
-    sample, is NaN; one warning reports how many timepoints have one.
+    in magnitude are missing, like NaN.  An entry whose feature has no
+    weighted sample or, with ``min_samples`` (not None), an effective sample
+    size ``(sum |w|)**2 / sum w**2`` (over the feature's observed samples in
+    the kernel row) below it is NaN; one warning reports how many timepoints
+    have one.  ``ValueError`` when no row of the kernel reaches
+    ``min_samples``.
     """
+    if min_samples is not None:
+        _check_reachable(_kernel_samples(as_kernel(weights))[1], min_samples)
     x = _causal_clean(x)
     valid = ~np.isnan(x)
     observed = np.where(valid, x, 0.0)
@@ -63,17 +69,20 @@ def _causal_smooth(x, weights, min_samples):
             w = np.divide(w, peak, out=np.zeros_like(w), where=peak != 0)
             den = w @ valid[c0:c1]
             num = w @ observed[c0:c1]
-            ess = np.divide(den**2, (w * w) @ valid[c0:c1], out=np.zeros_like(den),
-                            where=den > 0)
-            defined = (den > 0) & (ess >= min_samples * (1 - _MIN_SAMPLES_RTOL))
+            defined = den > 0
+            if min_samples is not None:
+                ess = np.divide(den**2, (w * w) @ valid[c0:c1],
+                                out=np.zeros_like(den), where=defined)
+                defined &= ess >= min_samples * (1 - _MIN_SAMPLES_RTOL)
         np.divide(num, den, out=out[t0:t1], where=defined)
     undefined = np.isnan(out).any(axis=1)
     if undefined.any():
         warnings.warn(
             f"Smoothing is undefined at {int(undefined.sum())} timepoint(s) (for "
-            "some feature, no weighted, observed sample or an effective sample "
-            f"size below min_samples={min_samples:g}); those values are NaN "
-            "(causal=True)."
+            "some feature, no weighted, observed sample"
+            + ("" if min_samples is None else
+               f" or an effective sample size below min_samples={min_samples:g}")
+            + "); those values are NaN (causal=True)."
         )
     return out
 
@@ -373,7 +382,7 @@ def timecorr(
     events=None,
     events_params=None,
     causal=False,
-    min_samples=3,
+    min_samples=None,
 ):
     """
     Compute dynamic (moment-by-moment) correlations in one or more datasets.
@@ -529,20 +538,23 @@ def timecorr(
           a time, on the mean of its earlier samples that the chunk
           weights, and its zero-variance rule is relative to that reference
           (see ``wcorr``);
-        - timepoints with too few samples are rows of NaN, not 0 (see
+        - timepoints with fewer than 3 samples are rows of NaN, not 0 (see
           ``min_samples``).
-    min_samples : float
-        With ``causal=True``, the effective sample size
-        ``(sum |w|)**2 / sum w**2`` that a timepoint needs, summed over the
-        observed timepoints of its kernel row (those where the data, and
-        for ``isfc`` and ``wisfc`` the reference, have at least one sample);
-        compared with a relative tolerance of 1e-12, so three equal weights
-        are 3 samples.  A timepoint below it, or with fewer than 3 observed
-        timepoints with non-zero weight, is a row of NaN.  With
-        ``cfun=None`` only the effective sample size applies, to each
-        feature's own observed samples: values below it are NaN.  Features
-        with zero variance still give correlations of 0.  Keyword only.
-        Default: 3.
+    min_samples : float or None
+        With ``causal=True``, a timepoint with fewer than 3 observed
+        timepoints with non-zero weight in its kernel row is a row of NaN
+        (observed: the data, and for ``isfc`` and ``wisfc`` the reference,
+        have at least one sample there): the rows that are 0 without
+        ``causal``.  A number (>= 1) is also the effective sample size
+        ``(sum |w|)**2 / sum w**2`` a timepoint needs over those
+        timepoints, compared with a relative tolerance of 1e-12 (three
+        equal weights are 3 samples); rows below it are NaN too.  A number
+        that no row of the kernel reaches raises ``ValueError`` (a backward
+        Gaussian of variance 25 has at most 9.4 effective samples).  With
+        ``cfun=None`` a value is NaN when its feature has no weighted
+        sample, or fewer effective samples than the number.  Features with
+        zero variance still give correlations of 0.  Keyword only.
+        Default: None.
 
     Returns
     -------
@@ -590,8 +602,9 @@ def timecorr(
         ``cfun`` does not return a list with one array per subject; and as
         raised by ``segment`` for features entries of ``events``.  With
         ``causal=True``, for the arguments listed under ``causal`` that have
-        no causal form, and for a ``min_samples`` that is not a finite number
-        >= 0; for ``min_samples`` given without ``causal=True``.
+        no causal form, and for a ``min_samples`` that is not None or a
+        finite number >= 1, or that no row of the kernel reaches; for
+        ``min_samples`` given without ``causal=True``.
     NotImplementedError
         With ``causal=True``, for an ``rfun`` that is fitted to data.
     RuntimeError, ImportError
@@ -684,11 +697,11 @@ def timecorr(
     (3, (100, 15))
 
     Causal estimates: row 60 does not change when later rows do.  The first
-    3 rows have fewer than 3 effective samples and are NaN (a
-    ``UserWarning`` says so).
+    2 rows have fewer than 3 samples and are NaN (a ``UserWarning`` says
+    so).
 
     >>> past = tc.timecorr(data, causal=True, weights_params={"var": 50})
-    >>> bool(np.isnan(past[:3]).all()), bool(np.isnan(past[3:]).any())
+    >>> bool(np.isnan(past[:2]).all()), bool(np.isnan(past[2:]).any())
     (True, False)
     >>> later = data.copy()
     >>> later[61:] = 1000.0

@@ -1312,3 +1312,128 @@ def test_reach_with_parameters_that_are_not_finite_never_fails(function, params)
         assert reach == 0  # a kernel without weight reaches nothing
     else:
         assert reach is None or reach > 0
+
+
+# ----------------------------------------------------------------------------
+# whole-branch review: combine functions, smoothing with a reducer
+# ----------------------------------------------------------------------------
+
+
+def _guarantee_warnings(f, *args, **kwargs):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = f(*args, **kwargs)
+    found = [c for c in caught if "guarantee" in str(c.message)]
+    assert all(issubclass(c.category, UserWarning) for c in found)
+    return out, [str(c.message) for c in found]
+
+
+def test_a_combine_function_of_the_users_warns_once():
+    # the reviewer's input: this function reads every row, and replacing
+    # rows 41 on changes row 40 (by 0.41), which the guarantee cannot cover
+    x = np.random.RandomState(0).randn(60, 4)
+    kw = dict(causal=True, cfun=tc.autofc, weights_params={"var": 25})
+
+    def mine(corrs):
+        return corrs[0] - np.nanmean(corrs[0], axis=0)
+
+    out, messages = _guarantee_warnings(tc.timecorr, x, combine=mine, **kw)
+    assert len(messages) == 1 and "combine is a function of your own" in messages[0]
+    later = x.copy()
+    later[41:] = 100
+    changed, _ = _guarantee_warnings(tc.timecorr, later, combine=mine, **kw)
+    assert np.nanmax(np.abs(changed[40] - out[40])) > 0.1
+
+    def my_cfun(data, weights):
+        return tc.autofc(data, weights)
+
+    _, messages = _guarantee_warnings(
+        tc.timecorr, x, combine=mine, **{**kw, "cfun": my_cfun})
+    assert len(messages) == 1
+    assert "cfun and combine are functions of your own" in messages[0]
+    # smoothing combines too
+    _, messages = _guarantee_warnings(
+        tc.timecorr, x, combine=mine, **{**kw, "cfun": None})
+    assert len(messages) == 1 and "combine is a function" in messages[0]
+    # the built-in ones are recognized
+    data = [x, x[::-1].copy()]
+    for combine in (tc.null_combine, tc.corrmean_combine, tc.mean_combine,
+                    tc.tstat_combine):
+        _, messages = _guarantee_warnings(
+            tc.timecorr, data, combine=combine, **{**kw, "cfun": tc.isfc})
+        assert messages == []
+    assert "``combine`` function of your own" in " ".join(tc.timecorr.__doc__.split())
+    for name in ("features", "two_path_step"):
+        doc = " ".join(getattr(tc, name).__doc__.split())
+        assert "own (as ``cfun``, ``combine``, ``rfun`` or ``delta_rfun``)" in doc
+
+
+def test_smoothing_ignores_the_reducer_as_without_causal():
+    # cfun=None returns the smoothed samples whatever rfun is, so nothing is
+    # fitted and fit_timepoints is not asked for
+    x = np.random.RandomState(0).randn(60, 6)
+    kw = dict(cfun=None, weights_params={"var": 25})
+    plain = tc.timecorr(x, **kw)
+    assert np.array_equal(tc.timecorr(x, rfun="PCA", **kw), plain)
+    smooth = _quiet(tc.timecorr, x, causal=True, **kw)
+    for rfun in ("PCA", "weighted_strength", tc.Communities(n=2), "strength",
+                 "UMAP"):
+        out, messages = _guarantee_warnings(tc.timecorr, x, causal=True, rfun=rfun, **kw)
+        assert np.array_equal(out, smooth, equal_nan=True) and messages == []
+        given = _quiet(tc.timecorr, x, causal=True, rfun=rfun, fit_timepoints=30, **kw)
+        assert np.array_equal(given, smooth, equal_nan=True)
+    # as without causal, the reducer is not looked at
+    assert np.array_equal(tc.timecorr(x, rfun="no such reducer", **kw), plain)
+    out = _quiet(tc.timecorr, x, causal=True, rfun="no such reducer", **kw)
+    assert np.array_equal(out, smooth, equal_nan=True)
+    # the correlation path still asks for it
+    with pytest.raises(ValueError, match="fit_timepoints"):
+        tc.timecorr(x, causal=True, rfun="PCA", cfun=tc.autofc,
+                    weights_params={"var": 25})
+
+
+def test_tstat_combine_is_exact_under_replacement_and_conditioned_under_removal():
+    # the reviewer's input: two subjects, whose isfc correlations are the
+    # same, so every t statistic divides round-off by a spread near zero
+    rng = np.random.RandomState(4)
+    xs = [rng.randn(70, 4) for _ in range(2)]
+    xs[0][48, 1] = np.inf
+    kw = dict(causal=True, cfun=tc.isfc, combine=tc.tstat_combine,
+              weights_params={"var": 25}, min_samples=3, events=[[20, 60], [25, 65]])
+    full = _quiet(tc.timecorr, xs, **kw)
+    for value in (7.0, np.nan, np.inf):  # replacement changes no bit
+        later = [x.copy() for x in xs]
+        for x in later:
+            x[51:] = value
+        assert np.array_equal(_quiet(tc.timecorr, later, **kw)[:51], full[:51],
+                              equal_nan=True)
+    cut = _quiet(tc.timecorr, [x[:51] for x in xs], **kw)
+    assert np.array_equal(np.isnan(cut), np.isnan(full[:51]))
+    finite = np.isfinite(cut) & np.isfinite(full[:51])
+    assert np.array_equal(np.isfinite(cut), np.isfinite(full[:51]))
+    difference = np.abs(cut[finite] - full[:51][finite])
+    assert difference.max() > ATOL  # not to 1e-9: the documented exception
+    assert np.max(difference / np.maximum(1.0, np.abs(cut[finite]))) <= 1e-8
+    # subjects whose correlations differ: to 1e-9 of the magnitude, and
+    # to 1e-9 itself for statistics of ordinary size
+    rng = np.random.RandomState(7)
+    ys = [rng.randn(120, 5) for _ in range(4)]
+    kw = dict(causal=True, cfun=tc.isfc, combine=tc.tstat_combine,
+              weights_params={"var": 25})
+    full = _quiet(tc.timecorr, ys, **kw)
+    assert np.isfinite(full[2:]).all() and np.abs(full[2:]).max() < 100
+    for n in (40, 71, 100):
+        cut = _quiet(tc.timecorr, [y[:n] for y in ys], **kw)
+        assert np.array_equal(np.isnan(cut), np.isnan(full[:n]))
+        difference = np.nan_to_num(np.abs(cut - full[:n]))
+        assert difference.max() <= ATOL
+        assert np.max(difference / np.maximum(1.0, np.nan_to_num(np.abs(cut)))) <= 1e-9
+        later = [y.copy() for y in ys]
+        for y in later:
+            y[n:] = np.nan
+        assert np.array_equal(_quiet(tc.timecorr, later, **kw)[:n], full[:n],
+                              equal_nan=True)
+    for name in ("timecorr", "features", "two_path_step"):
+        doc = " ".join(getattr(tc, name).__doc__.split())
+        assert "the t statistics of ``tstat_combine``" in doc
+        assert "to about 1e-9 of their magnitude" in doc

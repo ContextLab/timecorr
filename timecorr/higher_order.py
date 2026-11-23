@@ -111,6 +111,7 @@ from .summaries import (
 )
 from .timecorr import (
     _apply_frozen,
+    _builtin_combine,
     _check_fit_timepoints,
     _check_linear_model,
     _event_kernels,
@@ -657,7 +658,7 @@ class _causal_step:
     """
     Context of one ``timecorr`` call of a step: the keyword arguments of the
     causal estimator (none without ``causal``).  ``timecorr``'s warning about
-    a correlation function of the user's is not repeated at every step
+    a correlation or combine function of the user's is not repeated at every step
     (``_check_causal`` issued it once for the call).
     """
 
@@ -672,7 +673,8 @@ class _causal_step:
         self._caught = warnings.catch_warnings()
         self._caught.__enter__()
         warnings.filterwarnings(
-            "ignore", message=r"causal=True: cfun is a function of your own"
+            "ignore", message=r"causal=True: (cfun|combine|cfun and combine) "
+                              r"(is a function|are functions) of your own"
         )
         return {"causal": True, "min_samples": self.min_samples}
 
@@ -1821,7 +1823,11 @@ def two_path_step(
         linear models such as PCA once fitted); the eigenvector-based
         graph measures (``"eigenvector_centrality"``, the PageRank
         measures) can differ by more at a correlation matrix whose leading
-        eigenvalues coincide.  With ``cfun=None`` the steps smooth their
+        eigenvalues coincide, and the t statistics of ``tstat_combine``,
+        which divide by the spread of the subjects' correlations, where
+        that spread is close to zero (always with two subjects and
+        ``isfc``: their correlations are the same), to about 1e-9 of
+        their magnitude instead.  With ``cfun=None`` the steps smooth their
         input, and smoothed values agree to round-off relative to the
         magnitude of the data (see ``timecorr``).  Default: False.  With
         ``causal=True``:
@@ -1842,8 +1848,11 @@ def two_path_step(
           first ``fit_timepoints`` rows and then applied, unchanged, to
           every row.  None and the graph measures (``"strength"``,
           ``"eigenvector_centrality"``, ``"pagerank_centrality"``,
-          ``"pagerank_centrality_abs"``) need no fit.  A function of your
-          own (as ``cfun``, ``rfun`` or ``delta_rfun``) is called as
+          ``"pagerank_centrality_abs"``) need no fit.  A model reads the
+          rows without any missing value: a row with a NaN (a smoothed
+          row of ``cfun=None`` can have some) is a row of NaN in its
+          output.  A function of your
+          own (as ``cfun``, ``combine``, ``rfun`` or ``delta_rfun``) is called as
           without ``causal``, with one ``UserWarning`` that the guarantee
           does not cover what it does; so is a model outside the list
           under ``fit_timepoints``, with one ``UserWarning`` of its own;
@@ -2106,7 +2115,7 @@ def two_path_step(
             feeding_params={order: delta_weights_params}, events=[events],
             T=subjects[0].shape[0], n_subjects=len(subjects),
             include_zero=include_zero, min_samples=min_samples,
-            fit_timepoints=fit_timepoints,
+            fit_timepoints=fit_timepoints, combine=combine,
         )
         include_timepoints = "backward"
         estimator = {"causal": True, "min_samples": min_samples}
@@ -2341,7 +2350,8 @@ def _fit_pass():
 def _check_causal(*, function, include_timepoints, weights_function,
                   delta_weights_function, cfun, rfun, delta_rfun, analysis_rfun,
                   feeding_rfun, analysis_params, feeding_params, events, T,
-                  n_subjects, include_zero, min_samples, fit_timepoints=None):
+                  n_subjects, include_zero, min_samples, fit_timepoints=None,
+                  combine=null_combine):
     """
     The checks of ``features`` and ``two_path_step`` with ``causal=True``
     (``function``: the name of the caller, for the messages), before
@@ -2428,6 +2438,7 @@ def _check_causal(*, function, include_timepoints, weights_function,
     builtin = cfun is None or cfun in (isfc, autofc) or _fixed_weights_wisfc(cfun)
     theirs = [name for name, ours in (
         ("cfun", builtin),
+        ("combine", _builtin_combine(combine)),
         ("rfun", not any(_theirs(r) for r in analysis_rfun.values())),
         ("delta_rfun", not any(_theirs(r) for r in feeding_rfun.values())),
     ) if not ours]
@@ -2953,7 +2964,11 @@ def features(
         linear models such as PCA once fitted); the eigenvector-based
         graph measures (``"eigenvector_centrality"``, the PageRank
         measures) can differ by more at a correlation matrix whose leading
-        eigenvalues coincide.  With ``cfun=None`` the steps smooth their
+        eigenvalues coincide, and the t statistics of ``tstat_combine``,
+        which divide by the spread of the subjects' correlations, where
+        that spread is close to zero (always with two subjects and
+        ``isfc``: their correlations are the same), to about 1e-9 of
+        their magnitude instead.  With ``cfun=None`` the steps smooth their
         input, and smoothed values agree to round-off relative to the
         magnitude of the data (see ``timecorr``).  Default: False.  With
         ``causal=True``:
@@ -2974,8 +2989,11 @@ def features(
           first ``fit_timepoints`` rows and then applied, unchanged, to
           every row.  None and the graph measures (``"strength"``,
           ``"eigenvector_centrality"``, ``"pagerank_centrality"``,
-          ``"pagerank_centrality_abs"``) need no fit.  A function of your
-          own (as ``cfun``, ``rfun`` or ``delta_rfun``) is called as
+          ``"pagerank_centrality_abs"``) need no fit.  A model reads the
+          rows without any missing value: a row with a NaN (a smoothed
+          row of ``cfun=None`` can have some) is a row of NaN in its
+          output.  A function of your
+          own (as ``cfun``, ``combine``, ``rfun`` or ``delta_rfun``) is called as
           without ``causal``, with one ``UserWarning`` that the guarantee
           does not cover what it does; so is a model outside the list
           under ``fit_timepoints``, with one ``UserWarning`` of its own;
@@ -3548,7 +3566,7 @@ def features(
             feeding_params=given_feeding,
             events=list(events.values()) if isinstance(events, dict) else [events],
             T=T, n_subjects=S, include_zero=include_zero, min_samples=min_samples,
-            fit_timepoints=fit_timepoints,
+            fit_timepoints=fit_timepoints, combine=combine,
         )
         include_timepoints = "backward"
     # events are resolved (and features segmented) once, before anything is computed

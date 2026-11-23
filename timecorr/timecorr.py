@@ -33,13 +33,16 @@ from .helpers import (
     _lag_kernel,
     _warn_user,
     autofc,
+    corrmean_combine,
     eye_weights,
     format_data,
     gaussian_weights,
     isfc,
+    mean_combine,
     null_combine,
     one_sided,
     reduce,
+    tstat_combine,
     wisfc,
 )
 
@@ -635,14 +638,23 @@ def _apply_frozen(corrs, frozen):
     return out if isinstance(corrs, list) else out[0]
 
 
+def _builtin_combine(combine):
+    """Whether ``combine`` is one of timecorr's combine functions."""
+    return any(combine is f for f in (null_combine, corrmean_combine,
+                                      mean_combine, tstat_combine))
+
+
 def _causal_arguments(weights_function, weights_params, include_timepoints, cfun,
-                      rfun, events, T, n_subjects, fit_timepoints=None):
+                      rfun, events, T, n_subjects, fit_timepoints=None,
+                      combine=null_combine):
     """
     The checks of ``timecorr(..., causal=True)``.  Returns
     ``(include_timepoints, cfun)``: ``'backward'``, and the correlation
     function to call (a built-in one is called with ``causal=True``).
     Raises ``ValueError`` for what has no causal form, and warns once when
-    ``cfun`` or ``rfun`` is a function of the user's.
+    ``cfun``, ``combine`` or ``rfun`` is a function of the user's.  With
+    ``cfun=None`` (smoothing) the reducer is not used, and nothing about it
+    is checked, as without ``causal``.
     """
     side = str(include_timepoints).lower()
     if side in ("forward", "post"):
@@ -682,6 +694,8 @@ def _causal_arguments(weights_function, weights_params, include_timepoints, cfun
             "recording.  Pass the boundaries (the timepoints where a new block "
             "starts), for example events=[100, 250]."
         )
+    if cfun is None:
+        rfun = None  # smoothing returns the smoothed samples: no reducer
     _check_rfun(rfun)
     _check_linear_model(rfun, "rfun")
     if _needs_fit(rfun) and fit_timepoints is None:
@@ -696,11 +710,13 @@ def _causal_arguments(weights_function, weights_params, include_timepoints, cfun
 
     theirs = [name for name, f, ours in (
         ("cfun", cfun, builtin),
+        ("combine", combine, _builtin_combine(combine)),
         ("rfun", rfun, not callable(rfun) or isinstance(rfun, _Summary)),
     ) if not ours]
     if theirs:
         _warn_user(
-            f"causal=True: {' and '.join(theirs)} "
+            f"causal=True: {', '.join(theirs[:-1])}"
+            f"{'' if len(theirs) == 1 else ' and '}{theirs[-1]} "
             f"{'is a function' if len(theirs) == 1 else 'are functions'} of your "
             "own; the guarantee that row t does not depend on later rows does "
             "not cover what "
@@ -880,7 +896,11 @@ def timecorr(
         linear models such as PCA once fitted); the eigenvector-based
         graph measures (``"eigenvector_centrality"``, the PageRank
         measures) can differ by more at a correlation matrix whose leading
-        eigenvalues coincide.  Smoothed values (``cfun=None``) are on the
+        eigenvalues coincide, and the t statistics of ``tstat_combine``,
+        which divide by the spread of the subjects' correlations, where
+        that spread is close to zero (always with two subjects and
+        ``isfc``: their correlations are the same), to about 1e-9 of
+        their magnitude instead.  Smoothed values (``cfun=None``) are on the
         scale of the data, not bounded like correlations: when later rows
         are removed they agree to round-off relative to the magnitude of
         the data, that is to 1e-9 or 8 units in the last place of the
@@ -902,8 +922,11 @@ def timecorr(
           timepoint, so ``cfun=tc.wisfc`` raises ``ValueError``).  Any
           other function is called as without ``causal``, with a
           ``UserWarning`` that the guarantee does not cover it; the same
-          holds for a callable ``rfun``, and for a model outside the list
-          under ``fit_timepoints``;
+          holds for a ``combine`` function of your own (a function of your
+          own is called with every row), for a callable ``rfun``, and for
+          a model outside the list under ``fit_timepoints``.  With
+          ``cfun=None`` (smoothing) ``rfun`` is not used, as without
+          ``causal``, and needs no ``fit_timepoints``;
         - ``events`` must be boundaries; features to segment raise
           ``ValueError``.  That the boundaries themselves were chosen
           without later data is the caller's responsibility.  The warm-up
@@ -957,7 +980,9 @@ def timecorr(
         unchanged (to 1e-9; bit for bit under replacement) when rows after
         ``t`` are replaced or removed, and a row ``t < n`` when rows from
         ``n`` on are.  ``n`` equal to the number of timepoints fits on
-        every row.  A model must be a linear map applied to each row by itself.
+        every row.  A model must be a linear map applied to each row by itself;
+        it is fitted on, and applied to, the rows without any missing value
+        (a row with a NaN is a row of NaN in its output).
         The guarantee covers ``"PCA"``, ``"IncrementalPCA"``,
         ``"TruncatedSVD"``, ``"FastICA"`` and ``"FactorAnalysis"``
         (scikit-learn's classes of those names, by exact class: a subclass is
@@ -1169,7 +1194,7 @@ def timecorr(
     if causal:
         include_timepoints, cfun = _causal_arguments(
             weights_function, weights_params, include_timepoints, cfun, rfun,
-            events, T, len(data), fit_timepoints,
+            events, T, len(data), fit_timepoints, combine,
         )
     # the built-in correlation functions: one kernel per subject, never T x T
     builtin = cfun in _KERNEL_LIST_CFUNS or (causal and _fixed_weights_wisfc(cfun))

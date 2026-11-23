@@ -828,3 +828,31 @@ def test_a_streamed_wisfc_step_that_cannot_fit_is_refused_before_order_one():
         _check_streamed_steps(K, n, S, budget, *reducers, [1], cfun=WISFC,
                               causal=True, **steps)
     _check_streamed_steps(K, n, S, budget, *reducers, [1], cfun=WISFC, **steps)
+
+
+@both
+def test_a_combine_function_of_the_users_warns_once(function):
+    f = FUNCTIONS[function]
+
+    def my_combine(corrs):
+        return tc.mean_combine(corrs)
+
+    def my_cfun(data, weights):
+        return tc.isfc(data, weights)
+
+    data = [np.random.default_rng(s).standard_normal((60, 5)) for s in range(3)]
+    kw = dict(causal=True, cfun=tc.isfc, **STRENGTH, **PARAMS)
+    for extra, names in (({"combine": my_combine}, "combine is a function"),
+                         ({"combine": my_combine, "cfun": my_cfun},
+                          "cfun and combine are functions")):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            f(data, **{**kw, **extra})
+        messages = [str(c.message) for c in caught if "guarantee" in str(c.message)]
+        assert len(messages) == 1 and names in messages[0]
+    for combine in (tc.null_combine, tc.corrmean_combine, tc.mean_combine,
+                    tc.tstat_combine):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            f(data, **{**kw, "combine": combine})
+        assert not [c for c in caught if "guarantee" in str(c.message)]

@@ -3422,7 +3422,11 @@ def tstat_combine(corrs, return_pvals=False):
     value in every matrix (zero variance across subjects, for example the
     diagonal of ``autofc`` results, where every value is 1) has t = +inf or
     -inf with the sign of that value (p = 0), or t = 0 (p = 1) when the value
-    is 0, with no warning.
+    is 0, with no warning.  Where the values of the matrices nearly coincide
+    the statistic is ill-conditioned: round-off of the correlations is
+    divided by a spread close to zero (with ``causal=True`` such entries
+    agree to about 1e-9 of their magnitude, not to 1e-9, when later rows
+    are removed; see ``timecorr``).
 
     Parameters
     ----------

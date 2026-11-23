@@ -12,6 +12,7 @@ replaced or removed).  Real computations; nothing is mocked.
 """
 
 import pickle
+import re
 import warnings
 
 import numpy as np
@@ -31,6 +32,20 @@ ROWS = [100, 140, 180]  # the fits: N + j * M below T
 SEGMENTS = [(100, 140), (140, 180), (180, 200)]
 PARAMS = dict(causal=True, weights_params={"var": 25},
               delta_weights_params={"var": 16})
+
+def _drifting(seed, n=T, modules=4, per=3, weak=3):
+    """Modules of nodes that share a signal, and ``weak`` nodes that load on
+    a module with a strength that drifts: a weak node is a cluster of its
+    own in one fit and a member of a community in the next, so the number
+    of clusters does not fix the number of communities of 2 or more nodes."""
+    rng = np.random.default_rng(31 + seed)
+    signals = rng.standard_normal((n, modules))
+    x = np.repeat(signals, per, axis=1) + 0.5 * rng.standard_normal((n, modules * per))
+    rng.choice([1.0, 0.0], size=(1, weak), p=[0.5, 0.5])
+    load = np.abs(np.cumsum(rng.standard_normal((n, weak)) * 0.08, axis=0) + 0.45)
+    extra = load * signals[:, rng.integers(0, modules, weak)]
+    return np.hstack([x, extra + rng.standard_normal((n, weak))])
+
 
 # name: (subjects, data, features, highest order, arguments)
 CONFIGS = {
@@ -54,6 +69,11 @@ CONFIGS = {
     "communities": (1, _modular, 12, 2, dict(
         cfun=tc.autofc, rfun={1: tc.Communities(n=4), 2: "weighted_strength"},
         delta_rfun={1: tc.Communities(), 2: "weighted_strength"})),
+    # six clusters give 5 communities of 2 or more nodes on the first 100
+    # rows and 4 on the first 140 and 180, where five clusters give 5
+    "drifting": (1, _drifting, 15, 2, dict(
+        cfun=tc.autofc, rfun="weighted_strength",
+        delta_rfun={1: tc.Communities(n=6), 2: "weighted_strength"})),
 }
 # no rule changes a fit: nothing is matched, no structure is carried over
 EXACT = ["strength", "strength-isfc", "split", "mixed"]
@@ -64,12 +84,12 @@ GUARANTEED = [pytest.param("auto", True, marks=_SLOW), ("auto", False),
               ("auto-isfc", True), ("pca", True),
               pytest.param("pca", False, marks=_SLOW), ("pca-subjects", True),
               pytest.param("strength", True, marks=_SLOW), ("strength", False),
-              ("strength-isfc", False)]
+              ("strength-isfc", False), ("drifting", True), ("drifting", False)]
 
 
 def _data(config, seed=0, n=T):
     n_subjects, make, K = CONFIGS[config][:3]
-    kw = {} if make is _modular else {"K": K}
+    kw = {"K": K} if make is _series else {}
     data = [make(seed + s, n=n, **kw) for s in range(n_subjects)]
     return data[0] if n_subjects == 1 else data
 
@@ -443,6 +463,95 @@ def test_rows_do_not_depend_on_later_rows(config, include_zero):
             if mode != "remove":
                 # replacing later rows changes no bit
                 assert _identical(full, part, rows)
+
+
+def _kept_warnings(f, *args, **kwargs):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = f(*args, **kwargs)
+    return out, [str(w.message) for w in caught
+                 if str(w.message).startswith("refit_every:")]
+
+
+def test_a_refit_looks_for_the_columns_of_the_first_fit_not_its_clusters():
+    x = _data("drifting")
+    kw = dict(return_info=True, return_model=True)
+    widths = []
+    for n in ROWS:  # single fits, each with six clusters
+        _, info, model = _run(x, "drifting", fit_timepoints=n, refit_every=None, **kw)
+        assert model.fits[(1, "feeding")]["n"] == 6
+        widths.append(info[1]["output_width"])
+    assert widths == [5, 4, 4]
+    (out, info, model), messages = _kept_warnings(_run, x, "drifting", **kw)
+    # no fit is left out, and nothing warns
+    assert messages == []
+    for entry in info:
+        assert entry["refit_rows"] == ROWS and entry["refit_kept_previous"] == []
+    assert out[1][1].shape == (T, 5)
+    fit = model.fits[(1, "feeding")]
+    # the last fit: n0 + 1 = 7 clusters give 4 such communities, n0 - 1 = 5
+    # give the 5 of the first fit
+    assert fit["n"] == 5 and int(np.sum(np.bincount(fit["labels"]) >= 2)) == 5
+    assert len(set(info[1]["labels"])) == 5 and info[1]["output_width"] == 5
+    first = _run(x, "drifting", refit_every=None)
+    assert _same_rows(out, first, 0, ROWS[1])
+    for start, stop in SEGMENTS[1:]:
+        assert not _same_rows(out, first, start, stop)
+    # each segment is the model of the fits so far (as for any matched fit)
+    for start, stop in SEGMENTS:
+        _, prefix = _run(x[:stop], "drifting", return_model=True)
+        applied = _quiet(prefix.transform, x, return_delta=True)
+        assert _rows_difference(out, applied, start, stop) <= ATOL
+
+
+def test_a_fit_that_is_left_out_warns_once_with_its_rows_and_step():
+    x = _merging()
+    kw = dict(order=2, cfun=tc.autofc, rfun="weighted_strength",
+              delta_rfun={1: tc.Communities(n=3), 2: "weighted_strength"}, **PARAMS)
+    (_, info), messages = _kept_warnings(
+        tc.features, x, fit_timepoints=100, refit_every=40, return_info=True, **kw)
+    assert info[0]["refit_kept_previous"] == [140, 180]
+    assert len(messages) == 1
+    assert re.search(r"refit_every: 2 of the 2 fits after the first .*"
+                     r"row 140 \(order 1, feeding path\): 2 communities of 2 or more "
+                     r"nodes.*never the 3 of the fit before.*"
+                     r"row 180 \(order 1, feeding path\)", messages[0])
+    assert "refit_kept_previous" in messages[0]
+    # the fit at row 140 alone: one row, and no warning without a refit
+    (_, info), messages = _kept_warnings(
+        tc.features, x[:150], fit_timepoints=100, refit_every=40, return_info=True, **kw)
+    assert info[0]["refit_kept_previous"] == [140]
+    assert len(messages) == 1 and "row 140 (order 1, feeding path)" in messages[0]
+    assert _kept_warnings(tc.features, x, fit_timepoints=100, **kw)[1] == []
+    for text in ("n0 + 1", "n0 - 5", "communities of 2 or more nodes",
+                 "one ``UserWarning`` for the call names"):
+        assert text in " ".join(tc.features.__doc__.split())
+
+
+@pytest.mark.slow
+def test_the_defaults_refit_on_the_industry_returns():
+    # 5033 x 49 daily returns (a 4 MB download, cached).  With the defaults
+    # every refit was left out: the first fit's 14 clusters hold 10
+    # communities of 2 or more industries, and 14 clusters of later rows 9
+    x = tc.datasets.industry_returns("2005-01-01", "2024-12-31").values
+    assert x.shape == (5033, 49)
+    kw = dict(order=2, causal=True, fit_timepoints=2517,
+              weights_params={"var": 400}, delta_weights_params={"var": 400})
+    (X, info, model), messages = _kept_warnings(
+        tc.features, x, refit_every=1000, return_info=True, return_model=True, **kw)
+    kept = info[0]["refit_kept_previous"]
+    print(f"\nindustry returns: refit_rows {info[0]['refit_rows']}, "
+          f"refit_kept_previous {kept}, clusters of the last fit "
+          f"{model.fits[(1, 'feeding')]['n']}, columns {info[1]['output_width']}")
+    assert info[0]["refit_rows"] == [2517, 3517, 4517]
+    assert len(kept) < 2  # at least one refit is used
+    assert len(messages) == (1 if kept else 0)
+    assert all(str(row) in messages[0] for row in kept)
+    assert info[1]["output_width"] == 10
+    one = _quiet(tc.features, x, **kw)
+    last = [r for r in info[0]["refit_rows"][1:] if r not in kept][-1]
+    assert np.array_equal(X[2][:3517], one[2][:3517], equal_nan=True) or 3517 not in kept
+    assert not np.array_equal(X[2][last:], one[2][last:], equal_nan=True)
 
 
 def test_the_fits_made_depend_on_the_length_only_through_their_rows():

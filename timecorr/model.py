@@ -24,8 +24,11 @@ structure of the first fit (``_refit_settings``) and every reducer's fit
 matched to the fit before as soon as it is made (``_Matched``), so that
 the next order of that fit is fitted on the matched columns; rows
 ``[s_j, s_{j+1})`` of the output are those of pass 2 on every row with fit
-``j``.  A fit that cannot have the structure of the first one
-(``helpers._FitUnusable``) is left out: the fit before stays for its rows.
+``j``.  The structure is the output columns: a communities step looks for
+a clustering with the first fit's number of communities of 2 or more nodes
+(``_same_width``).  A fit that cannot have the structure of the first one
+(``helpers._FitUnusable``) is left out: the fit before stays for its rows,
+and one warning for the call names the rows left out.
 """
 
 import copy
@@ -38,6 +41,7 @@ from .helpers import (
     _SUMMARY_NAMES,
     _FittedModel,
     _FitUnusable,
+    _warn_user,
     format_data,
     gaussian_weights,
 )
@@ -52,6 +56,7 @@ from .higher_order import (
 from .summaries import (
     Communities,
     _auto_fallback,
+    _find_communities,
     _FittedSummary,
     _from_name,
     _Summary,
@@ -304,15 +309,17 @@ def _match_labels(labels, previous):
     earlier ones (the one-to-one assignment with the largest number of
     shared nodes) and takes the label that puts its column at that one's
     place.  Single-node communities keep their labels.  ``_FitUnusable``
-    when the numbers of such communities differ.
+    when the numbers of such communities differ (``labels`` are those of
+    ``_same_width``, which looked for a clustering with that number).
     """
     labels, previous = np.asarray(labels), np.asarray(previous)
     kept = np.flatnonzero(np.bincount(labels) >= 2)
     kept_before = np.flatnonzero(np.bincount(previous) >= 2)
     if len(kept) != len(kept_before) or len(labels) != len(previous):
         raise _FitUnusable(
-            f"refit: {len(kept)} communities of 2 or more nodes; the fit "
-            f"before has {len(kept_before)}."
+            f"{len(kept)} communities of 2 or more nodes, and with up to "
+            f"{_REFIT_CLUSTER_RANGE} clusters more or fewer never the "
+            f"{len(kept_before)} of the fit before."
         )
     shared = np.array([[np.sum((labels == q) & (previous == p)) for p in kept_before]
                        for q in kept]).reshape(len(kept), len(kept))
@@ -321,6 +328,48 @@ def _match_labels(labels, previous):
     for q, label in enumerate(kept):
         out[labels == label] = kept[place[q]]
     return out
+
+
+# a refit of a communities step tries the numbers of clusters within this
+# distance of the number its settings give (the first fit's)
+_REFIT_CLUSTER_RANGE = 5
+
+
+def _n_columns(labels):
+    """The communities of 2 or more nodes: one output column each."""
+    return int(np.sum(np.bincount(np.asarray(labels)) >= 2))
+
+
+def _same_width(fit, previous):
+    """
+    Community labels for the record ``fit`` of a refit of a communities
+    step that give as many communities of 2 or more nodes (output columns)
+    as the labels ``previous`` of the fit before, and so as the first fit.
+
+    The number of clusters of the first fit does not fix that number: a
+    weakly attached node is a cluster of its own in one fit and a member of
+    a community in the next.  So the pair weights of the refit (those of
+    its training rows) are clustered with ``n0``, the number of clusters
+    the refit was made with (the first fit's; these are the labels of
+    ``fit``), then ``n0 + 1``, ``n0 - 1``, ``n0 + 2``, ``n0 - 2``, ... up to
+    ``n0 +- _REFIT_CLUSTER_RANGE``, between 2 and the number of nodes, and
+    the first clustering with the columns of the fit before is taken.  The
+    labels of ``fit`` when none has them (``_match_labels`` then raises
+    ``_FitUnusable``: the refit is left out).
+    """
+    labels = np.asarray(fit["labels"])
+    wanted = _n_columns(previous)
+    if _n_columns(labels) == wanted or len(labels) != len(previous):
+        return labels
+    wbar = np.mean(fit["weights"], axis=0)
+    n0, K = int(fit["n"]), len(labels)
+    for step in range(1, _REFIT_CLUSTER_RANGE + 1):
+        for n in (n0 + step, n0 - step):
+            if 2 <= n <= K:
+                other = _find_communities(wbar, n)
+                if _n_columns(other) == wanted:
+                    return other
+    return labels
 
 
 # what an automatic feeding step records about its choice (made by the first fit)
@@ -345,10 +394,12 @@ def _match(new, previous, order, path):
     if not (isinstance(new.summary, Communities)
             and isinstance(previous.summary, Communities)):
         return new
-    labels = _match_labels(new.fit["labels"], previous.fit["labels"])
+    found = _same_width(new.fit, previous.fit["labels"])
+    labels = _match_labels(found, previous.fit["labels"])
     if np.array_equal(labels, new.fit["labels"]):
         return new
-    return _FittedSummary(new.summary, {**new.fit, "labels": labels})
+    return _FittedSummary(new.summary, {**new.fit, "labels": labels,
+                                        "n": int(len(np.unique(labels)))})
 
 
 class _Matched(dict):
@@ -366,7 +417,12 @@ class _Matched(dict):
         self.order = order
 
     def __setitem__(self, path, fit):
-        super().__setitem__(path, _match(fit, self.previous[path], self.order, path))
+        try:
+            fit = _match(fit, self.previous[path], self.order, path)
+        except _FitUnusable as err:
+            err.step = f"order {self.order}, {path} path"
+            raise
+        super().__setitem__(path, fit)
 
 
 def _refit_settings(settings, steps):
@@ -429,7 +485,7 @@ def _refit(model, settings, subjects, single, events, return_delta, refit_every,
     n, T = settings["fit_timepoints"], subjects[0].shape[0]
     rows = [n] + list(range(n + refit_every, T, refit_every))
     fit_settings = _refit_settings(settings, steps)
-    kept = []
+    kept, reasons = [], {}
     for s_j in rows[1:]:
         for summary in _summaries(fit_settings):
             summary.fits_ = []
@@ -439,10 +495,12 @@ def _refit(model, settings, subjects, single, events, return_delta, refit_every,
                 _causal_pass(dict(fit_settings, fit_timepoints=s_j),
                              [x[:s_j] for x in subjects], events, record=new,
                              keep_delta=False, match=steps)
-        except _FitUnusable:
+        except _FitUnusable as err:
             # not the structure of the first fit: the fit before stays, and
             # with it the rows already there
             kept.append(s_j)
+            reason = (getattr(err, "step", None), str(err))
+            reasons.setdefault(reason, []).append(s_j)
             continue
         steps = new
         with _fit_pass():
@@ -452,6 +510,18 @@ def _refit(model, settings, subjects, single, events, return_delta, refit_every,
         _stitch(X, X_j, s_j)
         _stitch(D, D_j, s_j)
         del X_j, D_j
+    if kept:
+        _warn_user(
+            f"refit_every: {len(kept)} of the {len(rows) - 1} fits after the "
+            "first could not have the structure of the first fit and were left "
+            "out; the fit before stays for their rows ('refit_kept_previous' "
+            "of return_info).  "
+            + "  ".join(
+                f"Fit{'' if len(at) == 1 else 's'} at row"
+                f"{'' if len(at) == 1 else 's'} {', '.join(map(str, at))}"
+                f"{'' if step is None else f' ({step})'}: {message}"
+                for (step, message), at in reasons.items())
+        )
     model._steps = steps
     model._settings["refits"] = rows
     model._settings["refit_kept_previous"] = kept

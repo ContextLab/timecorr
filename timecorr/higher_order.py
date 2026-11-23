@@ -2927,8 +2927,10 @@ def features(
         number of rows it was fitted on), ``"refit_rows"`` (the rows of
         the fits: ``[fit_timepoints]``, and with ``refit_every`` every
         row at which the reducers were fitted again) and
-        ``"refit_kept_previous"`` (those of them whose fit could not be
-        used, so that the fit before was kept; see ``refit_every``), and
+        ``"refit_kept_previous"`` (those of them whose fit could not
+        have the output columns of the first fit, so that the fit before
+        was kept, of every order; one ``UserWarning`` names them; see
+        ``refit_every``), and
         what describes a fit (``"labels"``, ``"n_communities"``,
         ``"fallback"``, ...) is that of the fit on those rows (with
         ``refit_every``: of the last fit).
@@ -3071,16 +3073,28 @@ def features(
         number of fits.
 
         - The structure is that of fit 0, so that every output has the
-          same columns at every row: the number of communities of a
-          summary that counts them with the shift null (the null runs in
-          fit 0 only), what an automatic feeding step chose (communities
-          or weighted strength), and the number of components of a
-          model.  A later fit that cannot have it (its clustering gives
-          another number of communities of 2 or more nodes, its model
-          another number of components, or does not reproduce its rows)
+          same columns at every row.  Fit 0 fixes: what an automatic
+          feeding step chose (communities or weighted strength; the
+          shift null runs in fit 0 only); the number of output columns
+          of a communities step, which is its number of communities of
+          2 or more nodes; and the number of components of a model
+          (``ndims``).  The number of clusters is not fixed: a weakly
+          attached node is a cluster of its own in one fit and a member
+          of a community in the next, so a later fit clusters its rows
+          with fit 0's number of clusters ``n0`` and then, while the
+          communities of 2 or more nodes are not as many as fit 0's,
+          with ``n0 + 1``, ``n0 - 1``, ``n0 + 2``, ``n0 - 2``, ... up to
+          ``n0 + 5`` and ``n0 - 5`` (between 2 and the number of
+          features), and takes the first clustering that has them.  A
+          later fit that cannot have the structure (none of those
+          clusterings has fit 0's number of communities of 2 or more
+          nodes, its model has another number of components or does not
+          reproduce its rows, or its rows hold no defined correlations)
           is not used: the fit before, of every order, stays for its
-          rows, and the row is listed in ``"refit_kept_previous"`` of
-          ``return_info``.
+          rows, the row is listed in ``"refit_kept_previous"`` of
+          ``return_info``, and one ``UserWarning`` for the call names
+          those rows and the step (order and path) that could not be
+          fitted.  All of this reads the rows before the fit's row only.
         - The columns of a fit are matched to those of the fit before,
           order by order, before the next order of that fit is fitted:
           the components of a model (the one-to-one assignment with the
@@ -3153,6 +3167,11 @@ def features(
         strength; the message gives the threshold and the number of input
         features.  Communities that were found but emit fewer than 4 columns
         fall back without a warning (see ``return_info``).
+    UserWarning
+        Once per call with ``causal=True``: for a model outside the list
+        the guarantee covers (see ``fit_timepoints``), and when a fit of
+        ``refit_every`` could not have the structure of the first fit and
+        was left out (the message names the rows and the step).
 
     Raises
     ------

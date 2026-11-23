@@ -1109,3 +1109,52 @@ def test_identity_reductions_through_the_orders(columns, ndims, refit):
     # the guarantee
     cut = _quiet(tc.features, x[:90], rfun="PCA", delta_rfun="PCA", **kw)[0]
     assert _worst(out, cut, 90) <= ATOL
+
+
+# ----------------------------------------------------------------------------
+# rows with missing values and a model (whole-branch review, finding 1)
+# ----------------------------------------------------------------------------
+
+
+def test_a_model_reads_complete_rows_only():
+    # smoothed values (cfun=None) are NaN per feature, so a row can be partly
+    # NaN.  hypertools fills such values in from every row it is given, the
+    # later ones included: a model takes the rows without any missing value,
+    # for its fit and when it is applied, and the others are rows of NaN
+    from timecorr.timecorr import _apply_frozen, _fit_reducer
+
+    x = np.random.RandomState(0).randn(60, 6)
+    x[30:40, 0] = np.nan
+    x[10:14, 2] = np.nan  # in the rows of the fit too
+    kernel = dict(causal=True, events=[10, 30], weights_params={"var": 25})
+    kw = dict(order=1, cfun=None, rfun="PCA", fit_timepoints=30,
+              delta_weights_params={"var": 25}, **kernel)
+    smooth = _quiet(tc.timecorr, x, cfun=None, **kernel)
+    partial = np.isnan(smooth).any(axis=1)
+    assert partial[10:14].all() and partial[30:40].all() and not partial[41:].any()
+    assert not np.isnan(smooth).all(axis=1)[30:40].any()  # partly NaN, not entirely
+    out, model = _quiet(tc.features, x, return_model=True, **kw)
+    assert np.array_equal(np.isnan(out[1]).all(axis=1), partial)
+    assert not np.isnan(out[1][~partial]).any()
+    later = x.copy()
+    later[41:] = 100
+    assert np.array_equal(_quiet(tc.features, later, **kw)[1][:41], out[1][:41],
+                          equal_nan=True)
+    assert np.nanmax(np.abs(_quiet(tc.features, x[:45], **kw)[1] - out[1][:45])) <= ATOL
+    applied = [_quiet(model.transform, data, events=[10, 30])[1] for data in (x, later)]
+    assert np.array_equal(applied[0], out[1], equal_nan=True)
+    assert np.array_equal(applied[0][:41], applied[1][:41], equal_nan=True)
+    # the fit and its application themselves
+    frozen = _fit_reducer(smooth[:30], "PCA")
+    reduced = _apply_frozen(smooth, frozen)
+    assert np.array_equal(np.isnan(reduced).all(axis=1), partial)
+    assert not np.isnan(reduced[~partial]).any()
+    complete = _fit_reducer(smooth[:30][~partial[:30]], "PCA")
+    assert np.array_equal(complete.components, frozen.components)
+    changed = smooth.copy()
+    changed[41:] = 100
+    assert np.array_equal(_apply_frozen(changed, frozen)[:41], reduced[:41],
+                          equal_nan=True)
+    step = _quiet(two_path_step, x, cfun=None, rfun="PCA", delta_rfun=None, fit_timepoints=30,
+                  delta_weights_params={"var": 25}, **kernel)[0]
+    assert np.array_equal(step, out[1], equal_nan=True)

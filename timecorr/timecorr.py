@@ -328,21 +328,30 @@ def _check_fit_timepoints(fit_timepoints, causal, T=None):
     return int(fit_timepoints)
 
 
-def _defined_rows(arrays):
-    """For each array, the mask of its rows that are not entirely NaN."""
+def _defined_rows(arrays, complete=False):
+    """
+    For each array, the mask of its rows that are not entirely NaN;
+    ``complete``: of its rows without any NaN or infinite value (the rows a
+    model reads: hypertools fills a missing value in from every row it is
+    given, the later ones included, so a row that is partly NaN, as a
+    smoothed row can be, is not passed to it).
+    """
+    if complete:
+        return [np.isfinite(np.asarray(a)).all(axis=1) for a in arrays]
     return [~np.isnan(np.asarray(a)).all(axis=1) for a in arrays]
 
 
-def _on_defined(arrays, f):
+def _on_defined(arrays, f, complete=False):
     """
     ``f`` (a list of arrays in, a list of arrays out, row by row) applied to
-    the rows of ``arrays`` that are not entirely NaN; the other rows stay
+    the rows of ``arrays`` that are not entirely NaN (``complete``: that
+    hold no NaN or infinite value); the other rows stay
     rows of NaN.  Every array is passed, at its position, also one without
     such a row (a fit that holds one unit per subject is applied to the
     subject at each position).
     """
     arrays = [np.asarray(a, dtype=np.float64) for a in arrays]
-    defined = _defined_rows(arrays)
+    defined = _defined_rows(arrays, complete)
     # every row is passed, the undefined ones as rows of zeros: a row is then
     # reduced at the same position of an array of the same shape whatever
     # the later rows hold, so replacing later rows (by NaN too) changes no
@@ -365,7 +374,8 @@ def _fit_reducer(corrs, rfun, ndims=None, *, order=None, path=None, append_fit=F
                  name="rfun"):
     """
     ``rfun`` fitted to the rows of ``corrs`` (an array or a list of arrays
-    of vectorized correlations) that are not entirely NaN, for
+    of vectorized correlations) that are not entirely NaN (a model: that
+    hold no NaN or infinite value), for
     ``causal=True``: what ``_apply_frozen`` applies to these or other rows.
 
     A summary (object or name) gives a ``_FittedSummary`` (the object's
@@ -395,7 +405,8 @@ def _fit_reducer(corrs, rfun, ndims=None, *, order=None, path=None, append_fit=F
         return rfun
     arrays = corrs if isinstance(corrs, list) else [corrs]
     arrays = [np.asarray(a, dtype=np.float64) for a in arrays]
-    rows = [a[d] for a, d in zip(arrays, _defined_rows(arrays))]
+    # a model reads the rows without any missing value
+    rows = [a[d] for a, d in zip(arrays, _defined_rows(arrays, not is_summary))]
     at = "" if order is None else f" at order {order}"
     fewest = min(len(r) for r in rows) if is_summary else sum(len(r) for r in rows)
     if fewest < (1 if is_summary else 2):
@@ -604,7 +615,8 @@ def _apply_frozen(corrs, frozen):
     The reduction of ``corrs`` (an array or a list of arrays of vectorized
     correlations of the causal estimator) by ``frozen``, a result of
     ``_fit_reducer``: a fitted summary or model and a graph measure reduce
-    the rows that are not entirely NaN (the others stay rows of NaN); None
+    the rows that are not entirely NaN (a model: the rows without any NaN
+    or infinite value; the others stay rows of NaN); None
     returns ``corrs``; a function of the user's is called as ``reduce``
     calls it.  The same container type as ``corrs``.
     """
@@ -619,7 +631,7 @@ def _apply_frozen(corrs, frozen):
         K = frozen.fit["weights"][0].shape[0]
         if arrays and np.asarray(arrays[0]).shape[1] == K * (K + 1) // 2:
             frozen.check_units(len(arrays), K)
-    out = _on_defined(arrays, frozen.apply)
+    out = _on_defined(arrays, frozen.apply, isinstance(frozen, _FittedModel))
     return out if isinstance(corrs, list) else out[0]
 
 

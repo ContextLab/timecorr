@@ -98,6 +98,70 @@ def test_the_rule_applies_to_the_next_order_of_features():
         assert _max_difference(X[1], part[1], n) <= ATOL
 
 
+def _constant_feeding_column(relative, seed=3):
+    """A feeding reducer whose last output column is 3 to ``relative``."""
+    noise = np.random.default_rng(seed).standard_normal(400)
+
+    def reducer(arrays):
+        return [np.column_stack([a[:, 4:7], 3.0 * (1 + relative * noise[:len(a)])])
+                for a in arrays]
+
+    return reducer
+
+
+@pytest.mark.parametrize("mode", ["finite", "nan", "inf", "remove"])
+def test_a_feeding_column_constant_to_round_off_is_zero_at_the_next_order(mode):
+    # the order-1 feeding features: three correlations and a column that is
+    # 3 up to a relative 1e-12 (the round-off of a summary that is not set to
+    # its mean in causal mode).  At order 2 its correlations are 0, not
+    # correlations of that noise (which they are when the estimator's rule,
+    # helpers._causal_zero_variance, is taken out: 27% of them non-zero, up
+    # to 0.28), whatever comes later.
+    x = np.random.default_rng(4).standard_normal((200, 4))
+    kw = dict(order=2, causal=True, cfun=tc.autofc, rfun=None,
+              delta_rfun=_constant_feeding_column(1e-12), return_delta=True,
+              weights_params={"var": 25}, delta_weights_params={"var": 25})
+    X, D = _quiet(tc.features, x, **kw)
+    column = D[1][2:, 3]
+    assert 0 < np.ptp(column) < 1e-10 and np.all(np.abs(column - 3) < 1e-10)
+    second = tc.vec2mat(X[2][4:])
+    assert np.all(second[3, :, :] == 0) and np.all(second[:, 3, :] == 0)
+    # the other feeding features keep their correlations
+    assert np.all(second[[0, 1, 2], [0, 1, 2], :] == 1)
+    assert np.mean(second[0, 1, :] != 0) > 0.99
+    rng = np.random.default_rng(5)
+    for n in (5, 40, 129, 199):
+        part = _quiet(tc.features, _perturb(x, n, mode, rng), **kw)
+        assert _worst((X, D), part, n, (1, 2)) <= ATOL
+        if n > 5:
+            assert np.all(tc.vec2mat(part[0][2][4:n])[3] == 0)
+    # a column that varies by a relative 1e-6 is a signal: correlated
+    kw["delta_rfun"] = _constant_feeding_column(1e-6)
+    varying = tc.vec2mat(_quiet(tc.features, x, **kw)[0][2][4:])
+    assert np.mean(varying[3, 0, :] != 0) > 0.99
+
+
+def test_duplicated_features_give_a_constant_feeding_column():
+    # a real case: feature 1 is an affine function of feature 0, so their
+    # order-1 correlation is 1 up to round-off at every timepoint; at order
+    # 2 that feeding column has no correlation with any other
+    x = np.random.default_rng(6).standard_normal((200, 4))
+    x[:, 1] = 2 * x[:, 0] + 3
+    kw = dict(order=2, causal=True, cfun=tc.autofc, rfun=None, delta_rfun=None,
+              return_delta=True, weights_params={"var": 25},
+              delta_weights_params={"var": 25})
+    X, D = _quiet(tc.features, x, **kw)
+    pair = 4  # mat2vec: the 4 diagonal entries, then the pair (0, 1)
+    assert np.max(np.abs(D[1][2:, pair] - 1)) < 1e-12
+    second = tc.vec2mat(X[2][4:])
+    assert np.all(np.delete(second[pair], pair, axis=0) == 0)
+    rng = np.random.default_rng(7)
+    for mode in MODES:
+        for n in (40, 129):
+            part = _quiet(tc.features, _perturb(x, n, mode, rng), **kw)
+            assert _worst((X, D), part, n, (1, 2)) <= ATOL
+
+
 # ----------------------------------------------------------------------------
 # the guarantee
 # ----------------------------------------------------------------------------
@@ -135,6 +199,10 @@ CONFIGS = {
     "events-by-order": (1, 5, 3, dict(cfun=tc.autofc, **STRENGTH, **PARAMS,
                                       events={1: [150], 3: [60, 100]})),
     "min-samples": (1, 5, 3, dict(cfun=tc.autofc, **STRENGTH, **PARAMS, min_samples=6)),
+    "events-short": (1, 5, 3, dict(cfun=tc.autofc, **STRENGTH, **PARAMS,
+                                   events={1: [1, 2, 4, 7, 8, 150], 2: [1, 100]})),
+    "events-per-subject": (3, 5, 3, dict(cfun=tc.isfc, **STRENGTH, **PARAMS,
+                                         events=[[1, 60], None, [130, 131, 250]])),
     "isfc": (3, 5, 3, dict(cfun=tc.isfc, **STRENGTH, **PARAMS)),
     "isfc-unreduced": (3, 4, 2, dict(cfun=tc.isfc, **UNREDUCED, **PARAMS)),
     "isfc-corrmean": (3, 5, 3, dict(cfun=tc.isfc, combine=tc.corrmean_combine,
@@ -169,13 +237,15 @@ def _within(events, n):
     """Boundaries of a series cut to ``n`` rows (the later ones are not in it)."""
     if isinstance(events, dict):
         return {k: _within(v, n) for k, v in events.items()}
+    if any(e is None or isinstance(e, list) for e in events):  # one entry per subject
+        return [None if e is None else _within(e, n) for e in events]
     kept = [b for b in events if b < n]
     return kept or None
 
 
-def _run(data, config, order=None, **kwargs):
+def _run(data, config, order=None, all_events=False, **kwargs):
     highest, kw = CONFIGS[config][2:]
-    if "events" in kw:
+    if "events" in kw and not all_events:
         kw = {**kw, "events": _within(kw["events"], len(_as_list(data)[0]))}
     return _quiet(tc.features, data, order=highest if order is None else order,
                   causal=True, return_delta=True, **{**kw, **kwargs})
@@ -253,16 +323,19 @@ def test_order_four_unreduced(include_zero, mode):
 
 @pytest.mark.parametrize("config", ["unreduced", "strength", "eigenvector", "laplace",
                                     "boxcar", "isfc", "isfc-corrmean", "wisfc",
-                                    "min-samples"])
+                                    "min-samples", "events", "events-by-order",
+                                    "events-short", "events-per-subject"])
 @pytest.mark.parametrize("include_zero", [True, False])
 def test_every_prefix_runs_and_equals_the_first_rows(config, include_zero):
     data = _data(config, seed=30)
     orders = range(1, 4) if CONFIGS[config][2] >= 3 else range(1, 3)
     full = _run(data, config, order=orders[-1], include_zero=include_zero)
     atol = REMOVE_ATOL.get(config, ATOL)
-    for n in list(range(1, 13)) + [20, 64, 130, 257]:
+    for n in list(range(1, 13)) + [20, 64, 91, 130, 211, 257]:
+        # every prefix gets the events of the whole series: the boundaries
+        # it has not reached are ignored
         part = _run(_map(data, lambda x: x[:n]), config, order=orders[-1],
-                    include_zero=include_zero)
+                    include_zero=include_zero, all_events=True)
         for out in part:
             assert all(a.shape[0] == n for k in orders for a in _as_list(out[k]))
         assert _worst(full, part, n, orders) <= atol

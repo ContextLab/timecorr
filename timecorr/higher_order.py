@@ -688,18 +688,20 @@ def _bandwidth(weights_function, weights_params):
 
 
 def _step_kernels(T, n_subjects, weights_function, weights_params,
-                  include_timepoints="all", include_zero=True, events=None):
+                  include_timepoints="all", include_zero=True, events=None,
+                  causal=False):
     """
     The kernel(s) ``timecorr`` builds for these arguments and RESOLVED events:
     one kernel, or one per subject when the subjects' events differ
     (``LagKernel`` objects for a built-in kernel function, T x T arrays
-    otherwise).
+    otherwise).  ``causal``: as ``timecorr(..., causal=True)`` builds them.
     """
     weights = _shaped_kernel(
-        T, weights_function, weights_params, include_timepoints, include_zero
+        T, weights_function, weights_params, include_timepoints, include_zero,
+        causal=causal,
     )
-    resolved = resolve_events(events, T, n_subjects, None)
-    return _event_kernels(weights, resolved, n_subjects)
+    resolved = resolve_events(events, T, n_subjects, None, causal=causal)
+    return _event_kernels(weights, resolved, n_subjects, causal)
 
 
 def _run_streamed(subjects, summary, cfun, kernels, *, max_memory_gb, order, path,
@@ -1752,7 +1754,14 @@ def two_path_step(
         bit when later rows are replaced) when later rows are replaced by
         any values, NaN and inf included, or removed, and with
         ``include_zero=False`` also when row ``t`` itself changes.
-        Default: False.  With ``causal=True``:
+        Replacing later rows changes no bit, with every supported reducer.
+        Removing them changes the correlations by round-off, so the
+        outputs agree to 1e-9 where they depend continuously on the
+        correlations (no reduction, ``"strength"``, the summaries, and
+        linear models such as PCA once fitted); the eigenvector-based
+        graph measures (``"eigenvector_centrality"``, the PageRank
+        measures) can differ by more at a correlation matrix whose leading
+        eigenvalues coincide.  Default: False.  With ``causal=True``:
 
         - both paths use backward kernels (``include_timepoints`` may be
           left out; ``"forward"``/``"post"`` raises ``ValueError``), and
@@ -1778,7 +1787,11 @@ def two_path_step(
         - ``events`` must be boundaries (features to segment raise
           ``ValueError``); that the boundaries are known at their own time
           is the caller's responsibility, and the warm-up starts again at
-          each boundary;
+          each boundary.  Boundaries at or beyond the end of the data are
+          ignored (times the series has not reached), and events that
+          leave no timepoint with 3 samples give rows of NaN, not an
+          error, so a prefix of a series runs with the events of the whole
+          series;
         - a row with too few earlier samples (see ``min_samples``) is NaN
           in every column, not 0.  The NaN rows of an order's feeding
           features are missing data for the next order, so each order has
@@ -1972,7 +1985,7 @@ def two_path_step(
     if feeding_auto is not None:
         feeding_params = feeding_auto
     resolved = resolve_events(
-        events, subjects[0].shape[0], len(subjects), events_params
+        events, subjects[0].shape[0], len(subjects), events_params, causal=causal
     )
     X_next, D_next = _two_path_step(
         subjects,
@@ -2210,7 +2223,7 @@ def _check_causal(*, function, include_timepoints, weights_function,
             "your own and nothing else bound, or cfun=tc.isfc."
         )
     for spec in events:
-        if _has_features(_parse_spec(spec, T, n_subjects)):
+        if _has_features(_parse_spec(spec, T, n_subjects, True)):
             raise ValueError(
                 "causal=True: events given as features are segmented from the "
                 "whole recording.  Pass the boundaries (the timepoints where a "
@@ -2344,7 +2357,7 @@ def _warmup_rows(out):
     return int(np.isnan(np.asarray(out)).all(axis=1).sum())
 
 
-def _check_events_order_zero(events, T, n_subjects, events_params):
+def _check_events_order_zero(events, T, n_subjects, events_params, causal=False):
     """
     Check ``events`` / ``events_params`` for ``features(order=0)``, which has no
     kernel to restrict: a dict with any key raises, and a non-dict
@@ -2358,7 +2371,7 @@ def _check_events_order_zero(events, T, n_subjects, events_params):
             )
         events = None
     _check_params_keys(events_params)
-    parsed = _parse_spec(events, T, n_subjects)
+    parsed = _parse_spec(events, T, n_subjects, causal)
     if events_params and not _has_features(parsed):
         raise ValueError("events_params was given but no events entry holds features")
 
@@ -2696,7 +2709,14 @@ def features(
         bit when later rows are replaced) when later rows are replaced by
         any values, NaN and inf included, or removed, and with
         ``include_zero=False`` also when row ``t`` itself changes.
-        Default: False.  With ``causal=True``:
+        Replacing later rows changes no bit, with every supported reducer.
+        Removing them changes the correlations by round-off, so the
+        outputs agree to 1e-9 where they depend continuously on the
+        correlations (no reduction, ``"strength"``, the summaries, and
+        linear models such as PCA once fitted); the eigenvector-based
+        graph measures (``"eigenvector_centrality"``, the PageRank
+        measures) can differ by more at a correlation matrix whose leading
+        eigenvalues coincide.  Default: False.  With ``causal=True``:
 
         - both paths use backward kernels (``include_timepoints`` may be
           left out; ``"forward"``/``"post"`` raises ``ValueError``), and
@@ -2723,7 +2743,11 @@ def features(
         - ``events`` must be boundaries (features to segment raise
           ``ValueError``); that the boundaries are known at their own time
           is the caller's responsibility, and the warm-up starts again at
-          each boundary;
+          each boundary.  Boundaries at or beyond the end of the data are
+          ignored (times the series has not reached), and events that
+          leave no timepoint with 3 samples give rows of NaN, not an
+          error, so a prefix of a series runs with the events of the whole
+          series;
         - a row with too few earlier samples (see ``min_samples``) is NaN
           in every column, not 0.  The NaN rows of an order's feeding
           features are missing data for the next order, so each order has
@@ -3118,10 +3142,11 @@ def features(
         estimator = {"causal": True, "min_samples": min_samples}
     # events are resolved (and features segmented) once, before anything is computed
     if order == 0:
-        _check_events_order_zero(events, T, S, events_params)
+        _check_events_order_zero(events, T, S, events_params, causal)
         resolved = {}
     else:
-        resolved = resolve_events_by_order(events, T, S, order, events_params)
+        resolved = resolve_events_by_order(events, T, S, order, events_params,
+                                           causal=causal)
 
     # with both kernels automatic at every order, no events and two-sided
     # kernels, each order's feeding features are passed on at a lower rate

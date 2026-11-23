@@ -10,7 +10,7 @@ from .events import (
     _has_features,
     _parse_spec,
     distinct_event_sets,
-    mask_kernel,
+    _mask_kernel,
     resolve_events,
 )
 from .helpers import (
@@ -130,10 +130,10 @@ def _restricted(resolved):
     return one(resolved)
 
 
-def _mask_for_subjects(weights, boundaries, subjects):
+def _mask_for_subjects(weights, boundaries, subjects, causal=False):
     """``mask_kernel`` for one event set; an error names the subjects that use it."""
     try:
-        return mask_kernel(weights, boundaries)
+        return _mask_kernel(weights, boundaries, not causal)
     except ValueError as err:
         raise ValueError(f"per-subject events of subjects {subjects}: {err}") from err
 
@@ -202,19 +202,20 @@ def _shaped_kernel(
     return weights
 
 
-def _event_kernels(weights, resolved, n_subjects):
+def _event_kernels(weights, resolved, n_subjects, causal=False):
     """
     ``weights`` restricted to the RESOLVED events as ``timecorr`` restricts
     it: one masked kernel when every subject has the same events, otherwise
     a list of ``n_subjects`` kernels (subjects that share events share one
-    array).
+    array).  ``causal``: events that leave no row with 3 weights are not an
+    error (a short prefix of a series; its rows are undefined).
     """
     groups = distinct_event_sets(_restricted(resolved), n_subjects)
     if len(groups) == 1:
-        return mask_kernel(weights, groups[0][0])
+        return _mask_kernel(weights, groups[0][0], not causal)
     kernels = [None] * n_subjects
     for boundaries, subjects in groups:
-        masked = _mask_for_subjects(weights, boundaries, subjects)
+        masked = _mask_for_subjects(weights, boundaries, subjects, causal)
         for s in subjects:
             kernels[s] = masked
     return kernels
@@ -317,7 +318,7 @@ def _causal_arguments(weights_function, weights_params, include_timepoints, cfun
             "functools.partial(tc.wisfc, subject_weights=...) with weights of "
             "your own and nothing else bound, or cfun=tc.isfc."
         )
-    if _has_features(_parse_spec(events, T, n_subjects)):
+    if _has_features(_parse_spec(events, T, n_subjects, True)):
         raise ValueError(
             "causal=True: events given as features are segmented from the whole "
             "recording.  Pass the boundaries (the timepoints where a new block "
@@ -506,8 +507,16 @@ def timecorr(
         True: row ``t`` of the output uses no sample after timepoint ``t``.
         It is unchanged (to 1e-9) when the rows after ``t`` are replaced by
         any values, NaN and inf included, or removed; with
-        ``include_zero=False`` also when row ``t`` itself changes.  Keyword
-        only.  Default: False.  With ``causal=True``:
+        ``include_zero=False`` also when row ``t`` itself changes.
+        Replacing later rows changes no bit, with every supported ``rfun``.
+        Removing them changes the correlations by round-off, so the
+        outputs agree to 1e-9 where they depend continuously on the
+        correlations (no reduction, ``"strength"``, the summaries, and
+        linear models such as PCA once fitted); the eigenvector-based
+        graph measures (``"eigenvector_centrality"``, the PageRank
+        measures) can differ by more at a correlation matrix whose leading
+        eigenvalues coincide.  Keyword only.  Default: False.  With
+        ``causal=True``:
 
         - the kernel is backward: ``include_timepoints`` 'all' (the
           default) means 'backward', and 'forward' / 'post' raise
@@ -527,7 +536,11 @@ def timecorr(
         - ``events`` must be boundaries; features to segment raise
           ``ValueError``.  That the boundaries themselves were chosen
           without later data is the caller's responsibility.  The warm-up
-          below starts again at each boundary;
+          below starts again at each boundary.  Boundaries at or beyond
+          the end of the data are ignored (times the series has not
+          reached), and events that leave no timepoint with 3 samples give
+          rows of NaN, not an error, so a prefix of a series runs with the
+          events of the whole series;
         - ``rfun`` is None, a graph measure (computed for the defined rows)
           or a callable; a reducer that is fitted to data (a model name, a
           summary) raises ``NotImplementedError``;
@@ -740,8 +753,8 @@ def timecorr(
 
     # event restriction: applied after the include/exclude options; subjects that
     # share events share one masked kernel (one array, or a list per subject)
-    resolved = resolve_events(events, T, len(data), events_params)
-    kernels = _event_kernels(weights, resolved, len(data))
+    resolved = resolve_events(events, T, len(data), events_params, causal=causal)
+    kernels = _event_kernels(weights, resolved, len(data), causal)
     per_subject = isinstance(kernels, list)
 
     if cfun:

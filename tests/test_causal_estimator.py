@@ -467,6 +467,98 @@ def test_reach_of_the_built_in_kernels():
     assert helpers._kernel_reach(kernel.with_events(labels)) == helpers._kernel_reach(kernel)
 
 
+def _t_sums(df, start, n=4_000_000):
+    """Sums of the t density and of its square over the lags ``start..n``."""
+    d = np.arange(start, n, dtype=np.float64)
+    w = (1 + d * d / df) ** (-(df + 1) / 2)
+    return w.sum(), (w * w).sum()
+
+
+@pytest.mark.parametrize("include_zero", [True, False])
+@pytest.mark.parametrize("df", [1, 2, 5, 30])
+def test_heavy_tails_have_a_known_reach(df, include_zero):
+    kernel = helpers._lag_kernel(2, tc.t_weights, {"df": df}, "backward", include_zero)
+    limit = helpers._kernel_reach(kernel)
+    start = 0 if include_zero else 1
+    if df == 1:
+        # the Cauchy sums in closed form: sum 1 / (1 + d**2) and
+        # sum 1 / (1 + d**2)**2 over d >= 0
+        first = (1 + np.pi / np.tanh(np.pi)) / 2
+        second = (1 + np.pi / 2 * (1 / np.tanh(np.pi) + np.pi / np.sinh(np.pi) ** 2)) / 2
+        expected = (first - start) ** 2 / (second - start)
+        assert limit == pytest.approx(expected, rel=1e-12)
+    else:
+        # added up: the lags from 4 million on hold less than 1e-12 of the sums
+        first, second = _t_sums(df, start)
+        assert limit == pytest.approx(first**2 / second, rel=1e-10)
+    # decisive on both sides of the limit, in timecorr and in features,
+    # whatever the length of the series
+    for n in (20, 3):
+        x = np.random.default_rng(21).standard_normal((n, 3))
+        calls = (
+            lambda m: tc.timecorr(
+                x, causal=True, cfun=tc.autofc, weights_function=tc.t_weights,
+                weights_params={"df": df}, include_zero=include_zero, min_samples=m),
+            lambda m: tc.features(
+                x, order=1, causal=True, cfun=tc.autofc, rfun=None, delta_rfun=None,
+                weights_function=tc.t_weights, weights_params={"df": df},
+                delta_weights_params={"var": 400}, include_zero=include_zero,
+                min_samples=m),
+        )
+        for call in calls:
+            if limit * (1 - 1e-6) >= 1:
+                _quiet(call, limit * (1 - 1e-6))
+            with pytest.raises(ValueError, match="min_samples.*more than a row"):
+                call(max(1.0, limit) * (1 + 1e-6))
+
+
+def test_an_unreachable_min_samples_never_gives_silent_nan_rows():
+    # the case of a Cauchy kernel (at most 3.3 effective samples)
+    x = np.random.default_rng(22).standard_normal((20, 3))
+    with pytest.raises(ValueError, match=r"min_samples=4 .*is 3\.3"):
+        tc.features(x, order=1, causal=True, cfun=tc.autofc, rfun=None,
+                    delta_rfun=None, weights_function=tc.t_weights,
+                    weights_params={"df": 1}, delta_weights_params={"var": 25},
+                    min_samples=4)
+
+    def reach(function, params, include_zero=True):
+        return helpers._kernel_reach(
+            helpers._lag_kernel(5, function, params, "backward", include_zero))
+
+    # kernels far wider than the lags that are added up
+    assert reach(tc.boxcar_weights, {"width": 1e9}) == 5e8
+    assert reach(tc.boxcar_weights, {"width": 1e9}, False) == 5e8 - 1
+    for scale in (3.0, 3000.0, 1e9):  # (1 + q) / (1 - q), q = exp(-1 / scale)
+        q = np.exp(-1 / scale)
+        assert reach(tc.laplace_weights, {"scale": scale}) == pytest.approx(
+            (1 + q) / -np.expm1(-1 / scale), rel=1e-9)
+    # sqrt(pi var) for the half of a wide Gaussian (plus half the lag-0 term)
+    assert reach(tc.gaussian_weights, {"var": 1e14}) == pytest.approx(
+        np.sqrt(np.pi * 1e14), rel=1e-6)
+    # an upper bound for a wide Mexican hat
+    a = np.abs(helpers.mexican_hat_profile(np.arange(100_000), {"sigma": 5000.0}))
+    most = np.nanmax(np.cumsum(a) ** 2 / np.cumsum(a * a))
+    assert most <= reach(tc.mexican_hat_weights, {"sigma": 5000.0}) <= most * 1.01
+    # every one of these decides: more than the reach raises
+    for function, params in ((tc.boxcar_weights, {"width": 1e9}),
+                             (tc.laplace_weights, {"scale": 1e9}),
+                             (tc.gaussian_weights, {"var": 1e14}),
+                             (tc.mexican_hat_weights, {"sigma": 5000.0}),
+                             (tc.t_weights, {"df": 0.5})):
+        most = reach(function, params)
+        kw = dict(causal=True, cfun=tc.autofc, weights_function=function,
+                  weights_params=params)
+        with pytest.raises(ValueError, match="min_samples"):
+            tc.timecorr(x, min_samples=most * 1.02, **kw)
+        assert _quiet(tc.timecorr, x, min_samples=min(5, most * 0.9),
+                      **kw).shape == (20, 6)
+    # equal weights at every lag have no limit: never an error
+    for m in (5, 1e6, 1e300):
+        out = _quiet(tc.timecorr, x, causal=True, cfun=tc.autofc, min_samples=m,
+                     weights_function=tc.uniform_weights, weights_params={})
+        assert np.isnan(out[:4]).all() and np.isnan(out[5:]).all() == (m > 20)
+
+
 def test_three_equal_weights_are_three_samples():
     x = np.random.default_rng(3).standard_normal((60, 4))
     # a backward boxcar over the lags 0, 1, 2: three weights of 1 from row 2 on
@@ -910,6 +1002,58 @@ def test_every_prefix_runs_and_equals_the_first_rows(case, include_zero, kernel)
     one = _as_list(_call([x[:1] for x in data], case, kernel, include_zero))
     if CASES[case][0] is not None:
         assert all(np.isnan(p).all() for p in one)
+
+
+# name: (number of subjects, events).  Boundaries at or beyond the end of a
+# prefix are times it has not seen: the same ``events`` are passed to every
+# prefix.
+EVENTS = {
+    "shared": (1, [1, 5, 90, 210]),
+    "short-blocks": (1, [1, 2, 4, 7, 8, 150]),
+    "per-subject": (3, [[1, 60], None, [130, 131, 250]]),
+}
+
+
+@pytest.mark.parametrize("include_zero", [True, False])
+@pytest.mark.parametrize("cfun", ["autofc", "isfc", "smooth"])
+@pytest.mark.parametrize("events", sorted(EVENTS))
+def test_every_prefix_runs_with_the_events_of_the_whole_series(events, cfun,
+                                                               include_zero):
+    n_subjects, spec = EVENTS[events]
+    data = _subjects(n_subjects, seed=61)
+    data = data[0] if n_subjects == 1 else data
+    kw = dict(causal=True, cfun={"autofc": tc.autofc, "isfc": tc.isfc,
+                                 "smooth": None}[cfun],
+              weights_params={"var": 25}, include_zero=include_zero, events=spec)
+    full = _quiet(tc.timecorr, data, **kw)
+    for n in list(range(1, 13)) + [60, 91, 131, 211, 251]:
+        part = _quiet(tc.timecorr, [x[:n] for x in _as_list(data)]
+                      if n_subjects > 1 else data[:n], **kw)
+        assert all(np.asarray(p).shape[0] == n for p in _as_list(part))
+        assert _max_difference(full, part, n) <= ATOL
+    # the boundaries the series has reached restrict its kernel
+    last = np.asarray(_as_list(full)[0])
+    if cfun != "smooth":
+        assert np.isnan(last[1:3]).all()
+
+
+def test_events_beyond_the_series_are_an_error_without_causal():
+    x = np.random.default_rng(62).standard_normal((40, 3))
+    with pytest.raises(ValueError, match=r"boundaries must lie in \[0, 40\)"):
+        tc.timecorr(x, events=[10, 40], weights_params={"var": 25})
+    with pytest.raises(ValueError, match="no block is long enough"):
+        tc.timecorr(x[:2], events=[1], weights_params={"var": 25},
+                    include_timepoints="backward")
+    # with causal=True: ignored, and rows without 3 samples are NaN
+    out = _quiet(tc.timecorr, x, causal=True, events=[10, 40, 4000],
+                 weights_params={"var": 25})
+    same = _quiet(tc.timecorr, x, causal=True, events=[10], weights_params={"var": 25})
+    assert np.array_equal(out, same, equal_nan=True)
+    assert np.isnan(_quiet(tc.timecorr, x[:2], causal=True, events=[1],
+                           weights_params={"var": 25})).all()
+    # negative boundaries are an error either way
+    with pytest.raises(ValueError, match="boundaries must lie in"):
+        tc.timecorr(x, causal=True, events=[-1, 10], weights_params={"var": 25})
 
 
 def test_one_row_of_a_wide_kernel_is_not_a_delta_kernel():

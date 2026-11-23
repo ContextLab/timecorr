@@ -1504,6 +1504,83 @@ def _check_min_samples(min_samples, causal):
 _REACH_LAGS = 2 ** 22
 
 
+def _profile_tails(profile, n):
+    """
+    ``(sum of |w|, sum of w**2)`` over the lags ``n, n + 1, ...`` of the lag
+    profile of a built-in kernel function, from the profile's formula (the
+    sums over a heavy or very wide tail converge too slowly to be added
+    up), or None when there is no formula (or the tail has no end:
+    ``uniform_weights``).
+
+    - ``laplace_weights``: the two geometric series, exactly.
+    - ``boxcar_weights``: the number of lags below ``width / 2``, exactly.
+    - ``t_weights`` and ``gaussian_weights`` (densities): the integral of
+      the tail from the survival function, with the first two terms of the
+      Euler-Maclaurin formula (``f(n) / 2 - f'(n) / 12``); the square of
+      either density is a multiple of a density of the same family.
+    - ``mexican_hat_weights``, for ``n >= 2 sigma`` (where ``|w|``
+      decreases): an upper bound of the sum of ``|w|``, and 0 for the sum
+      of squares, so that the reach computed from them is an upper bound.
+    """
+    from scipy.stats import norm, t as student
+
+    family = getattr(profile, "func", None)
+    params = (getattr(profile, "keywords", None) or {}).get("params")
+    if params is None:
+        return None
+    n = int(n)
+
+    def value(x):
+        return float(profile(np.array([float(x)]))[0])
+
+    with np.errstate(all="ignore"):
+        if family is boxcar_profile:
+            last = float(params["width"]) / 2.0  # lags d < last have weight 1
+            if np.isnan(last):
+                return None
+            count = np.inf if np.isinf(last) and last > 0 else max(
+                0.0, float(np.ceil(last)) - n)
+            return count, count
+        if family is laplace_profile:
+            scale = float(params["scale"])
+            if not (np.isfinite(scale) and scale > 0):
+                return None
+            f = abs(value(n))
+            return f / -np.expm1(-1.0 / scale), f * f / -np.expm1(-2.0 / scale)
+        if family is gaussian_profile:
+            var = float(params["var"])
+            if not (np.isfinite(var) and var > 0):
+                return None
+            f = value(n)
+            slope = -n / var * f
+            first = norm.sf(n / np.sqrt(var)) + f / 2 - slope / 12
+            second = (norm.sf(n / np.sqrt(var / 2)) / (2 * np.sqrt(np.pi * var))
+                      + f * f / 2 - 2 * f * slope / 12)
+            return float(first), float(second)
+        if family is t_profile:
+            df = float(params["df"])
+            f, peak = value(n), value(0)
+            if not (np.isfinite(df) and df > 0 and np.isfinite(peak) and peak > 0):
+                return None
+            slope = f * (-(df + 1) * n / df) / (1 + n * n / df)
+            first = student.sf(n, df) + f / 2 - slope / 12
+            # the squared density is a t density of 2 df + 1 degrees of
+            # freedom on a rescaled axis
+            df2 = 2 * df + 1
+            second = (peak * peak * np.sqrt(df / df2)
+                      * student.sf(n * np.sqrt(df2 / df), df2) / student.pdf(0, df2)
+                      + f * f / 2 - 2 * f * slope / 12)
+            return float(first), float(second)
+        if family is mexican_hat_profile:
+            sigma = abs(float(params["sigma"]))
+            if not (np.isfinite(sigma) and sigma > 0) or n < 2 * sigma:
+                return None
+            # the integral of |w| from n on is n |w(n)| / (n**2 / sigma**2 - 1)
+            f = abs(value(n))
+            return f + n * f / (n * n / (sigma * sigma) - 1), 0.0
+    return None
+
+
 def _kernel_reach(kernel):
     """
     The largest effective sample size ``(sum |w|)**2 / sum w**2`` a row of a
@@ -1512,10 +1589,21 @@ def _kernel_reach(kernel):
     ``exclude_timepoints``), for every n.  It does not depend on the length
     of the series.
 
-    None when it is not known or has no limit: a kernel without a lag
-    profile function (an array, a kernel function of the user's), and a
-    profile whose sums have not converged within ``_REACH_LAGS`` lags
-    (``uniform_weights``).  The result is kept on the kernel.
+    The sums are added up over the first lags; when they have not converged
+    there (a heavy tail, as of ``t_weights`` with few degrees of freedom, or
+    a very wide kernel), the rest comes from the profile's formula
+    (``_profile_tails``), so the result is known for every built-in kernel
+    function and parameter value: exactly for ``boxcar_weights`` and
+    ``laplace_weights``, to round-off of the tail formula for
+    ``gaussian_weights`` and ``t_weights``, and as an upper bound for a
+    ``mexican_hat_weights`` wider than about 1000 samples.
+
+    None when it has no limit (``uniform_weights``: the effective sample
+    size grows with the number of earlier timepoints) or is not known: a
+    kernel without a lag profile function (an array, a kernel function of
+    the user's), a ``mexican_hat_weights`` with sigma above 2 million
+    samples, and a kernel that is both wider than the lags added up and
+    restricted by ``exclude_timepoints``.  The result is kept on the kernel.
     """
     profile = getattr(kernel, "lag_profile", None)
     if profile is None or kernel.include != "backward":
@@ -1525,7 +1613,8 @@ def _kernel_reach(kernel):
         return cached[0]
     reach = None
     n = 1024
-    while n <= _REACH_LAGS:
+    unbounded = getattr(profile, "func", None) is uniform_profile
+    while n <= _REACH_LAGS and not unbounded:
         with np.errstate(over="ignore", invalid="ignore"):
             a = np.abs(np.asarray(profile(np.arange(n, dtype=np.int64)), dtype=np.float64))
         a[~np.isfinite(a)] = 0
@@ -1542,16 +1631,27 @@ def _kernel_reach(kernel):
             a /= peak  # so that tiny weights do not underflow when squared
             total = np.cumsum(a)
             squares = np.cumsum(a * a)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                ess = total**2 / squares
             # converged: the later half of the lags adds nothing to the sums
             if total[-1] - total[n // 2 - 1] <= 1e-15 * total[-1]:
-                with np.errstate(invalid="ignore", divide="ignore"):
-                    ess = total**2 / squares
                 reach = float(np.nanmax(ess))
+                break
+            # not converged: the rest of the sums from the profile's formula
+            # (not with exclude_timepoints, which cuts the tail)
+            tails = _profile_tails(profile, n) if kernel.exclude is None else None
+            if tails is not None:
+                first, second = tails[0] / peak, tails[1] / peak**2
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    limit = (total[-1] + first) ** 2 / (squares[-1] + second)
+                reach = float(np.nanmax([np.nanmax(ess), limit]))
                 break
         n *= 2
     else:
-        if peak == 0:
+        if not unbounded and peak == 0:
             reach = 0.0
+    if reach is not None and np.isinf(reach):
+        reach = None  # no limit (a boxcar of infinite width)
     kernel._reach = (reach,)
     return reach
 
@@ -1628,10 +1728,13 @@ def _check_causal_rows(rows):
     length of the series.  The one row of a series of one timepoint has a
     single weight whatever the kernel: it is a delta kernel only when the
     kernel's lag profile says so (``_kernel_reach`` of at most 1), so a
-    prefix of a series is never refused where the series is not.
+    prefix of a series is never refused where the series is not; the same
+    holds for a built-in kernel whose rows are cut by events.
     """
     delta = bool(rows.support.size) and bool(np.all(rows.support == 1))
-    if delta and rows.shape[0] == 1:
+    if delta and (rows.shape[0] == 1 or getattr(rows.kernel, "labels", None) is not None):
+        # one row, or rows cut by events (blocks of one timepoint): the
+        # kernel's own lag profile decides
         reach = _kernel_reach(rows.kernel)
         delta = reach is not None and reach <= 1 + _MIN_SAMPLES_RTOL
     if delta:

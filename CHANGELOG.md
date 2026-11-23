@@ -99,9 +99,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs `htfa[plot,brain3d]>=0.2.0` and `hypertools>=1.2`):
   `htfa_network_animations.ipynb` draws each video with one
   `htfa.animate_network` call (per-node colors, per-frame radii, two views,
-  caption, legend rows, parallel frames) in place of its own scene, frame
-  composition and retry code; the brains are 8 to 10% larger in the frame, and
-  in the videos of orders 1 and 2 the edge legend sits one row lower.
+  caption, legend rows, parallel frames; x264's preset `slow`) in place of
+  its own scene, frame composition and retry code, and its stills with
+  `plot_network(..., views=, legend=, caption=)`; the layout of the videos is
+  that of the earlier ones (brains and legend rows within 5 pixels).
   `trajectories.ipynb` draws each video with one
   `hyp.plot(..., panels=..., animate=True)` call; the videos show the line up
   to the current sample faint and the last 30 samples solid, without the head

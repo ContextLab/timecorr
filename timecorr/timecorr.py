@@ -81,10 +81,13 @@ def _causal_smooth(x, weights, min_samples):
         # (rows of zero weight after the last row, columns of zeros after
         # the last timepoint), so that the operations that give a row do
         # not depend on the number of rows after it
+        # (a kernel array's chunk spans every column: those after the
+        # chunk's last row have no weight and are left out)
         k = t1 - t0
-        end = max(c1, t0 + CHUNK)
+        end = t0 + CHUNK
+        m = min(c1, end) - c0
         w = np.zeros((CHUNK, end - c0))
-        w[:k, : c1 - c0] = block
+        w[:k, :m] = block[:, :m]
         c1 = end
         # each row scaled by its largest weight, so squares do not underflow
         peak = w.max(axis=1, keepdims=True, initial=0.0)

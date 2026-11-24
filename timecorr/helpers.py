@@ -1862,6 +1862,13 @@ def _kernel_samples(kernel, observed=None):
     ``observed`` is a boolean vector over the T timepoints (None: all).
     Each row is scaled by its largest weight first, so tiny weights do not
     underflow when squared.
+
+    The kernel has no weight above its diagonal (the causal estimator).
+    Each chunk of rows is summed over the columns of a chunk of a series
+    without an end, from its first column to the chunk's last row, with
+    zeros beyond the data: a sum's last bit depends on the number of terms,
+    which must not depend on the length of the series (a row at exactly
+    ``min_samples`` would be defined at one length and not at another).
     """
     T_out = kernel.shape[0]
     count = np.zeros(T_out, dtype=np.int64)
@@ -1873,8 +1880,11 @@ def _kernel_samples(kernel, observed=None):
     for t0, t1, c0, c1, key, w in blocks(kernel, CHUNK, _abs_weights):
         stats = seen.get(key) if (key is not None and everything) else None
         if stats is None:
+            block, m = w, min(c1, t0 + CHUNK) - c0
+            w = np.zeros((t1 - t0, t0 + CHUNK - c0))
+            w[:, :m] = block[:, :m]
             if not everything:
-                w = w * observed[c0:c1]
+                w[:, :m] *= observed[c0 : c0 + m]
             n = np.count_nonzero(w, axis=1)
             peak = w.max(axis=1, keepdims=True, initial=0.0)
             with np.errstate(invalid="ignore"):

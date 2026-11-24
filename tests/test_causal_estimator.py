@@ -1687,3 +1687,59 @@ def test_removing_later_rows_changes_no_bit_of_smoothed_values(case):
             x += 1e6  # a level far above the variation
         run = _timecorr_runner(2, cfun=None, **SMOOTH[case])
         assert _identical_under_removal(run, data, _cuts(300)[::2]) == []
+
+
+# ----------------------------------------------------------------------------
+# review of the exact-removal branch: min_samples at an effective size that
+# occurs
+# ----------------------------------------------------------------------------
+
+
+def test_min_samples_at_an_effective_size_that_occurs_is_exact_under_removal():
+    # the reviewer's input: the effective size of row 8 was summed over the
+    # columns of the series (7.937065553951692 with 17 rows,
+    # 7.937065553951693 with 15), so the row was NaN in one and finite in
+    # the other
+    x = np.random.default_rng(0).normal(size=(17, 3))
+    kw = dict(causal=True, cfun=tc.autofc, weights_params={"var": 25},
+              min_samples=7.93706555395963)
+    whole = _quiet(tc.timecorr, x, **kw)
+    part = _quiet(tc.timecorr, x[:15], **kw)
+    assert np.array_equal(whole[:15], part, equal_nan=True)
+
+
+@pytest.mark.parametrize("cfun", [tc.autofc, None], ids=["autofc", "smoothing"])
+def test_every_occurring_effective_size_as_min_samples(cfun):
+    # min_samples at, just below and just above the effective sizes that
+    # the kernel rows have, with and without missing samples
+    from timecorr import helpers
+
+    rng = np.random.default_rng(5)
+    changed = []
+    for T, cut in ((17, 15), (40, 33), (150, 129), (300, 257)):
+        x = rng.normal(size=(T, 3))
+        kernels = (dict(weights_params={"var": 25}),
+                   dict(weights_function=tc.laplace_weights, weights_params={"scale": 4}),
+                   dict(weights_function=tc.t_weights, weights_params={"df": 3}))
+        for kernel in kernels:
+            for missing in (False, True):
+                data = x.copy()
+                if missing:
+                    data[rng.random(data.shape) < 0.05] = np.nan
+                lag = helpers._lag_kernel(cut, kernel.get("weights_function",
+                                                          tc.gaussian_weights),
+                                          kernel["weights_params"], "backward", True, None)
+                sizes = np.unique(helpers._kernel_samples(lag)[1])
+                sizes = sizes[sizes > 3][:: max(1, sizes.size // 12)]
+                for size in sizes:
+                    for m in (np.nextafter(size, 0), size, np.nextafter(size, np.inf),
+                              size * (1 + 1e-12), size * (1 - 1e-12)):
+                        kw = dict(causal=True, cfun=cfun, min_samples=float(m), **kernel)
+                        try:
+                            whole = _quiet(tc.timecorr, data, **kw)
+                        except ValueError:  # no row reaches it
+                            continue
+                        part = _quiet(tc.timecorr, data[:cut], **kw)
+                        if not np.array_equal(whole[:cut], part, equal_nan=True):
+                            changed.append((T, cut, missing, m))
+    assert changed == []

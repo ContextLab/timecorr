@@ -1309,3 +1309,92 @@ def test_refits_are_exact_under_removal():
     whole = _quiet(tc.features, data, **kw)
     for n in (151, 190, 191, 230, 256, 271, 329):
         assert _first_rows_identical(whole, _quiet(tc.features, data[:n], **kw), n), n
+
+
+# ----------------------------------------------------------------------------
+# review of the exact-removal branch: nothing depends on the blocks of
+# features of a streamed step, which depend on T and max_memory_gb
+# ----------------------------------------------------------------------------
+
+
+def _review_input():
+    x = np.random.default_rng(123).normal(size=(259, 17))
+    x[50, 3] = np.nan
+    common = dict(causal=True, cfun=tc.autofc, fit_timepoints=40,
+                  weights_params={"var": 25}, delta_weights_params={"var": 9})
+    return x, common
+
+
+def test_streamed_rows_do_not_depend_on_the_block_of_features():
+    from timecorr.helpers import _corr_row_blocks, _lag_kernel
+
+    x, _ = _review_input()
+    kernel = _lag_kernel(len(x), tc.gaussian_weights, {"var": 25}, "backward", True, None)
+
+    def rows(step):
+        return np.concatenate([R for _, _, R, _, _ in _corr_row_blocks(
+            x, x, kernel, True, step, causal=True)])
+
+    whole = rows(17)
+    for step in (1, 3, 8, 16):
+        assert np.array_equal(whole, rows(step), equal_nan=True), step
+    # the diagonal is 1 where defined, and the two orientations of a pair
+    # agree to round-off
+    defined = ~np.isnan(whole[0, 0])
+    assert (whole[np.arange(17), np.arange(17)][:, defined] == 1).all()
+    assert np.nanmax(np.abs(whole - whole.transpose(1, 0, 2))) < 1e-12
+
+
+@pytest.mark.parametrize("order", [1, 2])
+def test_streamed_summaries_are_exact_under_removal_and_max_memory(order):
+    from .test_causal_features import _first_rows_identical
+
+    x, common = _review_input()
+    kw = dict(order=order, rfun="weighted_strength", delta_rfun="weighted_strength",
+              return_delta=True, **common)
+    whole, model = _quiet(tc.features, x, max_memory_gb=0.01, return_model=True, **kw)
+    # the reviewer's cut, and others
+    for n in (63, 41, 64, 127, 129, 200, 258):
+        part = _quiet(tc.features, x[:n], max_memory_gb=0.01, **kw)
+        assert _first_rows_identical(whole, part, n), n
+        assert _first_rows_identical(whole, _quiet(model.transform, x[:n],
+                                                   return_delta=True), n), n
+    for memory in (None, 0.006, 0.008, 0.02, 0.05, 1.0):
+        other = _quiet(tc.features, x, max_memory_gb=memory, **kw)
+        assert _first_rows_identical(whole, other, len(x)), memory
+
+
+def test_a_frozen_model_reduces_a_row_whatever_the_number_of_rows():
+    from timecorr.helpers import _model_reduce
+
+    import hypertools as hyp
+
+    rng = np.random.default_rng(0)
+    for columns, ndims in ((136, 3), (153, 3), (21, 5), (45, 9)):
+        rows = rng.normal(size=(300, columns))
+        _, fitted = _model_reduce([rows[:40]], "PCA", ndims, return_model=True)
+        # the case: one product of all rows differs with the number of rows
+        together = np.asarray(hyp.reduce(rows, reduce=fitted.model))
+        assert any(not np.array_equal(np.asarray(hyp.reduce(rows[:n], reduce=fitted.model)),
+                                      together[:n]) for n in range(2, 12))
+        whole = fitted.apply([rows])[0]
+        assert np.allclose(whole, together, rtol=0, atol=1e-12)
+        for n in list(range(1, 14)) + [41, 127, 128, 129, 255, 256, 257, 299]:
+            assert np.array_equal(fitted.apply([rows[:n]])[0], whole[:n]), n
+        # and whatever the other arrays of the list
+        both = fitted.apply([rows[:127], rows[100:]])
+        assert np.array_equal(both[0], whole[:127])
+        assert fitted.apply([rows[:0]])[0].shape == (0, ndims)
+
+
+def test_refitted_models_are_exact_under_removal():
+    # the reviewer's input: [2][126, 2] was 0.15126289987033542 with 259
+    # rows and 0.15126289987033548 with 127
+    from .test_causal_features import _first_rows_identical
+
+    x, common = _review_input()
+    kw = dict(order=3, rfun="PCA", delta_rfun="PCA", ndims=3, refit_every=40,
+              return_delta=True, **common)
+    whole = _quiet(tc.features, x, **kw)
+    for n in (127, 81, 120, 121, 128, 200, 201, 258):
+        assert _first_rows_identical(whole, _quiet(tc.features, x[:n], **kw), n), n

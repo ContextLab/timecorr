@@ -2335,16 +2335,19 @@ def _causal_block(state, i0, i1, j0):
     return r, undefined, zero_all, few_any
 
 
-def _symmetrize_block(r, undefined, offset):
+def _symmetrize_block(r, undefined, offset, average=True):
     """
     In place, for an autocorrelation block from ``_wcorr_block`` whose rows
     ``i0:i1`` start ``offset`` columns after its first column: set the
     diagonal to 1 (0 where undefined) and replace the square of columns
-    ``offset:offset + (i1 - i0)`` by the mean of it and its transpose.
+    ``offset:offset + (i1 - i0)`` by the mean of it and its transpose
+    (``average=False``: the diagonal only).
     """
     c = r.shape[1]
     diag = np.arange(c)
     r[:, diag, offset + diag] = np.where(undefined[:, diag, offset + diag], 0.0, 1.0)
+    if not average:
+        return
     square = r[:, :, offset : offset + c]
     r[:, :, offset : offset + c] = (square + square.transpose(0, 2, 1)) / 2
 
@@ -2434,8 +2437,11 @@ def _corr_row_blocks(a, b, weights, symmetric, rows_per_block=None, *,
     delta case).
 
     With ``causal=True`` the rows are those of ``_wcorr(..., causal=True,
-    min_samples=min_samples, autocorrelation=symmetric)``: the undefined
-    (warm-up) rows are NaN in every block.
+    min_samples=min_samples, autocorrelation=symmetric)`` to round-off: the
+    undefined (warm-up) rows are NaN in every block, and no entry depends
+    on ``rows_per_block`` (each row of features is multiplied with every
+    feature in a product of its own, and no pair is averaged with its
+    transpose, so the two orientations of a pair agree to round-off only).
 
     Raises ``ValueError`` as ``_wcorr`` does, and if ``symmetric`` is True but
     ``a`` and ``b`` differ in shape.
@@ -2486,7 +2492,11 @@ def _corr_row_blocks(a, b, weights, symmetric, rows_per_block=None, *,
             i1 = min(Ka, i0 + step)
             r, undefined, zero_all, few_any = _wcorr_block(state, i0, i1, 0)
             if symmetric:
-                _symmetrize_block(r, undefined, i0)
+                # causal: a pair is averaged with its transpose only when
+                # both features are in the block, and the blocks depend on
+                # T and on the memory limit; every entry is left as the
+                # product of its own row of features gave it
+                _symmetrize_block(r, undefined, i0, average=not causal)
             if warmup is not None:
                 r[warmup] = np.nan
             yield i0, i1, r.transpose(1, 2, 0), active & zero_all, active & few_any
@@ -3912,6 +3922,10 @@ _FROZEN_RTOL = 1e-9
 _FROZEN_ZERO_RTOL = 1e-12
 
 
+# A frozen model reduces this many rows in one call (``_FittedModel._reduce``).
+_APPLY_ROWS = 128
+
+
 class _FittedModel:
     """
     A hypertools model fitted by ``_model_reduce``: ``model`` (the fitted
@@ -3978,6 +3992,26 @@ class _FittedModel:
             self.constants = (columns, np.mean(stacked[:, columns], axis=0),
                               tol[columns])
 
+    def _reduce(self, a):
+        """One array reduced by the model, ``_APPLY_ROWS`` rows at a time
+        (the last rows followed by rows of zeros): the matrix products of
+        the model then have the same shape whatever the number of rows and
+        of arrays, so the bits of a reduced row depend on the rows before
+        it in its batch at most (a product of all rows together differs in
+        the last bit between a series and a shorter one)."""
+        parts = []
+        for r0 in range(0, a.shape[0], _APPLY_ROWS):
+            batch = np.zeros((_APPLY_ROWS, a.shape[1]))
+            part = a[r0 : r0 + _APPLY_ROWS]
+            batch[: part.shape[0]] = part
+            reduced = np.asarray(hyp.reduce(batch, reduce=self.model), dtype=np.float64)
+            parts.append(reduced[: part.shape[0]])
+        if not parts:
+            reduced = np.asarray(hyp.reduce(np.zeros((_APPLY_ROWS, a.shape[1])),
+                                            reduce=self.model), dtype=np.float64)
+            return reduced[:0]
+        return np.vstack(parts)
+
     def apply(self, arrays):
         """The rows of a list of (rows, n_features) arrays, reduced with the
         fitted model (a list of arrays)."""
@@ -3991,9 +4025,7 @@ class _FittedModel:
         if self.model is None:
             out = [a.copy() for a in arrays]  # the identity
         else:
-            out = hyp.reduce(arrays, reduce=self.model)
-            out = out if isinstance(out, list) else [out]
-            out = [np.asarray(o, dtype=np.float64) for o in out]
+            out = [self._reduce(a) for a in arrays]
         if self.pad:
             out = [np.hstack((o, np.zeros((o.shape[0], self.pad)))) for o in out]
         if self.constants is not None:

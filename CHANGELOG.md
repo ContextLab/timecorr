@@ -216,6 +216,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/test_chunked_kernels.py`) pass unchanged. `min_samples`,
   `fit_timepoints`, `refit_every` or `return_model=True` given without
   `causal=True` raise `ValueError`.
+- `tc.tstat_combine`: an entry whose values across subjects differ by
+  round-off only now has the statistic of an entry whose values are equal:
+  t = +inf or -inf with the sign of the mean of its values (p = 0), or 0
+  (p = 1) for a mean of 0. Round-off is a range across the subjects of at
+  most 128 eps (2.8e-14), times the largest magnitude for values above 1
+  (`helpers._round_off_spread`). In 0.3.1 such an entry had the mean divided
+  by that round-off: a finite t of up to 1e16 in magnitude, and scipy's
+  `RuntimeWarning` about precision loss. This is what differs from 0.3.1,
+  with and without `causal=True`: the entries of `tc.isfc` with two subjects
+  (its two correlation matrices are the same numbers computed in two
+  orders) that were not equal bit for bit, 32 of 700 in one case measured
+  (2 subjects, 70 timepoints, 4 features; |t| up to 1.3e16; the other 668
+  were already +-inf) and 1190 of 39,000 in another (120 timepoints, 25
+  features), and any entry of a list given to `tc.tstat_combine` with a range
+  that small. Every other output is unchanged bit for bit (3000 random
+  lists of 3 to 6 matrices, 288,000 entries, and the stored-output tests).
+  The same correlation computed in two orders differed by at most 61 eps in
+  33.8 million entries measured, except in the first defined row of
+  `causal=True` (3 samples), where 13 entries differed by more than 128 eps
+  (up to 3108 eps) and keep their finite statistic. A range of 1e-13 or
+  more is a difference between subjects, as before.
 - `install_requires`: `hypertools>=1.1` (was `hypertools>=0.8`; see Fixed).
   The `tutorials` extra keeps `hypertools>=1.2`.
 

@@ -384,3 +384,128 @@ def test_round_off_bound_covers_the_measured_round_off(monkeypatch):
     # order's kernel; Accelerate and OpenBLAS alike; see the comment above
     # helpers._ROUND_OFF)
     assert bound > 37.95 * eps
+
+
+# --- tstat_combine: a spread across subjects at round-off level is none ------
+#
+# With two subjects, isfc correlates subject 0 with subject 1 and subject 1
+# with subject 0: the same numbers, computed in two orders.  They differ in
+# their last bits in a few entries, and the t statistic divided the mean by
+# that difference (finite |t| up to 1e16 next to +-inf).
+
+
+def _two_subject_isfc(seed, T, K, **kw):
+    rng = np.random.RandomState(seed)
+    data = [rng.randn(T, K) for _ in range(2)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        subjects = tc.timecorr(data, cfun=tc.isfc, combine=tc.null_combine,
+                               weights_params={"var": 25}, **kw)
+        t, p = tc.timecorr(data, cfun=tc.isfc,
+                           combine=lambda c: np.stack(tc.tstat_combine(c, True)),
+                           weights_params={"var": 25}, **kw)
+    return subjects, t, p
+
+
+@pytest.mark.parametrize("seed, T, K", [(4, 70, 4), (0, 300, 10), (1, 120, 25)])
+def test_tstat_combine_of_two_subjects_isfc_has_no_round_off_statistic(seed, T, K):
+    (a, b), t, p = _two_subject_isfc(seed, T, K)
+    spread = np.abs(a - b)
+    # the case: the two subjects' correlations are the same up to round-off,
+    # and not bit for bit everywhere
+    assert 0 < spread.max() <= 64 * np.finfo(float).eps
+    assert not np.isnan(t).any()
+    mean = (a + b) / 2
+    assert np.array_equal(t, np.where(mean > 0, np.inf, np.where(mean < 0, -np.inf, 0.0)))
+    assert np.array_equal(p, np.where(mean == 0, 1.0, 0.0))
+
+
+def test_tstat_combine_of_two_subjects_isfc_in_causal_mode():
+    (a, b), t, _ = _two_subject_isfc(4, 70, 4, causal=True)
+    defined = ~np.isnan(a).any(axis=1)
+    assert np.array_equal(np.isnan(t).any(axis=1), ~defined)
+    # (the first defined row has 3 samples: its correlations can differ by
+    # more than round-off of well-conditioned sums, see tstat_combine)
+    rows = np.flatnonzero(defined)[1:]
+    assert np.isinf(t[rows]).all()
+    assert np.array_equal(np.sign(t[rows]), np.sign((a + b)[rows]))
+
+
+def _reference_t(corrs):
+    """The statistic as it was: scipy's one-sample t-test of the Fisher z."""
+    from scipy.stats import ttest_1samp
+
+    with np.errstate(divide="ignore", invalid="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # scipy: nearly identical data
+        return ttest_1samp(np.arctanh(np.stack(corrs, axis=2)), 0, axis=2)
+
+
+def test_tstat_combine_of_subjects_that_differ_is_unchanged():
+    rng = np.random.default_rng(0)
+    entries = 0
+    smallest = np.inf
+    for trial in range(3000):
+        S = int(rng.integers(3, 7))
+        corrs = [np.tanh(rng.standard_normal((8, 12)) * rng.choice([0.01, 0.3, 1.5]))
+                 for _ in range(S)]
+        stacked = np.stack(corrs, axis=2)
+        smallest = min(smallest, np.ptp(stacked, axis=2).min())
+        t, p = tc.tstat_combine(corrs, return_pvals=True)
+        expect = _reference_t(corrs)
+        assert np.array_equal(t, expect.statistic) and np.array_equal(p, expect.pvalue)
+        entries += t.size
+    assert entries == 3000 * 96 and smallest > 1e-9
+
+
+def test_tstat_combine_keeps_a_small_real_spread():
+    # the reviewer's input: the two subjects have different events, so their
+    # correlations differ where a kernel row reaches over a boundary of one
+    # subject only; a difference of 1e-8 is not round-off
+    rng = np.random.RandomState(4)
+    xs = [rng.randn(70, 4) for _ in range(2)]
+    xs[0][48, 1] = np.inf
+    kw = dict(causal=True, cfun=tc.isfc, weights_params={"var": 25}, min_samples=3,
+              events=[[20, 60], [25, 65]])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        a, b = tc.timecorr(xs, combine=tc.null_combine, **kw)
+        t = tc.timecorr(xs, combine=tc.tstat_combine, **kw)
+    spread = np.abs(a - b)
+    real = (spread > 1e-12) & np.isfinite(spread)
+    small = real & (spread < 1e-7)
+    assert small.any()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        expect = _reference_t([a, b]).statistic
+    assert np.isfinite(t[real]).all() and np.array_equal(t[real], expect[real])
+    assert np.abs(t[small]).max() > 1e6  # ill-conditioned, and what was returned
+
+
+@pytest.mark.parametrize("values, expect", [
+    ((0.3, 0.3 + 2 * np.finfo(float).eps), np.inf),
+    ((-0.3, -0.3 + 100 * np.finfo(float).eps, -0.3), -np.inf),
+    ((1e-17, -1e-17), 0.0),                       # a mean of 0
+    ((3e-17, 1e-17), np.inf),
+    ((50.0, 50.0 * (1 + 4 * np.finfo(float).eps)), np.inf),  # raw values: relative
+    ((-50.0, -50.0 * (1 + 4 * np.finfo(float).eps)), -np.inf),
+])
+def test_tstat_combine_round_off_spread_gives_the_zero_spread_value(values, expect):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        t, p = tc.tstat_combine([np.array([[v]]) for v in values], return_pvals=True)
+    assert t[0, 0] == expect
+    assert p[0, 0] == (1.0 if expect == 0 else 0.0)
+
+
+@pytest.mark.parametrize("values", [
+    (0.3, 0.3 + 1e-13),      # 450 units of round-off: a difference
+    (0.3, 0.3 + 1e-9),
+    (50.0, 50.0 + 1e-11),
+    (1e-13, -1e-13),
+])
+def test_tstat_combine_keeps_spreads_above_round_off(values):
+    from scipy.stats import ttest_1samp
+
+    t = tc.tstat_combine([np.array([[v]]) for v in values])[0, 0]
+    v = np.array(values)
+    expect = ttest_1samp(v if np.abs(v).max() > 1 else np.arctanh(v), 0).statistic
+    assert np.isfinite(t) and t == expect

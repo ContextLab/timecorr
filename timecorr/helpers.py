@@ -3509,6 +3509,31 @@ def mean_combine(vals):
         return np.mean(np.stack(vals, axis=2), axis=2)
 
 
+def _round_off_spread(stacked):
+    """
+    Entries of a stack of matrices (along the last axis) whose values are
+    one value up to round-off: their range is at most ``_UNIT_TOLERANCE``
+    (128 eps, 2.8e-14), relative to the largest magnitude when that is
+    above 1 (correlations are computed to an absolute accuracy, raw
+    co-fluctuations to a relative one).
+
+    The same correlation computed in two orders (``isfc`` of two subjects:
+    subject 0 with subject 1, and subject 1 with subject 0) differs by at
+    most 61 eps in the cases measured (33.8 million entries: five kinds of
+    data, T 100 to 700, 10 to 40 features, five kernels, with and without
+    ``causal=True``; 2.46 million of them differ at all, 99.7% by less
+    than 2 eps), except in the first defined row of the causal estimator,
+    which has 3 samples (13 entries above 128 eps, up to 3108 eps).  Correlations of subjects
+    that differ are far apart on that scale: 3000 random stacks of 3 to 6
+    subjects have no range below 1e-9.  NaN and infinite entries are not
+    selected.
+    """
+    with np.errstate(invalid="ignore"):
+        spread = stacked.max(axis=-1) - stacked.min(axis=-1)
+        scale = np.maximum(1.0, np.abs(stacked).max(axis=-1))
+        return spread <= _UNIT_TOLERANCE * scale
+
+
 def tstat_combine(corrs, return_pvals=False):
     """
     Element-wise one-sample t-tests (mean 0) across the matrices in a list.
@@ -3522,7 +3547,16 @@ def tstat_combine(corrs, return_pvals=False):
     value in every matrix (zero variance across subjects, for example the
     diagonal of ``autofc`` results, where every value is 1) has t = +inf or
     -inf with the sign of that value (p = 0), or t = 0 (p = 1) when the value
-    is 0, with no warning.  Where the values of the matrices nearly coincide
+    is 0, with no warning.  The same holds where the values differ by
+    round-off only: a range across the matrices of at most 128 eps (2.8e-14;
+    times the largest magnitude for values above 1) counts as none, and the
+    entry has t = +inf, -inf or 0 with the sign of the mean of its values.
+    That is the case of ``isfc`` with two subjects, whose correlations are
+    the same numbers computed in two orders (they differed by up to 61 eps
+    in the cases measured; in the first defined row of ``causal=True``,
+    which has 3 samples, 13 of 33.8 million entries differed by more than
+    128 eps, up to 3108 eps, and keep their finite statistic).  Where the values of the matrices
+    nearly coincide beyond that (1e-13 is a difference)
     the statistic is ill-conditioned: round-off of the correlations is
     divided by a spread close to zero (with ``causal=True`` and a kernel
     function of your own such entries agree to about 1e-9 of their
@@ -3577,14 +3611,16 @@ def tstat_combine(corrs, return_pvals=False):
         raw = np.any(outside, axis=2, keepdims=True)
         vals = np.where(raw, stacked, z)
         # zero variance across subjects (every value equal, infinities
-        # included): t is +-inf with the sign of the mean, 0 for a mean of 0
-        constant = np.all(vals == vals[:, :, :1], axis=2)
+        # included, or equal up to round-off): t is +-inf with the sign of
+        # the mean, 0 for a mean of 0
+        constant = np.all(vals == vals[:, :, :1], axis=2) | _round_off_spread(stacked)
         filler = np.arange(vals.shape[2], dtype=np.float64)  # any non-constant row
         ts, ps = ttest(np.where(constant[:, :, None], filler, vals), popmean=0, axis=2)
-        first = vals[:, :, 0]
-        signed_inf = np.where(first > 0, np.inf, np.where(first < 0, -np.inf, 0.0))
+        with np.errstate(invalid="ignore"):  # +inf and -inf: NaN, as before
+            mean = np.where(constant[:, :, None], vals, 0.0).mean(axis=2)
+        signed_inf = np.where(mean > 0, np.inf, np.where(mean < 0, -np.inf, 0.0))
         ts = np.where(constant, signed_inf, ts)
-        ps = np.where(constant, np.where(first == 0, 1.0, 0.0), ps)
+        ps = np.where(constant, np.where(mean == 0, 1.0, 0.0), ps)
 
     if return_pvals:
         return ts, ps

@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] - Unreleased
+## [0.4.0] - 2026-11-24
 
 ### Added
 
@@ -35,7 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     it holds when the linear-algebra library computes a row of a matrix
     product of a given shape from that row's operands alone, and NumPy's
     elementwise functions a value from that value alone; the tests ran
-    with Accelerate (macOS) when this was written. Tested at cuts at, just before
+    with Accelerate (macOS) and, in continuous integration, with the
+    OpenBLAS of NumPy's Linux wheels. Tested at cuts at, just before
     and just after multiples of 16 and 128 rows, for every built-in kernel,
     events, NaN samples, `min_samples`, kernels wider than 512 timepoints,
     150 features (several blocks of features), every length from 1, fitted

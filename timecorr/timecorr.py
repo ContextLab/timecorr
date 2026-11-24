@@ -1022,8 +1022,10 @@ def timecorr(
         has columns, or more, changes nothing (zero columns are appended
         for the components beyond them), whatever the number of training
         rows; the number asked for is ``n_components`` given with the
-        model (in its ``kwargs``, or of a model object), otherwise the
-        number of features.  Asked for fewer components than columns
+        model (in its ``kwargs``, or of a model object; the output then
+        has the columns of the input and no zero columns, as without
+        ``causal``), otherwise the number of features.  Asked for fewer
+        components than columns
         but more than there are defined training rows, a model is fitted
         with as many components as those rows, and zero columns are
         appended for the others, with a warning.

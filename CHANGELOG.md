@@ -149,7 +149,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - A model asked for at least as many components as its input has columns
     is not fitted and returns the columns as they are, whatever the number
     of training rows (the number asked for is `n_components` given with the
-    model, in its `kwargs` or of a model object, otherwise `ndims`). Asked
+    model, in its `kwargs` or of a model object, otherwise `ndims`). The
+    widths are those of the call without `causal=True`: `n_components`
+    given with the model is the width of a fitted model's output, and
+    decides whether a model is fitted; when none is, the output has the
+    columns of the input and zero columns up to `ndims` only. A model
+    object given in a model dict is not fitted or changed by a causal call
+    (a copy is fitted; a call without `causal=True` fits the object, as in
+    0.3.1). Asked
     for fewer components than columns but more than there are defined
     training rows, it is fitted with as many components as those rows (an
     `n_components` given with the model is replaced), and zero columns are

@@ -1931,10 +1931,13 @@ def two_path_step(
         the rows it is given together).
         A model asked for as many components as its input
         has columns, or more, changes nothing (zero columns are appended
-        for the components beyond them), whatever the number of training
+        up to ``ndims``), whatever the number of training
         rows; the number asked for is ``n_components`` given with the
-        model (in its ``kwargs``, or of a model object), otherwise 
-        ``ndims``.  Asked for fewer components than columns
+        model (in its ``kwargs``, or of a model object; it decides
+        whether a model is fitted and the width of a fitted model's
+        output, not the number of zero columns: the widths are those of
+        the call without ``causal``), otherwise ``ndims``.  Asked for
+        fewer components than columns
         but more than there are defined training rows, a model is fitted
         with as many components as those rows, and zero columns are
         appended for the others, with a warning.
@@ -3098,10 +3101,13 @@ def features(
         the rows it is given together).
         A model asked for as many components as its input
         has columns, or more, changes nothing (zero columns are appended
-        for the components beyond them), whatever the number of training
+        up to ``ndims``), whatever the number of training
         rows; the number asked for is ``n_components`` given with the
-        model (in its ``kwargs``, or of a model object), otherwise 
-        ``ndims``.  Asked for fewer components than columns
+        model (in its ``kwargs``, or of a model object; it decides
+        whether a model is fitted and the width of a fitted model's
+        output, not the number of zero columns: the widths are those of
+        the call without ``causal``), otherwise ``ndims``.  Asked for
+        fewer components than columns
         but more than there are defined training rows, a model is fitted
         with as many components as those rows, and zero columns are
         appended for the others, with a warning.

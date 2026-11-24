@@ -3923,6 +3923,12 @@ def _causal_components(arrays, rfun, ndims, n_features, n_samples):
     the model is replaced, and ``ndims`` is the number asked for, so that
     ``reduce`` appends zero columns for the components the rows do not
     give.
+
+    The width of the output is that of the call without ``causal`` for
+    the same model: the number asked for when a model is fitted; when
+    none is, the columns as they are, with zero columns up to ``ndims``
+    (an ``n_components`` given with the model decides that no model is
+    fitted, not the number of zero columns).
     """
     explicit = _explicit_components(rfun)
     asked = ndims if explicit is None else int(explicit)
@@ -3996,6 +4002,13 @@ def _model_reduce(corrs, rfun, ndims, return_model=False):
     model = None
     order = None
     if return_model:
+        given = rfun.get("model") if isinstance(rfun, dict) else None
+        if given is not None and not isinstance(given, (str, type)):
+            # hypertools fits the object it is given: a copy is fitted, and
+            # the caller's object stays as it was
+            from sklearn.base import clone
+
+            rfun = {**rfun, "model": clone(given)}
         rfun, ndims, n_fit, order, rank_capped = _causal_components(
             arrays, rfun, ndims, n_features, n_samples)
         if order is not None:

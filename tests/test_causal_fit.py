@@ -1654,3 +1654,45 @@ def test_an_explicit_number_of_components_is_capped_like_ndims(model):
                  {"model": cls, "kwargs": {"n_components": 10}}):
         out = _quiet(tc.timecorr, x, rfun=rfun, **kw)
         assert np.array_equal(out, plain, equal_nan=True), rfun
+
+
+def test_the_width_with_an_explicit_number_of_components_is_that_without_causal():
+    # scoped review: what decides the width when n_components is given with
+    # the model and ndims too.  The causal call returns the width of the
+    # call without causal=True for the same model: n_components when a
+    # model is fitted; the columns as they are when n_components covers
+    # them, with zero columns up to ndims (not up to n_components)
+    import pickle
+
+    from sklearn.decomposition import PCA
+
+    x = np.random.default_rng(0).normal(size=(31, 4))
+    base = dict(order=1, cfun=tc.autofc, delta_rfun=None, weights_params={"var": 9},
+                delta_weights_params={"var": 9})
+    expect = {(13, 2): 10, (10, 13): 13, (30, 4): 10, (3, 2): 3, (3, 5): 3, (7, 2): 7,
+              (7, 9): 7}
+    for (n, ndims), width in expect.items():
+        for rfun in ({"model": "PCA", "kwargs": {"n_components": n}},
+                     {"model": PCA(n_components=n)}):
+            plain = _quiet(tc.features, x, rfun=rfun, ndims=ndims, **base)[1]
+            out, model = _quiet(tc.features, x, rfun=rfun, ndims=ndims, causal=True,
+                                fit_timepoints=6, return_model=True, **base)
+            assert plain.shape == out[1].shape == (31, width), (n, ndims)
+            for fitted in (model, pickle.loads(pickle.dumps(model))):
+                again = _quiet(fitted.transform, x[:20])
+                assert np.array_equal(again[1], out[1][:20], equal_nan=True)
+
+
+def test_a_causal_call_leaves_the_model_object_of_the_caller_as_it_was():
+    from sklearn.decomposition import PCA, FactorAnalysis, FastICA
+
+    x = np.random.default_rng(0).normal(size=(60, 4))
+    kw = dict(order=1, causal=True, cfun=tc.autofc, delta_rfun=None, fit_timepoints=30,
+              ndims=3, weights_params={"var": 9}, delta_weights_params={"var": 9})
+    for given in (PCA(n_components=3), FastICA(random_state=0),
+                  FactorAnalysis(n_components=3, random_state=0)):
+        before = dict(vars(given))
+        out, model = _quiet(tc.features, x, rfun={"model": given}, return_model=True, **kw)
+        assert vars(given) == before  # not fitted, no parameter changed
+        assert np.isfinite(out[1][2:]).all()
+        assert model.fits[(1, "analysis")].model_ is not given

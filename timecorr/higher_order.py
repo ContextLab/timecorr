@@ -1819,7 +1819,10 @@ def two_path_step(
         With the built-in kernel functions, removing them changes no bit
         either (every reducer and ``combine`` function and ``cfun=None``
         included): a row is computed with the same operations whatever
-        the length of the series.  With a kernel function of your own the
+        the length of the series and whatever ``max_memory_gb`` (tested,
+        also in configurations drawn at random, not proven: it holds when
+        the linear-algebra library computes a row of a matrix product of
+        a given shape from that row's operands alone).  With a kernel function of your own the
         columns of a chunk of kernel rows are found from its weights and
         can depend on the length; removal is then documented to 1e-9
         where the outputs depend continuously on the correlations (no
@@ -1929,6 +1932,13 @@ def two_path_step(
         A model asked for as many components as its input
         has columns, or more, changes nothing (zero columns are appended
         for the components beyond them), as without ``causal``.
+        ``"FastICA"`` is given the columns that vary over the training
+        rows first and is asked for no more components than there are
+        such columns (zero columns are appended for the others, with a
+        warning; ``ValueError`` when no column varies): scikit-learn sets
+        the sign of a component from its loading on the first column,
+        which for vectorized correlations is a diagonal entry, 1 in every
+        row, and the fit held NaN where that loading was exactly 0.
         ``"PCA"`` is fitted with ``svd_solver="full"``
         unless a model dict gives a solver, because the randomized solver
         scikit-learn chooses for large inputs does not reproduce its
@@ -2966,7 +2976,10 @@ def features(
         With the built-in kernel functions, removing them changes no bit
         either (every reducer and ``combine`` function and ``cfun=None``
         included): a row is computed with the same operations whatever
-        the length of the series.  With a kernel function of your own the
+        the length of the series and whatever ``max_memory_gb`` (tested,
+        also in configurations drawn at random, not proven: it holds when
+        the linear-algebra library computes a row of a matrix product of
+        a given shape from that row's operands alone).  With a kernel function of your own the
         columns of a chunk of kernel rows are found from its weights and
         can depend on the length; removal is then documented to 1e-9
         where the outputs depend continuously on the correlations (no
@@ -3076,6 +3089,13 @@ def features(
         A model asked for as many components as its input
         has columns, or more, changes nothing (zero columns are appended
         for the components beyond them), as without ``causal``.
+        ``"FastICA"`` is given the columns that vary over the training
+        rows first and is asked for no more components than there are
+        such columns (zero columns are appended for the others, with a
+        warning; ``ValueError`` when no column varies): scikit-learn sets
+        the sign of a component from its loading on the first column,
+        which for vectorized correlations is a diagonal entry, 1 in every
+        row, and the fit held NaN where that loading was exactly 0.
         ``"PCA"`` is fitted with ``svd_solver="full"``
         unless a model dict gives a solver, because the randomized solver
         scikit-learn chooses for large inputs does not reproduce its

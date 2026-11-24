@@ -3828,6 +3828,38 @@ def _pagerank_solve(B, b):
     return r
 
 
+def _varying_first(arrays, rfun):
+    """
+    For a ``"FastICA"`` fit: ``(order, varying)``, the number of columns
+    that vary over the rows of ``arrays`` and, when the first column is
+    constant and another varies, the order of the columns with those that
+    vary first (each group in its order; None otherwise).  ``(None, None)``
+    for another model or no rows.
+
+    scikit-learn's FastICA multiplies each whitening vector by the sign of
+    its loading on the first feature.  The first column of vectorized
+    autocorrelations is a diagonal entry (1 in every row), whose loading is
+    0 up to the round-off of the SVD: where it is exactly 0, which depends
+    on the platform and on the last bits of the data, the component is
+    multiplied by 0 and the fit holds NaN.  The order of the columns does
+    not change what a linear model computes.  FastICA also divides by the
+    singular values of its input, so it is asked for no more components
+    than columns vary (a component beyond them is round-off divided by
+    round-off, or NaN).
+    """
+    name = rfun.get("model") if isinstance(rfun, dict) else rfun
+    if name != "FastICA":
+        return None, None
+    stacked = np.vstack(arrays)
+    if not stacked.shape[0]:
+        return None, None
+    constant = np.ptp(stacked, axis=0) == 0
+    varying = int(np.sum(~constant))
+    if not constant[0] or not varying:
+        return None, varying
+    return np.concatenate([np.flatnonzero(~constant), np.flatnonzero(constant)]), varying
+
+
 def _model_reduce(corrs, rfun, ndims, return_model=False):
     """
     The model-based reduction of ``reduce`` (``rfun`` a model name or dict,
@@ -3844,6 +3876,21 @@ def _model_reduce(corrs, rfun, ndims, return_model=False):
     # a model cannot return more components than there are features or samples
     n_samples = sum(a.shape[0] for a in arrays)
     n_fit = min(ndims, n_features, n_samples)
+    order, varying = (None, None)
+    if return_model:
+        order, varying = _varying_first(arrays, rfun)
+        if varying is not None:
+            if not varying:
+                raise _FitUnusable(
+                    "FastICA cannot be fitted: no column of its input varies over "
+                    f"the {n_samples} rows it is fitted on ({n_features} "
+                    "column" + ("s" if n_features != 1 else "") + ", constant: the "
+                    "diagonal of the correlations of the features of the order "
+                    "before).  Use another model (for example 'PCA') or more "
+                    "features at that order."
+                )
+            # no more components than columns that vary (the others add none)
+            n_fit = min(n_fit, varying)
 
     if isinstance(rfun, dict) and "params" in rfun:
         # hypertools deprecated 'params' in favor of 'kwargs': merge both
@@ -3866,6 +3913,9 @@ def _model_reduce(corrs, rfun, ndims, return_model=False):
     rfun = _umap_defaults(rfun)
     model = None
     if return_model:
+        if order is not None:
+            permuted = [a[:, order] for a in arrays]
+            corrs = permuted if isinstance(corrs, list) else permuted[0]
         red_corrs, model = hyp.reduce(corrs, reduce=rfun, ndims=n_fit,
                                       random_state=0, return_model=True)
     else:
@@ -3879,7 +3929,9 @@ def _model_reduce(corrs, rfun, ndims, return_model=False):
         pad = ndims - n_fit
         _warn_user(
             f"reduce: the data supply at most {n_fit} components ({n_features} "
-            f"features, {n_samples} samples) but {ndims} were requested; the "
+            f"features, {n_samples} samples"
+            + (f", {varying} features that vary" if varying is not None else "")
+            + f") but {ndims} were requested; the "
             f"output is padded with {pad} zero column{'s' if pad > 1 else ''}."
         )
         if isinstance(red_corrs, list):
@@ -3890,7 +3942,7 @@ def _model_reduce(corrs, rfun, ndims, return_model=False):
             red_corrs = np.hstack((red_corrs, np.zeros((red_corrs.shape[0], pad))))
 
     if return_model:
-        return red_corrs, _FittedModel(model, n_features, max(0, ndims - n_fit))
+        return red_corrs, _FittedModel(model, n_features, max(0, ndims - n_fit), order)
     return red_corrs
 
 
@@ -3922,7 +3974,14 @@ _FROZEN_RTOL = 1e-9
 _FROZEN_ZERO_RTOL = 1e-12
 
 
-# A frozen model reduces this many rows in one call (``_FittedModel._reduce``).
+# The models whose transform is known to be a linear map of each row
+# (scikit-learn's classes of these names, by exact class): the models the
+# guarantee of causal mode covers (``timecorr._uncovered_model``).
+_GUARANTEED_MODELS = ("PCA", "IncrementalPCA", "TruncatedSVD", "FastICA",
+                      "FactorAnalysis")
+
+# A frozen model of ``_GUARANTEED_MODELS`` reduces this many rows in one call
+# (``_FittedModel._reduce``).
 _APPLY_ROWS = 128
 
 
@@ -3934,7 +3993,8 @@ class _FittedModel:
     and ``apply`` is then the identity), the number of input columns
     ``n_features`` and the number
     of zero columns ``pad`` that ``reduce`` appends when the data supplied
-    fewer components than requested.  ``apply`` reduces other rows with it.
+    fewer components than requested, and ``order``, the order in which the
+    model takes the columns (None: as given; ``_varying_first``).  ``apply`` reduces other rows with it.
 
     ``freeze_constants(outputs)`` (the model's outputs for its training
     rows) records the output columns that are constant there up to
@@ -3949,7 +4009,7 @@ class _FittedModel:
     order would correlate that round-off.
     """
 
-    def __init__(self, model, n_features, pad=0):
+    def __init__(self, model, n_features, pad=0, order=None):
         # the model as a pickle restores it: a fitted model's arrays can be
         # laid out differently in memory after pickling, which changes the
         # round-off of its products, so a model and its unpickled copy
@@ -3962,6 +4022,8 @@ class _FittedModel:
         self.n_features = int(n_features)
         self.pad = int(pad)
         self.constants = None  # (columns, their training means, tolerances)
+        # the order in which the model takes the columns (_varying_first)
+        self.order = None if order is None else np.asarray(order, dtype=np.intp)
 
     @property
     def estimator(self):
@@ -3978,6 +4040,10 @@ class _FittedModel:
         components = np.asarray(components, dtype=np.float64)
         if components.ndim != 2 or components.shape[1] != self.n_features:
             return None
+        if self.order is not None:  # in the order of the columns given
+            ordered = np.empty_like(components)
+            ordered[:, self.order] = components
+            components = ordered
         return components
 
     def freeze_constants(self, outputs):
@@ -3992,13 +4058,26 @@ class _FittedModel:
             self.constants = (columns, np.mean(stacked[:, columns], axis=0),
                               tol[columns])
 
+    def _row_wise(self):
+        """Whether the fitted estimator is exactly one of scikit-learn's
+        classes of ``_GUARANTEED_MODELS``."""
+        import sklearn.decomposition
+
+        return any(type(self.estimator) is getattr(sklearn.decomposition, name)
+                   for name in _GUARANTEED_MODELS)
+
     def _reduce(self, a):
         """One array reduced by the model, ``_APPLY_ROWS`` rows at a time
         (the last rows followed by rows of zeros): the matrix products of
         the model then have the same shape whatever the number of rows and
         of arrays, so the bits of a reduced row depend on the rows before
         it in its batch at most (a product of all rows together differs in
-        the last bit between a series and a shorter one)."""
+        the last bit between a series and a shorter one).  A model outside
+        ``_GUARANTEED_MODELS`` is given all rows together: nothing is
+        known of what its transform does with rows of zeros (the guarantee
+        of causal mode does not cover it)."""
+        if not self._row_wise():
+            return np.asarray(hyp.reduce(a, reduce=self.model), dtype=np.float64)
         parts = []
         for r0 in range(0, a.shape[0], _APPLY_ROWS):
             batch = np.zeros((_APPLY_ROWS, a.shape[1]))
@@ -4025,6 +4104,8 @@ class _FittedModel:
         if self.model is None:
             out = [a.copy() for a in arrays]  # the identity
         else:
+            if self.order is not None:
+                arrays = [a[:, self.order] for a in arrays]
             out = [self._reduce(a) for a in arrays]
         if self.pad:
             out = [np.hstack((o, np.zeros((o.shape[0], self.pad)))) for o in out]

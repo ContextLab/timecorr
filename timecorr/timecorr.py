@@ -31,6 +31,7 @@ from .helpers import (
     _check_min_samples,
     _check_rfun,
     _group_span,
+    _GUARANTEED_MODELS,
     _lag_kernel,
     _warn_user,
     autofc,
@@ -520,8 +521,8 @@ _LINEAR_MODELS = (
 # linear map of each row.  A fitted estimator is one of them by its exact
 # class: a subclass can pass every probe of ``_fit_reducer`` (they reduce
 # training rows only) and still reduce a row differently with later rows.
-_GUARANTEED_MODELS = ("PCA", "IncrementalPCA", "TruncatedSVD", "FastICA",
-                      "FactorAnalysis")
+# (the tuple is defined in helpers, whose _FittedModel reduces them in
+# batches of a fixed number of rows)
 _GUARANTEED_TEXT = (
     f"scikit-learn's {', '.join(_GUARANTEED_MODELS[:-1])} and "
     f"{_GUARANTEED_MODELS[-1]}, by exact class: a subclass is not one"
@@ -906,7 +907,10 @@ def timecorr(
         With the built-in kernel functions, removing them changes no bit
         either (every ``rfun`` and ``combine`` function and ``cfun=None``
         included): a row is computed with the same operations whatever
-        the length of the series.  With a kernel function of your own the
+        the length of the series (tested, also in configurations drawn at
+        random, not proven: it holds when the linear-algebra library
+        computes a row of a matrix product of a given shape from that
+        row's operands alone).  With a kernel function of your own the
         columns of a chunk of kernel rows are found from its weights and
         can depend on the length; removal is then documented to 1e-9
         where the outputs depend continuously on the correlations (no
@@ -1017,6 +1021,13 @@ def timecorr(
         A model asked for as many components as its input
         has columns, or more, changes nothing (zero columns are appended
         for the components beyond them), as without ``causal``.
+        ``"FastICA"`` is given the columns that vary over the training
+        rows first and is asked for no more components than there are
+        such columns (zero columns are appended for the others, with a
+        warning; ``ValueError`` when no column varies): scikit-learn sets
+        the sign of a component from its loading on the first column,
+        which for vectorized correlations is a diagonal entry, 1 in every
+        row, and the fit held NaN where that loading was exactly 0.
         ``"PCA"`` is
         fitted with ``svd_solver="full"`` unless a model dict gives a
         solver, because the randomized solver scikit-learn chooses for

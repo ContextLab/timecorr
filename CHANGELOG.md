@@ -24,13 +24,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     Kernel rows are taken in groups with the shapes they have in a series
     without an end (rows and columns beyond the data are zeros), each row of
     features is a matrix product of its own, and the columns of a chunk of
-    kernel rows are those of its first row. Tested at cuts at, just before
+    kernel rows are those of its first row; the effective sample sizes that
+    `min_samples` is compared with are summed over the same columns; a
+    streamed step leaves every correlation as the product of its own row of
+    features gave it (no average with the transposed pair, which depended
+    on the blocks of nodes, so on T and `max_memory_gb`: the two
+    orientations of a pair agree to round-off); a fitted model reduces 128
+    rows at a time, the last batch filled with rows of zeros. No output of
+    a causal call depends on `max_memory_gb`. This is tested, not proven:
+    it holds when the linear-algebra library computes a row of a matrix
+    product of a given shape from that row's operands alone, and NumPy's
+    elementwise functions a value from that value alone; the tests ran
+    with Accelerate (macOS) when this was written. Tested at cuts at, just before
     and just after multiples of 16 and 128 rows, for every built-in kernel,
     events, NaN samples, `min_samples`, kernels wider than 512 timepoints,
     150 features (several blocks of features), every length from 1, fitted
-    reducers and `FeaturesModel.transform`
+    reducers, `refit_every`, `FeaturesModel.transform`, `min_samples` at
+    the effective sizes that occur, several memory limits
     (`tests/test_causal_estimator.py`, `tests/test_causal_features.py`,
-    `tests/test_causal_fit.py`);
+    `tests/test_causal_fit.py`), and in configurations drawn at random
+    (`tests/test_causal_removal_random.py`: 300 draws in every run, 3000
+    in the slow run);
   - with a kernel array or a kernel function of your own, the columns of a
     chunk are found from its weights and can depend on the length, so
     removal is documented to 1e-9 (absolute) for outputs that depend
@@ -132,6 +146,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     without `components_`, or that fails a check, raises `ValueError`
     (`"UMAP"`, `"KernelPCA"`, `"Isomap"`, `"MDS"`, `"TSNE"`,
     `"SpectralEmbedding"`, `"LocallyLinearEmbedding"`).
+  - `"FastICA"` is given the columns that vary over the training rows first
+    and is asked for no more components than there are such columns (zero
+    columns are appended for the others, with the warning of `reduce`;
+    `ValueError` when no column varies). scikit-learn's FastICA sets the
+    sign of each component from its loading on the first column, which for
+    vectorized correlations is a diagonal entry (1 in every row): the
+    loading is 0 up to the round-off of the SVD, and where it was exactly 0
+    the fit held NaN and the call raised ("A has a NaN entry": 136 of 240
+    calls of `features(..., order=2, rfun="FastICA", delta_rfun="FastICA")`
+    measured on macOS, one test on Linux). Calls without `causal=True` are
+    not changed.
   - `"PCA"` is fitted with `svd_solver="full"` in causal mode unless a model
     dict gives a solver (the randomized solver that scikit-learn chooses for
     large inputs failed the check that a model reproduces its training rows,

@@ -1398,3 +1398,95 @@ def test_refitted_models_are_exact_under_removal():
     whole = _quiet(tc.features, x, **kw)
     for n in (127, 81, 120, 121, 128, 200, 201, 258):
         assert _first_rows_identical(whole, _quiet(tc.features, x[:n], **kw), n), n
+
+
+_STREAMED = {
+    "strength": (1, 30, dict(cfun=tc.autofc, rfun="weighted_strength",
+                             delta_rfun="weighted_strength")),
+    "strength-split-signed": (1, 30, dict(
+        cfun=tc.autofc, rfun=tc.WeightedStrength(signed=True, split=True),
+        delta_rfun=tc.WeightedStrength(split=True))),
+    "communities": (1, 30, dict(
+        cfun=tc.autofc, rfun={1: tc.Communities(n=4, signed=True), 2: "weighted_strength"},
+        delta_rfun={1: tc.Communities(n=5), 2: "weighted_strength"})),
+    "auto": (1, 30, dict(cfun=tc.autofc)),
+    "isfc": (3, 24, dict(rfun="weighted_strength", delta_rfun="weighted_strength")),
+    "isfc-auto": (3, 24, dict()),
+    "wisfc-communities": (3, 24, dict(
+        cfun=WISFC, rfun={1: tc.Communities(n=4), 2: "weighted_strength"},
+        delta_rfun="weighted_strength")),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_STREAMED))
+def test_streamed_steps_do_not_depend_on_the_memory_limit(case):
+    # the blocks of nodes of a streamed step follow from max_memory_gb and
+    # T (30 nodes: blocks of 4 to 30 with these limits)
+    from .test_causal_features import _first_rows_identical, _modules
+
+    n_subjects, K, kw = _STREAMED[case]
+    data = _modules(n_subjects, 200, K, seed=3)
+    kw = dict(order=2, causal=True, fit_timepoints=80, return_delta=True,
+              weights_params={"var": 25}, delta_weights_params={"var": 9}, **kw)
+
+    def run(d, memory):
+        return _quiet(tc.features, d[0] if n_subjects == 1 else d,
+                      max_memory_gb=memory, **kw)
+
+    whole = run(data, None)
+    for memory in (0.02, 0.03, 0.05, 0.1):
+        assert _first_rows_identical(whole, run(data, memory), 200), memory
+    for n in (81, 127, 129, 160, 199):
+        assert _first_rows_identical(whole, run([x[:n] for x in data], 0.05), n), n
+
+
+# ----------------------------------------------------------------------------
+# FastICA and the constant columns of vectorized correlations
+# ----------------------------------------------------------------------------
+
+
+def test_fastica_is_fitted_with_a_varying_first_column():
+    # scikit-learn's FastICA multiplies each whitening vector by the sign of
+    # its loading on the first feature.  The first column of vectorized
+    # autocorrelations is a diagonal entry, 1 in every row: its loading is 0
+    # up to the round-off of the SVD, and where it is exactly 0 the
+    # component is multiplied by 0 and the fit holds NaN ("A has a NaN
+    # entry"; 136 of 240 of these calls on macOS, and
+    # test_linear_models_are_taken_and_guaranteed[FastICA] on Linux)
+    kernels = dict(weights_params={"var": 25}, delta_weights_params={"var": 16})
+    for seed in range(20):
+        for K, ndims in ((2, 1), (3, 2), (4, 3), (5, 3)):
+            x = np.random.default_rng(seed).standard_normal((120, K))
+            kw = dict(order=2, causal=True, cfun=tc.autofc, rfun="FastICA",
+                      delta_rfun="FastICA", ndims=ndims, fit_timepoints=80,
+                      return_delta=True, **kernels)
+            if ndims == 1:
+                # order 2 has one feature: its correlations are its diagonal
+                with pytest.raises(ValueError, match="no column of its input varies"):
+                    _quiet(tc.features, x, **kw)
+                kw["order"] = 1
+            (X, D), model = _quiet(tc.features, x, return_model=True, **kw)
+            for out in X[1:] + D[1:]:
+                assert out.shape == (120, ndims)
+                defined = ~np.isnan(out).any(axis=1)
+                assert defined[20:].all() and np.isfinite(out[defined]).all()
+            # the model applied to other rows, and to the rows of the fit
+            again = _quiet(model.transform, x[:100], return_delta=True)
+            assert all(np.array_equal(a[:100], b, equal_nan=True)
+                       for a, b in zip(X[1:] + D[1:], again[0][1:] + again[1][1:]))
+    # the fitted model itself: its components are in the order of the
+    # columns given, and it reduces the rows of the fit to what the fit gave
+    from timecorr.helpers import _model_reduce
+
+    rng = np.random.default_rng(2)
+    rows = np.tanh(rng.standard_normal((126, 3)))
+    rows[:, [0, 2]] = 1.0
+    reduced, fitted = _quiet(_model_reduce, [rows], "FastICA", 1, return_model=True)
+    assert list(fitted.order) == [1, 0, 2]
+    assert fitted.components.shape == (1, 3) and fitted.components[0, 1] != 0
+    assert np.allclose(fitted.components[0, [0, 2]], 0, atol=1e-12)
+    assert np.allclose(fitted.apply([rows])[0], reduced[0], rtol=0, atol=1e-9)
+    # other models, and FastICA with a first column that varies, as before
+    assert _quiet(_model_reduce, [rows], "PCA", 1, return_model=True)[1].order is None
+    assert _quiet(_model_reduce, [rows[:, ::-1][:, [1, 0, 2]]], "FastICA", 1,
+                  return_model=True)[1].order is None

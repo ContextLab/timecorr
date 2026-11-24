@@ -211,7 +211,10 @@ With ``causal=True`` (keyword-only, in ``timecorr``, ``features``,
 is unchanged, bit for bit, when later rows are replaced by any values (NaN and
 inf included) and, with the built-in kernel functions, when later rows are
 removed: a row is computed with the same operations whatever the length of the
-series. With a kernel array or a kernel function of your own, removal is
+series and whatever ``max_memory_gb`` (tested, also in configurations drawn at
+random, not proven: it holds when the linear-algebra library computes a row of
+a matrix product of a given shape from that row's operands alone). With a
+kernel array or a kernel function of your own, removal is
 documented to 1e-9 for outputs that depend continuously on the correlations (no
 reduction, ``"strength"``, the summaries, and linear models such as PCA once
 fitted); the eigenvector-based graph measures (``"eigenvector_centrality"``,

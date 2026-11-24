@@ -193,21 +193,78 @@ def _same(whole, part, cut):
         for a, b in zip(whole, part))
 
 
+# Draws that are not valid calls, by the message of the error they raise:
+# only these are left out; any other exception is a failure of the test.
+INVALID = {
+    "min_samples no kernel row reaches":
+        r"min_samples=\S+ is more than a row of the kernel can have",
+    "fit rows without defined correlations":
+        r"fit_timepoints\)[^.]* hold (no row|no timepoint|fewer than 2 rows) with defined",
+    "too few features or rows for communities":
+        r"needs at least 4 features|Communities needs K >= 4|communities exceed K // 2"
+        r"|needs at least \d+ timepoints|Communities needs the number of communities n"
+        r"|the shift null needs T >= 40 timepoints",
+    "FastICA on correlations without a varying column":
+        r"FastICA cannot be fitted: no column of its input varies",
+    "more memory than max_memory_gb":
+        r"more than max_memory_gb",
+}
+MEMORY = "more memory than max_memory_gb"
+
+
+def _raised(run, data):
+    """The exception ``run(data)`` raises, or None."""
+    try:
+        run(data)
+    except Exception as error:
+        return error
+    return None
+
+
+def _invalid(error):
+    """The key of ``INVALID`` that the message of ``error`` matches, or None."""
+    import re
+
+    if error is None:
+        return None
+    for reason, pattern in INVALID.items():
+        if re.search(pattern, str(error)):
+            return reason
+    return None
+
+
 def check(seed, draws):
-    """Run ``draws`` draws of ``seed``: ``(compared, skipped, failures)``."""
+    """Run ``draws`` draws of ``seed``: ``(compared, skipped, failures)``,
+    ``skipped`` the number of draws left out by reason (``INVALID``)."""
+    import collections
+
     rng = np.random.default_rng(seed)
-    compared = skipped = 0
+    compared = 0
+    skipped = collections.Counter()
     failures = []
     for index in range(draws):
         label, run, data, cut, with_model = draw(rng)
         try:
             whole = run(data)
-        except (ValueError, MemoryError):
-            skipped += 1  # a configuration that does not run
+        except Exception as error:
+            reason = _invalid(error)
+            if reason is None:
+                failures.append((seed, index, label,
+                                 f"{type(error).__name__}: {error}"))
+            else:
+                skipped[reason] += 1
+                # the shorter series is the same invalid call (it holds the
+                # rows of the fit, and no check reads the length); only a
+                # memory limit can be enough for it
+                again = _raised(run, [x[:cut] for x in data])
+                if _invalid(again) != reason and reason != MEMORY:
+                    failures.append((seed, index, label,
+                                     f"the series raises ({error}); the shorter one: "
+                                     f"{again!r}"))
             continue
         try:
             part = run([x[:cut] for x in data])
-        except (ValueError, MemoryError) as error:
+        except Exception as error:
             failures.append((seed, index, label, f"the shorter series raises: {error}"))
             continue
         compared += 1

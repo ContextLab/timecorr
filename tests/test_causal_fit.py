@@ -1581,3 +1581,76 @@ def test_fastica_gets_no_more_components_than_the_rank_of_its_rows():
         assert 1 <= used.size <= 4 and np.isfinite(w[2:]).all()
     part = _quiet(tc.timecorr, [x[:9] for x in data], **kw)
     assert all(np.array_equal(w[:9], p, equal_nan=True) for w, p in zip(whole, part))
+
+
+# ----------------------------------------------------------------------------
+# fourth review: the identity with few training rows, explicit n_components
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("model", GUARANTEED_MODELS)
+def test_a_model_asked_for_every_column_changes_nothing_with_few_training_rows(model):
+    # the reviewer's input: 4 defined training rows, 10 columns, ndims 10.
+    # The components were capped by the rows before the request was
+    # compared with the columns, so a model was fitted (FastICA differed
+    # from the correlations by 31.9, PCA by 2.63)
+    x = np.random.default_rng(0).normal(size=(31, 4))
+    kw = dict(order=1, causal=True, cfun=tc.autofc, delta_rfun=None,
+              weights_params={"var": 9}, delta_weights_params={"var": 9})
+    plain = _quiet(tc.features, x, rfun=None, **kw)[1]
+    for ndims in (10, 13):
+        out, fitted = _quiet(tc.features, x, rfun=model, ndims=ndims, fit_timepoints=6,
+                             return_model=True, **kw)
+        assert out[1].shape == (31, ndims)
+        assert np.array_equal(out[1][:, :10], plain, equal_nan=True)
+        assert (out[1][2:, 10:] == 0).all()
+        again = _quiet(fitted.transform, x[:20])
+        assert np.array_equal(again[1], out[1][:20], equal_nan=True)
+    # with refits
+    out = _quiet(tc.features, x, rfun=model, ndims=10, fit_timepoints=6, refit_every=8,
+                 **kw)
+    assert np.array_equal(out[1], plain, equal_nan=True)
+
+
+@pytest.mark.parametrize("model", GUARANTEED_MODELS)
+def test_an_explicit_number_of_components_is_capped_like_ndims(model):
+    # the reviewer's input: FastICA with n_components=4 in kwargs was fitted
+    # with 4 components on 4 training rows (rank 3) and did not reproduce
+    # them; the name alone, capped at the rank, ran
+    import sklearn.decomposition
+
+    x = np.random.default_rng(0).normal(size=(31, 4))
+    kw = dict(causal=True, cfun=tc.autofc, fit_timepoints=6, weights_params={"var": 9})
+    cls = getattr(sklearn.decomposition, model)
+
+    def instance(n):
+        # (an object without random_state is not the same model twice)
+        seeded = "random_state" in inspect.signature(cls).parameters
+        return cls(n_components=n, **({"random_state": 0} if seeded else {}))
+
+    named = _quiet(tc.timecorr, x, rfun=model, **kw)
+    assert named.shape == (31, 4) and np.isfinite(named[2:]).all()
+    forms = [{"model": model, "kwargs": {"n_components": 4}},
+             {"model": cls, "kwargs": {"n_components": 4}},
+             {"model": model, "params": {"n_components": 4}},
+             {"model": instance(4)}]
+    for rfun in forms:
+        out = _quiet(tc.timecorr, x, rfun=rfun, **kw)
+        assert out.shape == (31, 4) and np.isfinite(out[2:]).all(), rfun
+        assert np.array_equal(np.ptp(out[2:], axis=0) > 0, np.ptp(named[2:], axis=0) > 0)
+        assert np.array_equal(out[:20], _quiet(tc.timecorr, x[:20], rfun=rfun, **kw),
+                              equal_nan=True)
+    # more components than the 4 training rows give, fewer than the 10
+    # columns: as many as the rows give, and zero columns
+    for rfun in ({"model": model, "kwargs": {"n_components": 7}},
+                 {"model": instance(7)}):
+        out = _quiet(tc.timecorr, x, rfun=rfun, **kw)
+        assert out.shape == (31, 7) and np.isfinite(out[2:]).all(), rfun
+        assert (out[2:, 4:] == 0).all()
+    # at least as many as the columns: the correlations as they are
+    plain = _quiet(tc.timecorr, x, **{**kw, "fit_timepoints": None})
+    for rfun in ({"model": model, "kwargs": {"n_components": 30}},
+                 {"model": instance(30)},
+                 {"model": cls, "kwargs": {"n_components": 10}}):
+        out = _quiet(tc.timecorr, x, rfun=rfun, **kw)
+        assert np.array_equal(out, plain, equal_nan=True), rfun

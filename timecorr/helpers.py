@@ -3883,6 +3883,81 @@ def _varying_first(arrays, rfun):
     return np.concatenate([np.flatnonzero(~constant), np.flatnonzero(constant)]), varying
 
 
+def _explicit_components(rfun):
+    """``n_components`` given with a model reducer itself (in ``kwargs`` of
+    a model dict, or as the attribute of a model object), which hypertools
+    uses in place of ``ndims``; None when there is none."""
+    if not isinstance(rfun, dict):
+        return None
+    asked = (rfun.get("kwargs") or {}).get("n_components")
+    given = rfun.get("model")
+    if asked is None and not isinstance(given, (str, type)):
+        asked = getattr(given, "n_components", None)
+    return asked if isinstance(asked, numbers.Integral) else None
+
+
+def _with_components(rfun, n):
+    """``rfun`` with its own ``n_components`` (``_explicit_components``)
+    set to ``n``."""
+    given = rfun.get("model")
+    if "n_components" in (rfun.get("kwargs") or {}):
+        return {**rfun, "kwargs": {**rfun["kwargs"], "n_components": n}}
+    from sklearn.base import clone
+
+    return {**rfun, "model": clone(given).set_params(n_components=n)}
+
+
+def _causal_components(arrays, rfun, ndims, n_features, n_samples):
+    """
+    The components of a causal model fit: ``(rfun, ndims, n_fit, order,
+    rank_capped)``.
+
+    The number asked for is ``n_components`` given with the model itself
+    (``_explicit_components``), otherwise ``ndims``.  Asked for at least as
+    many components as there are columns, no model is fitted, whatever the
+    number of rows: hypertools returns the columns as they are (``n_fit``
+    is the number of columns).  Otherwise the model is fitted with as many
+    components as asked, at most the number of rows, and for FastICA at
+    most the rank of the centered rows, with its columns in the order
+    ``order`` (``_varying_first``); a larger ``n_components`` given with
+    the model is replaced, and ``ndims`` is the number asked for, so that
+    ``reduce`` appends zero columns for the components the rows do not
+    give.
+    """
+    explicit = _explicit_components(rfun)
+    asked = ndims if explicit is None else int(explicit)
+    if asked >= n_features:
+        return rfun, ndims, min(ndims, n_features), None, False
+    n_fit = min(asked, n_samples)
+    order, varying = _varying_first(arrays, rfun)
+    rank_capped = False
+    if varying is not None:
+        if not varying:
+            raise _FitUnusable(
+                "FastICA cannot be fitted: no column of its input varies over "
+                f"the {n_samples} rows it is fitted on ({n_features} "
+                "column" + ("s" if n_features != 1 else "") + ", constant: the "
+                "diagonal of the correlations of the features of the order "
+                "before).  Use another model (for example 'PCA') or more "
+                "features at that order."
+            )
+        # no more components than the rank of the centered rows: FastICA
+        # divides by their singular values
+        stacked = np.vstack(arrays)
+        rank = max(1, int(np.linalg.matrix_rank(stacked - stacked.mean(axis=0))))
+        rank_capped = rank < n_fit
+        n_fit = min(n_fit, rank)
+    if explicit is not None:
+        if explicit > n_fit:
+            rfun = _with_components(rfun, n_fit)
+        ndims = asked
+    elif varying is not None and isinstance(rfun, dict) and not isinstance(
+            rfun.get("model"), (str, type)):
+        # a FastICA object without n_components would take every column
+        rfun = _with_components(rfun, n_fit)
+    return rfun, ndims, n_fit, order, rank_capped
+
+
 def _model_reduce(corrs, rfun, ndims, return_model=False):
     """
     The model-based reduction of ``reduce`` (``rfun`` a model name or dict,
@@ -3899,35 +3974,6 @@ def _model_reduce(corrs, rfun, ndims, return_model=False):
     # a model cannot return more components than there are features or samples
     n_samples = sum(a.shape[0] for a in arrays)
     n_fit = min(ndims, n_features, n_samples)
-    order, varying = (None, None)
-    # (a model asked for at least as many components as columns is not
-    # fitted: hypertools returns the columns as they are)
-    if return_model and n_fit < n_features:
-        order, varying = _varying_first(arrays, rfun)
-        if varying is not None:
-            if not varying:
-                raise _FitUnusable(
-                    "FastICA cannot be fitted: no column of its input varies over "
-                    f"the {n_samples} rows it is fitted on ({n_features} "
-                    "column" + ("s" if n_features != 1 else "") + ", constant: the "
-                    "diagonal of the correlations of the features of the order "
-                    "before).  Use another model (for example 'PCA') or more "
-                    "features at that order."
-                )
-            # no more components than the rank of the centered rows:
-            # FastICA divides by their singular values
-            stacked = np.vstack(arrays)
-            rank = int(np.linalg.matrix_rank(stacked - stacked.mean(axis=0)))
-            n_fit = min(n_fit, max(1, rank))
-            given = rfun.get("model") if isinstance(rfun, dict) else None
-            asked = getattr(given, "n_components", None)
-            if given is not None and not isinstance(given, (str, type)) and (
-                    asked is None or asked > n_fit):
-                # an object keeps its own n_components (None: every column)
-                from sklearn.base import clone
-
-                rfun = {**rfun, "model": clone(given).set_params(n_components=n_fit)}
-
     if isinstance(rfun, dict) and "params" in rfun:
         # hypertools deprecated 'params' in favor of 'kwargs': merge both
         params = dict(rfun["params"] or {})
@@ -3948,7 +3994,10 @@ def _model_reduce(corrs, rfun, ndims, return_model=False):
 
     rfun = _umap_defaults(rfun)
     model = None
+    order = None
     if return_model:
+        rfun, ndims, n_fit, order, rank_capped = _causal_components(
+            arrays, rfun, ndims, n_features, n_samples)
         if order is not None:
             permuted = [a[:, order] for a in arrays]
             corrs = permuted if isinstance(corrs, list) else permuted[0]
@@ -3967,7 +4016,7 @@ def _model_reduce(corrs, rfun, ndims, return_model=False):
             f"reduce: the data supply at most {n_fit} components ({n_features} "
             f"features, {n_samples} samples"
             + (", FastICA: no more than the rank of the centered samples"
-               if varying is not None else "")
+               if return_model and rank_capped else "")
             + f") but {ndims} were requested; the "
             f"output is padded with {pad} zero column{'s' if pad > 1 else ''}."
         )

@@ -146,6 +146,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     without `components_`, or that fails a check, raises `ValueError`
     (`"UMAP"`, `"KernelPCA"`, `"Isomap"`, `"MDS"`, `"TSNE"`,
     `"SpectralEmbedding"`, `"LocallyLinearEmbedding"`).
+  - A model asked for at least as many components as its input has columns
+    is not fitted and returns the columns as they are, whatever the number
+    of training rows (the number asked for is `n_components` given with the
+    model, in its `kwargs` or of a model object, otherwise `ndims`). Asked
+    for fewer components than columns but more than there are defined
+    training rows, it is fitted with as many components as those rows (an
+    `n_components` given with the model is replaced), and zero columns are
+    appended for the others, with the warning of `reduce`.
   - `"FastICA"` (the name, or a model dict with the name, scikit-learn's
     class or an object of it), when it is asked for fewer components than
     it has columns (with at least as many, the columns are returned as they

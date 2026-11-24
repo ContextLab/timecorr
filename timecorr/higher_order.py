@@ -1931,7 +1931,13 @@ def two_path_step(
         the rows it is given together).
         A model asked for as many components as its input
         has columns, or more, changes nothing (zero columns are appended
-        for the components beyond them), as without ``causal``.
+        for the components beyond them), whatever the number of training
+        rows; the number asked for is ``n_components`` given with the
+        model (in its ``kwargs``, or of a model object), otherwise 
+        ``ndims``.  Asked for fewer components than columns
+        but more than there are defined training rows, a model is fitted
+        with as many components as those rows, and zero columns are
+        appended for the others, with a warning.
         ``"FastICA"`` (when it is fitted: asked for fewer components than
         columns) is given the columns that vary over the training rows
         first and is asked for no more components than the rank of the
@@ -3092,7 +3098,13 @@ def features(
         the rows it is given together).
         A model asked for as many components as its input
         has columns, or more, changes nothing (zero columns are appended
-        for the components beyond them), as without ``causal``.
+        for the components beyond them), whatever the number of training
+        rows; the number asked for is ``n_components`` given with the
+        model (in its ``kwargs``, or of a model object), otherwise 
+        ``ndims``.  Asked for fewer components than columns
+        but more than there are defined training rows, a model is fitted
+        with as many components as those rows, and zero columns are
+        appended for the others, with a warning.
         ``"FastICA"`` (when it is fitted: asked for fewer components than
         columns) is given the columns that vary over the training rows
         first and is asked for no more components than the rank of the

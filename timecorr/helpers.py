@@ -3838,6 +3838,18 @@ def _pagerank_solve(B, b):
     return r
 
 
+def _is_fastica(rfun):
+    """Whether a model reducer is FastICA: the name, or a dict whose
+    ``"model"`` is the name, scikit-learn's class or an object of exactly
+    that class (the forms ``reduce`` accepts)."""
+    model = rfun.get("model") if isinstance(rfun, dict) else rfun
+    if isinstance(model, str):
+        return model == "FastICA"
+    from sklearn.decomposition import FastICA
+
+    return model is FastICA or type(model) is FastICA
+
+
 def _varying_first(arrays, rfun):
     """
     For a ``"FastICA"`` fit: ``(order, varying)``, the number of columns
@@ -3857,8 +3869,7 @@ def _varying_first(arrays, rfun):
     than columns vary (a component beyond them is round-off divided by
     round-off, or NaN).
     """
-    name = rfun.get("model") if isinstance(rfun, dict) else rfun
-    if name != "FastICA":
+    if not _is_fastica(rfun):
         return None, None
     stacked = np.vstack(arrays)
     if not stacked.shape[0]:
@@ -3887,7 +3898,9 @@ def _model_reduce(corrs, rfun, ndims, return_model=False):
     n_samples = sum(a.shape[0] for a in arrays)
     n_fit = min(ndims, n_features, n_samples)
     order, varying = (None, None)
-    if return_model:
+    # (a model asked for at least as many components as columns is not
+    # fitted: hypertools returns the columns as they are)
+    if return_model and n_fit < n_features:
         order, varying = _varying_first(arrays, rfun)
         if varying is not None:
             if not varying:
@@ -3901,6 +3914,14 @@ def _model_reduce(corrs, rfun, ndims, return_model=False):
                 )
             # no more components than columns that vary (the others add none)
             n_fit = min(n_fit, varying)
+            given = rfun.get("model") if isinstance(rfun, dict) else None
+            asked = getattr(given, "n_components", None)
+            if given is not None and not isinstance(given, (str, type)) and (
+                    asked is None or asked > n_fit):
+                # an object keeps its own n_components (None: every column)
+                from sklearn.base import clone
+
+                rfun = {**rfun, "model": clone(given).set_params(n_components=n_fit)}
 
     if isinstance(rfun, dict) and "params" in rfun:
         # hypertools deprecated 'params' in favor of 'kwargs': merge both

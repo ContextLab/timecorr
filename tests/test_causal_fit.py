@@ -1460,11 +1460,8 @@ def test_fastica_is_fitted_with_a_varying_first_column():
             kw = dict(order=2, causal=True, cfun=tc.autofc, rfun="FastICA",
                       delta_rfun="FastICA", ndims=ndims, fit_timepoints=80,
                       return_delta=True, **kernels)
-            if ndims == 1:
-                # order 2 has one feature: its correlations are its diagonal
-                with pytest.raises(ValueError, match="no column of its input varies"):
-                    _quiet(tc.features, x, **kw)
-                kw["order"] = 1
+            # (ndims 1: order 2 has one feature, whose correlations are one
+            # constant column, returned as it is)
             (X, D), model = _quiet(tc.features, x, return_model=True, **kw)
             for out in X[1:] + D[1:]:
                 assert out.shape == (120, ndims)
@@ -1490,3 +1487,54 @@ def test_fastica_is_fitted_with_a_varying_first_column():
     assert _quiet(_model_reduce, [rows], "PCA", 1, return_model=True)[1].order is None
     assert _quiet(_model_reduce, [rows[:, ::-1][:, [1, 0, 2]]], "FastICA", 1,
                   return_model=True)[1].order is None
+
+
+def test_fastica_asked_for_every_column_changes_nothing():
+    # review: a model asked for at least as many components as columns
+    # returns the columns as they are; the FastICA handling of constant
+    # columns came before that and fitted one component with zero columns
+    from timecorr.helpers import _model_reduce
+
+    rows = np.column_stack([np.ones(40), np.random.default_rng(2).normal(size=40),
+                            np.ones(40)])
+    reduced, fitted = _quiet(_model_reduce, [rows], "FastICA", 3, return_model=True)
+    assert fitted.model is None and fitted.order is None and fitted.pad == 0
+    assert np.array_equal(reduced[0], rows)
+    for K in (1, 2):
+        x = np.random.default_rng(K).standard_normal((120, K))
+        kw = dict(order=1, causal=True, cfun=tc.autofc, delta_rfun=None,
+                  weights_params={"var": 25}, delta_weights_params={"var": 16})
+        plain = _quiet(tc.features, x, rfun=None, **kw)[1]
+        for ndims in (3, 5):
+            out = _quiet(tc.features, x, rfun="FastICA", ndims=ndims, fit_timepoints=80,
+                         **kw)[1]
+            assert out.shape == (120, ndims)
+            assert np.array_equal(out[:, :plain.shape[1]], plain, equal_nan=True)
+            defined = ~np.isnan(plain).any(axis=1)
+            assert (out[defined][:, plain.shape[1]:] == 0).all()
+
+
+def test_fastica_given_as_a_class_or_an_object_is_fastica():
+    # review: only the name was recognized; the class still raised "array
+    # must not contain infs or NaNs"
+    from sklearn.decomposition import FastICA
+
+    x = np.random.default_rng(0).normal(size=(120, 2))
+    kw = dict(causal=True, cfun=tc.autofc, weights_params={"var": 25}, fit_timepoints=80)
+    named = _quiet(tc.timecorr, x, rfun="FastICA", **kw)
+    assert named.shape == (120, 2) and np.isfinite(named[10:]).all()
+    forms = [{"model": FastICA}, {"model": "FastICA"}, {"model": "FastICA", "kwargs": {}},
+             {"model": FastICA, "kwargs": {"max_iter": 300}},
+             {"model": FastICA(random_state=0)}]
+    for rfun in forms:
+        out = _quiet(tc.timecorr, x, rfun=rfun, **kw)
+        assert np.isfinite(out[10:]).all(), rfun
+        assert np.allclose(np.abs(out[10:]), np.abs(named[10:]), rtol=0, atol=1e-6), rfun
+
+
+def test_fastica_without_a_varying_column_says_so():
+    from timecorr.helpers import _model_reduce
+
+    rows = np.ones((40, 3))
+    with pytest.raises(ValueError, match="no column of its input varies"):
+        _quiet(_model_reduce, [rows], "FastICA", 2, return_model=True)

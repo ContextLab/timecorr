@@ -146,7 +146,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     without `components_`, or that fails a check, raises `ValueError`
     (`"UMAP"`, `"KernelPCA"`, `"Isomap"`, `"MDS"`, `"TSNE"`,
     `"SpectralEmbedding"`, `"LocallyLinearEmbedding"`).
-  - `"FastICA"` is given the columns that vary over the training rows first
+  - `"FastICA"` (the name, or a model dict with the name, scikit-learn's
+    class or an object of it), when it is asked for fewer components than
+    it has columns (with at least as many, the columns are returned as they
+    are, as for every model), is given the columns that vary over the
+    training rows first
     and is asked for no more components than there are such columns (zero
     columns are appended for the others, with the warning of `reduce`;
     `ValueError` when no column varies). scikit-learn's FastICA sets the

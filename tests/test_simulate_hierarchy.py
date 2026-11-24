@@ -366,3 +366,92 @@ def test_shared_signs_change_the_private_draws_at_the_same_seed(shared):
         np.testing.assert_array_equal(truth_p["top"], truth_s["top"])
     assert not np.array_equal(truth_p["signals"][0][0], truth_s["signals"][0][0])
     assert not np.array_equal(data_p[0], data_s[0])
+
+
+# --- factors: module series shared across subjects ---------------------------
+
+@pytest.mark.parametrize("shared", ["top", "all", "none"])
+def test_private_factors_are_the_default_call(shared):
+    # that the default output is the one of earlier versions is pinned by
+    # test_private_signs_are_the_previous_output (stored values)
+    data, truth = small(S=3, shared=shared)
+    data_p, truth_p = small(S=3, shared=shared, factors="private")
+    for x, y in zip(data, data_p):
+        assert np.array_equal(x, y)
+    n_modules = truth["signals"][0][0].shape[1]
+    assert len(truth["factors"]) == 3
+    for f in truth["factors"]:
+        assert f.shape == (400, n_modules)
+    # private: the subjects' module series differ
+    assert not np.array_equal(truth["factors"][0], truth["factors"][1])
+
+
+@pytest.mark.parametrize("shared", ["top", "all", "none"])
+@pytest.mark.parametrize("signs", ["private", "shared"])
+def test_shared_factors_are_equal_copies(shared, signs):
+    data, truth = small(S=3, shared=shared, signs=signs, factors="shared")
+    f = truth["factors"]
+    for other in f[1:]:
+        np.testing.assert_array_equal(other, f[0])
+        assert other is not f[0]
+    # the subjects' data still differ (z is private)
+    assert not np.array_equal(data[0], data[1])
+    # a copy: changing one subject's series leaves the others unchanged
+    before = f[1].copy()
+    f[0][:] = 0.0
+    np.testing.assert_array_equal(f[1], before)
+    # the signals are those of the "private" call at the same seed when
+    # they are drawn before the shared series
+    if shared == "all":
+        _, private = small(S=3, shared=shared, signs=signs)
+        for x, y in zip(truth["signals"][0], private["signals"][0]):
+            np.testing.assert_array_equal(x, y)
+
+
+def _across_subject_correlations(factors):
+    """Correlations between the nodes of subjects 0 and 1, times the sign
+    product, and the module mean of g, for a long series with every signal
+    and sign shared (so sqrt(g_a g_b) is g)."""
+    data, truth = small(S=2, T=20000, shared="all", signs="shared",
+                        factors=factors)
+    module = truth["groups"][0]
+    e = truth["signs"][0]
+    K = len(module)
+    r = np.corrcoef(data[0].T, data[1].T)[:K, K:] * np.outer(e, e)
+    same = module[:, None] == module[None, :]
+    expected = np.where(same, truth["signals"][0][0].mean(axis=0)[module][:, None], 0.0)
+    return r, expected, same
+
+
+def test_shared_factors_correlate_modules_across_subjects():
+    # measured at seeds 0 to 3: largest deviation 0.017 within modules and
+    # 0.032 between modules (sampling error at T = 20000)
+    r, expected, same = _across_subject_correlations("shared")
+    assert np.abs(r - expected).max() < 0.05
+    assert r[same].mean() > 0.4
+
+
+def test_private_factors_share_no_series():
+    r, _, same = _across_subject_correlations("private")
+    assert np.abs(r).max() < 0.05
+
+
+def test_data_are_the_documented_mixture_of_the_returned_factors():
+    # x = sqrt(g) e f + sqrt(1 - g) z: what is left after removing the
+    # factor term is sqrt(1 - g) z, uncorrelated with f and of variance 1 - g
+    data, truth = small(S=2, T=20000, factors="shared")
+    module = truth["groups"][0]
+    for x, signals, e, f in zip(data, truth["signals"], truth["signs"],
+                                truth["factors"]):
+        g = signals[0][:, module]
+        rest = x - np.sqrt(g) * e * f[:, module]
+        np.testing.assert_allclose(rest.var(axis=0), (1 - g).mean(axis=0),
+                                   rtol=0.06)
+        r = [np.corrcoef(rest[:, k], f[:, module[k]])[0, 1]
+             for k in range(x.shape[1])]
+        assert np.abs(r).max() < 0.03
+
+
+def test_factors_validation():
+    with pytest.raises(ValueError, match="factors must be 'private' or 'shared'"):
+        small(factors="all")

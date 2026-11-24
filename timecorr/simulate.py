@@ -1243,6 +1243,7 @@ def simulate_hierarchy(
     shared="top",
     set_random_seed=None,
     signs="private",
+    factors="private",
 ):
     """
     Simulate nodes in nested groups of any depth with time-varying coupling.
@@ -1264,7 +1265,9 @@ def simulate_hierarchy(
     - ``x_i(t) = sqrt(g) e_i f_m(t) + sqrt(1 - g) z_i(t)`` for node ``i`` in
       module ``m``, with ``g = s_{1,m}(t)``, ``f`` and ``z`` white standard
       normal noise and ``e_i`` a fixed random sign per node (drawn per
-      subject, or once for every subject with ``signs="shared"``).
+      subject, or once for every subject with ``signs="shared"``).  ``f``
+      (one series per module) is drawn per subject, or once for every
+      subject with ``factors="shared"``; ``z`` is always private.
 
     Siblings at level ``l`` share ``u`` of their parent with weight
     ``sqrt(s_{l+1})``, so their latent series ``a`` are correlated by about
@@ -1314,6 +1317,19 @@ def simulate_hierarchy(
         from the ``"private"`` output: only the shared signals are the
         same, and the two settings are not paired draws of the subjects'
         series.  Default: ``"private"``.
+    factors : {"private", "shared"}
+        ``"private"``: each subject draws its own module series ``f``, so
+        no time series is shared between subjects (the output is the same
+        as without this option).  ``"shared"``: one set of module series,
+        drawn after the shared signals and signs and before the subjects'
+        series, is used by every subject, so nodes of one module are
+        correlated across subjects: for node ``i`` of subject ``a`` and
+        node ``j`` of subject ``b`` in module ``m``, the correlation at
+        time ``t`` is ``e_i e_j sqrt(g_a(t) g_b(t))``, with ``g`` each
+        subject's ``s_{1,m}`` and ``e`` each subject's signs (use
+        ``signs="shared"`` for the same sign in every subject).  As for
+        ``signs``, every draw after the shared series differs from the
+        ``"private"`` output at the same seed.  Default: ``"private"``.
 
     Returns
     -------
@@ -1327,7 +1343,10 @@ def simulate_hierarchy(
         groups)``.  ``"top"``: ``s_n`` of subject 0 (shared by every subject
         unless ``shared="none"``).  ``"signs"``: ``(S, K)`` array; row
         ``s`` holds the node signs ``e`` of subject ``s`` (equal rows with
-        ``signs="shared"``).  Every array is a separate copy, so
+        ``signs="shared"``).  ``"factors"``: a list over subjects of
+        ``(T, number of modules)`` arrays, the module series ``f`` of each
+        subject (equal arrays with ``factors="shared"``).  Every array is a
+        separate copy, so
         changing one subject's signals (or ``"top"``) leaves the others
         unchanged.  ``"taus"`` and ``"branching"``: tuples.
 
@@ -1337,7 +1356,7 @@ def simulate_hierarchy(
         For a size that is not a positive integer, ``taus`` or
         ``branching`` that is not a sequence of positive integers, an empty
         ``taus``, ``len(branching) != len(taus) - 1``, ``T < 8 * max(taus)``,
-        or an unknown ``shared`` or ``signs``.
+        or an unknown ``shared``, ``signs`` or ``factors``.
     TypeError
         For a ``set_random_seed`` that is not None, a bool or an integer.
 
@@ -1377,6 +1396,10 @@ def simulate_hierarchy(
         raise ValueError(f"shared must be 'top', 'all' or 'none'; got {shared!r}.")
     if signs not in ("private", "shared"):
         raise ValueError(f"signs must be 'private' or 'shared'; got {signs!r}.")
+    if factors not in ("private", "shared"):
+        raise ValueError(
+            f"factors must be 'private' or 'shared'; got {factors!r}."
+        )
     rng = _make_rng(set_random_seed)
 
     counts = [n_top]  # counts[l-1]: number of level-l groups
@@ -1395,8 +1418,10 @@ def simulate_hierarchy(
         top = _hierarchy_signals(rng, T, counts[n - 1:], (), taus[n - 1:])[0]
     if signs == "shared":
         common_signs = rng.choice([-1.0, 1.0], K)
+    if factors == "shared":
+        common_f = rng.standard_normal((T, counts[0]))
 
-    data, signals, node_signs = [], [], []
+    data, signals, node_signs, series = [], [], [], []
     for _ in range(S):
         if shared == "all":
             s = [x.copy() for x in common]
@@ -1407,11 +1432,15 @@ def simulate_hierarchy(
             )
         g = s[0][:, module]
         e = rng.choice([-1.0, 1.0], K) if signs == "private" else common_signs
-        f = rng.standard_normal((T, counts[0]))[:, module]
+        if factors == "private":
+            f = rng.standard_normal((T, counts[0]))
+        else:
+            f = common_f.copy()
         z = rng.standard_normal((T, K))
-        data.append(np.sqrt(g) * e * f + np.sqrt(1 - g) * z)
+        data.append(np.sqrt(g) * e * f[:, module] + np.sqrt(1 - g) * z)
         signals.append(s)
         node_signs.append(e.copy())
+        series.append(f)
     truth = {
         "groups": groups,
         "signals": signals,
@@ -1419,5 +1448,6 @@ def simulate_hierarchy(
         "taus": taus,
         "branching": branching,
         "signs": np.array(node_signs),
+        "factors": series,
     }
     return data, truth

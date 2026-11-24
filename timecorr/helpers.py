@@ -2589,7 +2589,7 @@ def wcorr(a, b, weights, *, causal=False, min_samples=None):
     therefore differ from 0.2.0.
 
     With ``causal=True`` nothing computed for timepoint ``t`` reads a sample
-    after ``t``: the correlations at ``t`` are unchanged (to 1e-9) when the
+    after ``t``: the correlations at ``t`` are unchanged when the
     samples after ``t`` are replaced by any values, NaN and inf included, or
     removed (and, when the kernel gives ``t`` itself no weight, when the
     samples at ``t`` change).  Replacing later samples changes no bit of
@@ -2795,6 +2795,100 @@ def _nan_weighted_mean(x, weights, tol=1e-5):
     return out
 
 
+def _node_weighted_mean(x, weights, tol=1e-5):
+    """
+    ``(mean, empty)``: the weighted mean over the last axis of x (T, K, S)
+    with one weight per subject and node (``weights``: (S, K)), ignoring NaN
+    entries, and the mask (K,) of the nodes where no subject has weight.
+
+    As ``_nan_weighted_mean`` node by node (NaN weights are 0, magnitudes at
+    most ``tol`` are dropped, entries with no observed, weighted value are
+    NaN), except that weights that sum to 0 are not replaced by ones: a node
+    without any weight has no reference (the subjects left out there would
+    come back), and its column is 0, a constant, which the estimator
+    correlates with nothing (see ``_no_reference_entries``).
+
+    Each entry is a sum over the subjects of that timepoint and node alone,
+    so a row does not depend on the other rows (causal mode).
+    """
+    w = np.array(weights, dtype=np.float64, copy=True)
+    w[np.isnan(w)] = 0
+    w[np.abs(w) <= tol] = 0
+    empty = ~np.any(w != 0, axis=0)
+    valid = ~np.isnan(x)
+    num = (np.where(valid, x, 0.0) * w.T[None]).sum(axis=2)
+    den = (valid * w.T[None]).sum(axis=2)
+    out = np.full(num.shape, np.nan)
+    np.divide(num, den, out=out, where=den != 0)
+    out[:, empty] = 0.0
+    return out, empty
+
+
+def _subject_reference(stacked, weights):
+    """
+    ``(reference, empty)`` of one subject: the series (T, K) it is
+    correlated with, from the subjects' data ``stacked`` (T, K, S) and its
+    row of the subject weights: (S,), one weight per subject
+    (``_nan_weighted_mean``; ``empty`` is None), or (S, K), one per subject
+    and node (``_node_weighted_mean``; ``empty`` marks the nodes without
+    reference, None when there is none).
+    """
+    if np.ndim(weights) == 1:
+        return _nan_weighted_mean(stacked, weights), None
+    reference, empty = _node_weighted_mean(stacked, weights)
+    return reference, (empty if empty.any() else None)
+
+
+def _no_reference_entries(R, Rt, empty, i0=0):
+    """
+    The entries of the nodes without reference (``empty``, (K,)), set in
+    place before the symmetrization: ``R`` holds rows ``i0:i0 + len(R)`` of
+    ``C`` (subject versus reference, (rows, K, T)) and ``Rt`` the same rows
+    of ``C.T`` (reference versus subject).
+
+    For a node ``k`` without reference, ``C[i, k]`` is not defined and
+    ``C[k, i]`` (the subject's node ``k`` against the reference of node
+    ``i``) is: both orientations get that value, so their Fisher z average
+    is it.  The entries between two such nodes, the diagonal included, are
+    undefined: 0.
+    """
+    rows = empty[i0:i0 + R.shape[0]]
+    R[:, empty] = Rt[:, empty]
+    Rt[rows] = R[rows]
+    R[np.ix_(rows, empty)] = 0
+    Rt[np.ix_(rows, empty)] = 0
+
+
+def _no_reference_message(weights, tol=1e-5):
+    """
+    The warning for (S, S, K) subject weights that leave nodes of subjects
+    without reference, or None: 2-D weights, or every node has one.
+    """
+    w = np.asarray(weights)
+    if w.ndim != 3:
+        return None
+    w = np.where(np.isnan(w), 0.0, w)
+    empty = ~np.any(np.abs(w) > tol, axis=1)  # (S, K)
+    if not empty.any():
+        return None
+    subjects = np.flatnonzero(empty.any(axis=1))
+    return (
+        f"{int(empty.sum())} of {empty.size} (subject, node) pairs have no "
+        "reference (subject_weights gives no other subject weight there; "
+        f"subjects {_index_list(subjects)}).  For such a node of a subject, "
+        "the diagonal entry and the entries with other such nodes are "
+        "undefined and set to 0; its entries with the other nodes are the "
+        "correlations of the subject's series at the node with the "
+        "references of those nodes."
+    )
+
+
+def _index_list(indices, limit=10):
+    """Indices as text, at most ``limit`` of them."""
+    shown = ", ".join(str(int(i)) for i in indices[:limit])
+    return shown + (", ..." if len(indices) > limit else "")
+
+
 def _fisher_step(K):
     """Timepoints per block of ``_fisher_symmetrize`` for K features."""
     # _fisher_mean makes about ten temporaries of its input's size (which is
@@ -2920,7 +3014,19 @@ def wisfc(data, timepoint_weights, subject_weights=None, *, causal=False,
     subject_weights : numpy.ndarray, scalar, or None, optional
         Number-of-subjects by number-of-subjects matrix; row ``s`` weights the
         subjects averaged for subject ``s``.  A scalar gives every other
-        subject that weight.  Default (None): each pair of subjects is weighted
+        subject that weight.  An array of shape (subjects, subjects,
+        features) gives weights per feature (node): ``subject_weights[s, r,
+        k]`` is the weight of subject ``r`` in the reference of subject
+        ``s`` at feature ``k`` (see ``distinct_subject_weights``, which
+        builds the weights that leave out subjects holding the same
+        series; weights at most 1e-5 in magnitude are 0, as for a matrix).
+        A feature ``k`` of subject ``s`` where no subject has weight has no
+        reference: ``C[i, k]`` (feature ``i`` against that reference) is
+        not defined, so the symmetrized entry is ``C[k, i]`` (the subject's
+        feature ``k`` against the reference of feature ``i``) alone, and
+        the diagonal entry and the entries between two such features are
+        0; one ``UserWarning`` counts these (subject, feature) pairs.
+        Default (None): each pair of subjects is weighted
         by the correlation between their static correlation matrices, with
         zero weight on the subject itself.  Where that correlation is not
         defined (``K <= 2`` features give fewer than 3 matrix entries) or is
@@ -2928,8 +3034,10 @@ def wisfc(data, timepoint_weights, subject_weights=None, *, causal=False,
         are weighted equally.
     causal : bool, optional
         True: the causal estimator (see ``wcorr``): row ``t`` of the output
-        is unchanged (to 1e-9) when the samples after ``t`` are replaced by
-        any values, NaN and inf included, or removed.  Every kernel must
+        is unchanged when the samples after ``t`` are replaced by any
+        values, NaN and inf included (bit for bit), or removed (bit for bit
+        with the built-in kernel functions, to 1e-9 with other kernel
+        arrays; see ``wcorr``).  Every kernel must
         give no weight to later timepoints (for example a kernel function
         called with ``direction='backward'``); infinite samples and samples
         above 1e150 in magnitude are missing data; undefined (warm-up)
@@ -3036,7 +3144,7 @@ def wisfc(data, timepoint_weights, subject_weights=None, *, causal=False,
     warmup = [False] * len(kernels) if causal else None
     for s, a in enumerate(data):
         g = group_of[s]
-        b = _nan_weighted_mean(stacked, subject_weights[s, :])
+        b, empty = _subject_reference(stacked, subject_weights[s])
         if causal:
             # whether the reference is the subject's own data is read from
             # the weights; comparing the samples would read every timepoint
@@ -3053,6 +3161,8 @@ def wisfc(data, timepoint_weights, subject_weights=None, *, causal=False,
         cancelled[g] = cancelled[g] | c
         sparse[g] = sparse[g] | few
         if symmetrize:
+            if empty is not None:
+                _no_reference_entries(wc, wc.transpose(1, 0, 2).copy(), empty)
             wc = _fisher_symmetrize(wc)
         corrs.append(mat2vec(wc))
         if causal:
@@ -3066,6 +3176,9 @@ def wisfc(data, timepoint_weights, subject_weights=None, *, causal=False,
                                min_samples)
     if message is not None:
         _warn_user(message)
+    message = _no_reference_message(subject_weights)
+    if message is not None:
+        _warn_user(message)
     return corrs
 
 
@@ -3074,10 +3187,14 @@ def _own_reference(weights, s, tol=1e-5):
     True when ``_nan_weighted_mean`` with these subject weights returns
     subject ``s``'s own data: after its rules (NaN weights 0, weights that
     sum to 0 replaced by ones, magnitudes at most ``tol`` dropped) only
-    subject ``s`` has weight.
+    subject ``s`` has weight.  For weights per node ((S, K),
+    ``_node_weighted_mean``): at every node only subject ``s`` has weight.
     """
     w = np.array(weights, dtype=np.float64, copy=True)
     w[np.isnan(w)] = 0
+    if w.ndim == 2:
+        keep = np.abs(w) > tol
+        return bool(keep[s].all() and (keep.sum(axis=0) == 1).all())
     if np.sum(w) == 0:
         w = np.ones_like(w)
     keep = np.abs(w) > tol
@@ -3144,8 +3261,98 @@ def _subject_weight_matrix(data, subject_weights, rows_per_block=None):
     elif np.isscalar(subject_weights):
         subject_weights = subject_weights * np.ones([S, S])
         np.fill_diagonal(subject_weights, 0)
+    elif np.ndim(subject_weights) >= 3:
+        K = data[0].shape[1]
+        if np.shape(subject_weights) != (S, S, K):
+            raise ValueError(
+                "subject_weights with more than 2 dimensions must have shape "
+                f"(subjects, subjects, features) = ({S}, {S}, {K}): the weight "
+                "of each subject in each subject's reference at each feature; "
+                f"got shape {np.shape(subject_weights)}."
+            )
+        subject_weights = np.asarray(subject_weights, dtype=np.float64)
 
     return subject_weights
+
+
+def distinct_subject_weights(labels):
+    """
+    Subject weights that leave out of each subject's reference the subjects
+    holding one of its own series.
+
+    For data whose subjects can hold the same series (for example subjects
+    drawn with replacement from a pool, one member per node), ``isfc``
+    correlates a series with a mean that contains it.  Given what each
+    subject holds at each node, this returns the weights for ``wisfc`` with
+    which the reference of subject ``s`` at node ``k`` is the mean of the
+    other subjects whose series at node ``k`` subject ``s`` does not hold
+    (at any node).  With two or more subjects and no repeated label the
+    result is ``isfc`` (a single subject has no other subject, so no
+    reference, where ``isfc`` returns its within-subject correlations).
+
+    Parameters
+    ----------
+    labels : array-like of shape (subjects, features)
+        ``labels[s, k]`` identifies the series of subject ``s`` at node
+        ``k`` (numbers or strings; any hashable values); labels that are
+        equal in Python (``==``) are the same series, so ``1`` and ``"1"``
+        differ and ``1`` and ``1.0`` do not.
+
+    Returns
+    -------
+    numpy.ndarray
+        Shape (subjects, subjects, features): ``W[s, r, k]`` is 1 when
+        ``r != s`` and ``labels[r, k]`` is not among ``labels[s]``, else 0.
+        Use it as ``tc.wisfc(data, kernel, subject_weights=W)`` or, in
+        ``timecorr`` and ``features``, ``cfun=functools.partial(tc.wisfc,
+        subject_weights=W)``.
+
+    Raises
+    ------
+    ValueError
+        If ``labels`` is not 2-D with at least one subject and one feature.
+
+    Notes
+    -----
+    A node of a subject where every other subject is left out has no
+    reference; ``wisfc`` warns and documents its entries.  The weights are
+    for data with as many features as ``labels`` has columns, so in
+    ``features`` they fit the orders whose input has that many columns.
+
+    Examples
+    --------
+    >>> import timecorr as tc
+    >>> W = tc.distinct_subject_weights([["a", "b"], ["a", "c"], ["d", "b"]])
+    >>> W.shape
+    (3, 3, 2)
+    >>> W[0, :, 0], W[0, :, 1]  # subject 0: node 0 without 1, node 1 without 2
+    (array([0., 0., 1.]), array([0., 1., 0.]))
+    """
+    # as objects: converting a list to one numeric or string dtype can make
+    # different labels equal (2**53 and 2**53 + 1 as floats, 1 and "1")
+    given = labels
+    labels = np.empty(np.shape(given), dtype=object)
+    if labels.ndim != 2 or labels.shape[0] < 1 or labels.shape[1] < 1:
+        raise ValueError(
+            "labels must be a (subjects, features) array with at least one "
+            f"subject and one feature; got shape {labels.shape}."
+        )
+    S, K = labels.shape
+    for s, row in enumerate(given.tolist() if isinstance(given, np.ndarray)
+                            else given):
+        for k, label in enumerate(row):
+            labels[s, k] = label
+    # one integer per distinct label (Python equality)
+    codes = {}
+    coded = np.empty((S, K), dtype=np.int64)
+    for s in range(S):
+        for k in range(K):
+            coded[s, k] = codes.setdefault(labels[s, k], len(codes))
+    W = np.empty((S, S, K))
+    for s in range(S):
+        W[s] = ~np.isin(coded, coded[s])
+        W[s, s] = 0
+    return W
 
 
 def _subject_kernels(timepoint_weights, S):
@@ -3244,8 +3451,10 @@ def isfc(data, timepoint_weights, *, causal=False, min_samples=None):
         grouped.
     causal : bool, optional
         True: the causal estimator (see ``wcorr``): row ``t`` of the output
-        is unchanged (to 1e-9) when the samples after ``t`` are replaced by
-        any values, NaN and inf included, or removed.  Every kernel must
+        is unchanged when the samples after ``t`` are replaced by any
+        values, NaN and inf included (bit for bit), or removed (bit for bit
+        with the built-in kernel functions, to 1e-9 with other kernel
+        arrays; see ``wcorr``).  Every kernel must
         give no weight to later timepoints (for example a kernel function
         called with ``direction='backward'``); infinite samples and samples
         above 1e150 in magnitude are missing data; undefined (warm-up)
@@ -3348,8 +3557,10 @@ def autofc(data, timepoint_weights, *, causal=False, min_samples=None):
         grouped.
     causal : bool, optional
         True: the causal estimator (see ``wcorr``): row ``t`` of the output
-        is unchanged (to 1e-9) when the samples after ``t`` are replaced by
-        any values, NaN and inf included, or removed.  Every kernel must
+        is unchanged when the samples after ``t`` are replaced by any
+        values, NaN and inf included (bit for bit), or removed (bit for bit
+        with the built-in kernel functions, to 1e-9 with other kernel
+        arrays; see ``wcorr``).  Every kernel must
         give no weight to later timepoints (for example a kernel function
         called with ``direction='backward'``); infinite samples and samples
         above 1e150 in magnitude are missing data; undefined (warm-up)

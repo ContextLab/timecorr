@@ -549,3 +549,37 @@ def test_tstat_combine_of_non_finite_values_is_what_it_was():
         warnings.simplefilter("ignore")
         t, p = tc.tstat_combine([np.array([[-np.inf]]), np.array([[np.inf]])], True)
     assert np.isnan(t[0, 0]) and np.isnan(p[0, 0])
+
+
+# --- the bound is absolute for magnitudes up to 1 (review, round 3) ----------
+
+
+def test_tstat_combine_round_off_bound_is_absolute_below_one():
+    # documented behavior: values closer than 128 eps (2.8e-14) are one
+    # value whatever their size, so 1e-16 and 2e-16 (t = 3 with the plain
+    # formula) give +inf
+    t, p = tc.tstat_combine([np.array([[1e-16]]), np.array([[2e-16]])], return_pvals=True)
+    assert t[0, 0] == np.inf and p[0, 0] == 0
+    t = tc.tstat_combine([np.array([[1e-10]]), np.array([[1e-10 + 1e-15]])])
+    assert t[0, 0] == np.inf
+    # above 1 the bound is relative: 128 eps times the largest magnitude
+    eps = np.finfo(float).eps
+    assert tc.tstat_combine([np.array([[1e6]]), np.array([[1e6 * (1 + 100 * eps)]])])[0, 0] \
+        == np.inf
+    assert np.isfinite(tc.tstat_combine([np.array([[1e6]]),
+                                         np.array([[1e6 + 1e-6]])])[0, 0])
+    # why: the round-off of a correlation is absolute, at the scale of 1.
+    # The same small correlation computed in two orders (isfc of two
+    # subjects) differs by a fraction of eps, which is many eps of its own
+    # size.  Measured on macOS over 12 such pairs of recordings (1.17
+    # million entries): for |r| < 0.01, 65 entries differ by more than 128
+    # eps of their magnitude (up to 14,000 eps), none by more than 0.19 eps.
+    rng = np.random.default_rng(0)
+    data = [rng.standard_normal((300, 25)) for _ in range(2)]
+    a, b = tc.timecorr(data, cfun=tc.isfc, combine=tc.null_combine,
+                       weights_params={"var": 2500})
+    small = np.maximum(np.abs(a), np.abs(b)) < 0.01
+    assert small.sum() > 1000
+    assert np.abs(a - b)[small].max() <= 4 * eps
+    t = tc.tstat_combine([a, b])
+    assert np.isinf(t).all()

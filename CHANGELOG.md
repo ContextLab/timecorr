@@ -245,8 +245,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   round-off only now has the statistic of an entry whose values are equal:
   t = +inf or -inf with the sign of the mean of its values (p = 0), or 0
   (p = 1) for a mean of 0. Round-off is a range across the subjects of at
-  most 128 eps (2.8e-14), times the largest magnitude for values above 1
-  (`helpers._round_off_spread`). In 0.3.1 such an entry had the mean divided
+  most 128 eps (2.8e-14), or that times the largest magnitude when it
+  exceeds 1 (`helpers._round_off_spread`). The bound is absolute for
+  magnitudes up to 1: values closer than 2.8e-14 are treated as equal
+  whatever their size, so `tc.tstat_combine` of 1e-16 and 2e-16 is +inf
+  (3 in 0.3.1). The round-off of a correlation is absolute, at the scale
+  of 1: the same correlation below 0.01 computed in two orders differed by
+  at most 0.19 eps, which was up to 14,000 eps of its own size. In 0.3.1 such an entry had the mean divided
   by that round-off: a finite t of up to 1e16 in magnitude, and scipy's
   `RuntimeWarning` about precision loss. This is what differs from 0.3.1,
   with and without `causal=True`: the entries of `tc.isfc` with two subjects

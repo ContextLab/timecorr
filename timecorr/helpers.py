@@ -3533,9 +3533,12 @@ def _round_off_spread(stacked):
     """
     Entries of a stack of matrices (along the last axis) whose values are
     one value up to round-off: their range is at most ``_UNIT_TOLERANCE``
-    (128 eps, 2.8e-14), relative to the largest magnitude when that is
-    above 1 (correlations are computed to an absolute accuracy, raw
-    co-fluctuations to a relative one).
+    (128 eps, 2.8e-14), or that times the largest magnitude when it exceeds
+    1 (correlations are computed to an absolute accuracy, raw
+    co-fluctuations to a relative one).  Values closer than 2.8e-14 are
+    therefore one value whatever their size (1e-16 and 2e-16 are): the
+    same correlation below 0.01 computed in two orders differed by at most
+    0.19 eps, up to 14,000 eps of its own size.
 
     The same correlation computed in two orders (``isfc`` of two subjects:
     subject 0 with subject 1, and subject 1 with subject 0) differs by at
@@ -3570,9 +3573,16 @@ def tstat_combine(corrs, return_pvals=False):
     diagonal of ``autofc`` results, where every value is 1) has t = +inf or
     -inf with the sign of that value (p = 0), or t = 0 (p = 1) when the value
     is 0, with no warning.  The same holds where the values differ by
-    round-off only: a range across the matrices of at most 128 eps (2.8e-14;
-    times the largest magnitude for values above 1) counts as none, and the
+    round-off only: a range across the matrices of at most 128 eps
+    (2.8e-14), or that times the largest magnitude when it exceeds 1,
+    counts as none, and the
     entry has t = +inf, -inf or 0 with the sign of the mean of its values.
+    The bound is absolute for magnitudes up to 1: values closer than 2.8e-14
+    are treated as equal whatever their size, so 1e-16 and 2e-16 give t = +inf
+    (3 with the plain formula).  The round-off of a correlation is absolute, at
+    the scale of 1: the same correlation below 0.01 computed in two orders
+    differed by at most 0.19 eps, which was up to 14,000 eps of its own size
+    (65 of 153,000 such entries by more than 128 eps of their size).
     That is the case of ``isfc`` with two subjects, whose correlations are
     the same numbers computed in two orders (they differed by up to 61 eps
     in the cases measured; in the first defined row of ``causal=True``,

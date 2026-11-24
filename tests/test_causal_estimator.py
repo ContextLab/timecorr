@@ -1393,8 +1393,9 @@ def test_smoothing_ignores_the_reducer_as_without_causal():
 
 
 def test_tstat_combine_is_exact_under_replacement_and_conditioned_under_removal():
-    # the reviewer's input: two subjects, whose isfc correlations are the
-    # same, so every t statistic divides round-off by a spread near zero
+    # the reviewer's input: two subjects with different events, whose isfc
+    # correlations differ by about 1e-8, so every t statistic is very
+    # sensitive to the last bit of a correlation
     rng = np.random.RandomState(4)
     xs = [rng.randn(70, 4) for _ in range(2)]
     xs[0][48, 1] = np.inf
@@ -1411,8 +1412,8 @@ def test_tstat_combine_is_exact_under_replacement_and_conditioned_under_removal(
     assert np.array_equal(np.isnan(cut), np.isnan(full[:51]))
     finite = np.isfinite(cut) & np.isfinite(full[:51])
     assert np.array_equal(np.isfinite(cut), np.isfinite(full[:51]))
-    # not required to 1e-9 (the documented exception; 0.12 on 3.8e7 was
-    # measured on macOS, 0 on Linux), but to 1e-8 of the magnitude
+    # 0.12 on 3.8e7 was measured here on macOS before removal changed no
+    # bit (test_tstat_combine_is_exact_under_removal requires equality); this bound stays
     difference = np.abs(cut[finite] - full[:51][finite])
     assert np.max(difference / np.maximum(1.0, np.abs(cut[finite]))) <= 1e-8
     # subjects whose correlations differ: to 1e-9 of the magnitude, and

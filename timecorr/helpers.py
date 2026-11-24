@@ -3525,13 +3525,15 @@ def _round_off_spread(stacked):
     than 2 eps), except in the first defined row of the causal estimator,
     which has 3 samples (13 entries above 128 eps, up to 3108 eps).  Correlations of subjects
     that differ are far apart on that scale: 3000 random stacks of 3 to 6
-    subjects have no range below 1e-9.  NaN and infinite entries are not
-    selected.
+    subjects have no range below 1e-9.  An entry with a NaN or infinite
+    value is not selected (an infinite range is not at most 128 eps times
+    an infinite magnitude, although ``inf <= inf``).
     """
+    finite = np.isfinite(stacked).all(axis=-1)
     with np.errstate(invalid="ignore"):
         spread = stacked.max(axis=-1) - stacked.min(axis=-1)
         scale = np.maximum(1.0, np.abs(stacked).max(axis=-1))
-        return spread <= _UNIT_TOLERANCE * scale
+        return finite & (spread <= _UNIT_TOLERANCE * scale)
 
 
 def tstat_combine(corrs, return_pvals=False):

@@ -509,3 +509,43 @@ def test_tstat_combine_keeps_spreads_above_round_off(values):
     v = np.array(values)
     expect = ttest_1samp(v if np.abs(v).max() > 1 else np.arctanh(v), 0).statistic
     assert np.isfinite(t) and t == expect
+
+
+# --- non-finite values are not a spread at round-off level (review) ----------
+
+NONFINITE_VALUES = (-np.inf, np.inf, np.nan, 0.0, 0.3, -0.3, 1.0, -1.0, 1.5, -40.0)
+
+
+def nonfinite_inputs():
+    """``{S: array (lists, S)}``: every list of S = 2 and 3 of
+    ``NONFINITE_VALUES`` with at least one infinite or NaN value."""
+    import itertools
+
+    out = {}
+    for size in (2, 3):
+        lists = np.array(list(itertools.product(NONFINITE_VALUES, repeat=size)))
+        out[size] = lists[~np.isfinite(lists).all(axis=1)]
+    return out
+
+
+def test_tstat_combine_of_non_finite_values_is_what_it_was():
+    # [-inf, +inf] has an infinite range and an infinite scale, and
+    # inf <= 128 eps * inf is true: it gave t = 0, p = 0 instead of NaN
+    import os
+
+    reference = np.load(os.path.join(os.path.dirname(__file__), "fixtures",
+                                     "tstat_nonfinite_reference.npz"))
+    for size, values in nonfinite_inputs().items():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            t, p = tc.tstat_combine([column[np.newaxis] for column in values.T],
+                                    return_pvals=True)
+        assert t.shape == (1, len(values)) and len(values) in (51, 657)
+        for got, name in ((t, f"t{size}"), (p, f"p{size}")):
+            different = ~((got[0] == reference[name])
+                          | (np.isnan(got[0]) & np.isnan(reference[name])))
+            assert not different.any(), values[different][:5]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        t, p = tc.tstat_combine([np.array([[-np.inf]]), np.array([[np.inf]])], True)
+    assert np.isnan(t[0, 0]) and np.isnan(p[0, 0])

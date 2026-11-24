@@ -1282,17 +1282,27 @@ def _time_slices(weights, finite=True, always=False):
     ``0 * inf = NaN`` that slicing would skip), when T' or T is 0, or when
     the spans cover more than ``_TIME_SLICE_MAX_FRACTION`` of the kernel's
     entries.  ``always=True`` (the causal estimator) returns the spans
-    whatever ``_TIME_SLICING``, ``finite`` and the fraction covered are.
+    whatever ``_TIME_SLICING``, ``finite`` and the fraction covered are.  With
+    it, the first column of a ``LagKernel``'s chunk is the one the kernel
+    gives (``LagKernel.span``), which no later row changes.
     """
     kernel = as_kernel(weights)
     T_out, T = kernel.shape
     slices = None
     if (always or (_TIME_SLICING and finite)) and T_out and T:
+        # the causal estimator: the first column of a chunk must not depend
+        # on the rows after the chunk's first (a row may exist or not, as
+        # the series is longer or shorter).  A LagKernel's own first column
+        # is that of the chunk's first row (the largest lag with weight,
+        # the start of its event), whereas a weight that is exactly 0
+        # inside the kernel (a Mexican hat at lag sigma) can keep the
+        # first row from the column a later row weights.
+        structural = always and isinstance(getattr(kernel, "kernel", kernel), LagKernel)
         slices, covered = [], 0
         for t0, t1, c0, _, _, w in blocks(kernel, CHUNK):
             cols = (w != 0).any(axis=0)
             if cols.any():
-                s0 = c0 + int(cols.argmax())
+                s0 = c0 if structural else c0 + int(cols.argmax())
                 s1 = c0 + w.shape[1] - int(cols[::-1].argmax())
             else:
                 s0 = s1 = 0
@@ -1969,41 +1979,74 @@ def _group_reference(x, weights, c0, g0, c1):
     A correlation does not depend on the reference; a reference close to
     the samples a row weights keeps its sums well conditioned.
     """
-    span = x[c0:c1]
+    span = _group_span(x, c0, c1)
     ok = ~np.isnan(span)
     num = weights @ np.where(ok, span, 0.0)
     den = weights @ ok.astype(np.float64)
     ref = _safe_divide(num, den)
     none = den == 0
     if none.any():
-        ref[none] = _causal_reference(x[:, none], c0, g0, c1)
+        ref[none] = _causal_reference(x[:, none], c0, g0, min(c1, x.shape[0]))
     return ref
 
 
 def _causal_groups(rows):
     """
-    ``(i, g0, g1, c0, c1)`` for the groups of consecutive rows ``g0:g1`` of
-    each chunk ``i`` of a prepared ``_KernelRows`` whose kernel has no
-    weight above its diagonal: the group's weights lie in columns ``c0:c1``
-    (the chunk's columns before row ``g1``).  A group has ``_CAUSAL_GROUP``
-    rows, times the number of ``_CAUSAL_SPAN`` columns the chunk weights
-    (rounded up), at most the chunk.
+    ``(i, g0, g1, c0, c1, n)`` for the groups of consecutive rows ``g0:g1``
+    of each chunk ``i`` of a prepared ``_KernelRows`` whose kernel has no
+    weight above its diagonal.
+
+    A group is computed with the shapes of a group of a series without an
+    end, so that the operations that give a row do not depend on the number
+    of timepoints after it (removing later rows changes no bit): ``n`` is
+    the number of rows the group has in a complete chunk (``g1 - g0`` rows
+    exist; the others are rows of zero weight), and its columns are
+    ``c0:c1`` with ``c1 = g0 + n`` (the columns at or beyond the end of the
+    data are columns of zeros).  ``n`` is ``_CAUSAL_GROUP``, times the
+    number of ``_CAUSAL_SPAN`` columns a complete chunk weights (rounded
+    up), at most what is left of the chunk.
     """
     groups = []
     for i, (t0, t1, c0, c1) in enumerate(rows.spans):
-        size = _CAUSAL_GROUP * max(1, -(-(c1 - c0) // _CAUSAL_SPAN))
+        if c1 <= c0:
+            continue  # a chunk without weight
+        end = t0 + CHUNK
+        size = _CAUSAL_GROUP * max(1, -(-(end - c0) // _CAUSAL_SPAN))
         for g0 in range(t0, t1, size):
-            g1 = min(t1, g0 + size)
-            if min(c1, g1) > c0:
-                groups.append((i, g0, g1, c0, min(c1, g1)))
+            n = min(end, g0 + size) - g0
+            groups.append((i, g0, min(t1, g0 + n), c0, g0 + n, n))
     return groups
 
 
 def _group_block(rows, group, kind):
-    """The rows and columns of a group of ``_causal_groups`` (a new array)."""
-    i, g0, g1, c0, c1 = group
-    t0 = rows.spans[i][0]
-    return np.ascontiguousarray(rows._block(i, kind)[g0 - t0 : g1 - t0, : c1 - c0])
+    """The ``n`` rows and the columns ``c0:c1`` of a group of
+    ``_causal_groups`` (a new array; zeros where the kernel has no row or
+    column)."""
+    i, g0, g1, c0, c1, n = group
+    t0, _, _, k1 = rows.spans[i]
+    block = rows._block(i, kind)
+    out = np.zeros((n, c1 - c0))
+    m = min(k1, c1) - c0
+    out[: g1 - g0, :m] = block[g0 - t0 : g1 - t0, :m]
+    return out
+
+
+def _group_span(x, c0, c1):
+    """Rows ``c0:c1`` of ``x`` (an array of timepoints, or timepoints by
+    columns); rows at or beyond its end are zeros.  A view when every row
+    exists."""
+    part = x[c0:c1]
+    if part.shape[0] == c1 - c0:
+        return part
+    out = np.zeros((c1 - c0,) + x.shape[1:], dtype=x.dtype)
+    out[: part.shape[0]] = part
+    return out
+
+
+# The triangle of an autocorrelation is computed this many rows of features
+# at a time, each with the features from the first of them on (the blocks of
+# ``_wcorr_blocks`` are whole numbers of them in causal mode).
+_CAUSAL_FEATURES = 8
 
 
 def _causal_setup(a, b, rows, autocorrelation, min_samples):
@@ -2058,6 +2101,9 @@ def _causal_setup(a, b, rows, autocorrelation, min_samples):
     n = len(groups)
     state = {
         "causal": True, "T": a.shape[0], "rows": rows, "a": a, "b": b,
+        # an autocorrelation computed by _wcorr_blocks: its blocks hold the
+        # features from their first row on (_corr_row_blocks: every feature)
+        "triangular": autocorrelation,
         "defined": defined, "groups": groups,
         # groups whose columns hold a NaN sample; groups with a row that
         # weights one; the rows that weight none
@@ -2081,6 +2127,7 @@ def _causal_setup(a, b, rows, autocorrelation, min_samples):
     active = np.zeros(T_out, dtype=bool)
 
     def moments(x, ref, dirty, A, W, s, g0, g1, side):
+        k = g1 - g0  # the rows of the group that exist
         x = x - ref
         if dirty:
             x[np.isnan(x)] = 0
@@ -2088,29 +2135,33 @@ def _causal_setup(a, b, rows, autocorrelation, min_samples):
         msq = A @ x**2
         var = msq - s * mean**2
         zero = _causal_zero_variance(var, msq, s, mean + ref)
-        state["m" + side][g0:g1] = mean
-        state["w" + side][g0:g1] = W @ x
-        state["v" + side][g0:g1] = np.where(zero, 0.0, var)
-        state["z" + side][g0:g1] = zero
+        state["m" + side][g0:g1] = mean[:k]
+        state["w" + side][g0:g1] = (W @ x)[:k]
+        state["v" + side][g0:g1] = np.where(zero, 0.0, var)[:k]
+        state["z" + side][g0:g1] = zero[:k]
 
+    T = a.shape[0]
     for g, group in enumerate(groups):
-        _, g0, g1, c0, c1 = group
+        _, g0, g1, c0, c1, _ = group
+        k = g1 - g0
         A = _group_block(rows, group, "a")
         s = A.sum(axis=1)[:, np.newaxis]
-        active[g0:g1] = s[:, 0] > 0
-        dirty = state["dirty"][g] = nan_before[c1] > nan_before[c0]
+        active[g0:g1] = s[:k, 0] > 0
+        dirty = state["dirty"][g] = nan_before[min(c1, T)] > nan_before[c0]
         if dirty:
-            plain = (_group_block(rows, group, "s") @ with_nan[c0:c1]) == 0
+            plain = (_group_block(rows, group, "s")
+                     @ _group_span(with_nan, c0, c1))[:k] == 0
             state["plain"][g0:g1] = plain
             state["nan"][g] = not plain.all()
         state["ref_a"][g] = _group_reference(a, A[0], c0, g0, c1)
         if not autocorrelation:
             state["ref_b"][g] = _group_reference(b, A[0], c0, g0, c1)
         W = _group_block(rows, group, "w")
-        state["sw"][g0:g1, 0] = W.sum(axis=1)
-        moments(a[c0:c1], state["ref_a"][g], dirty, A, W, s, g0, g1, "a")
+        state["sw"][g0:g1, 0] = W.sum(axis=1)[:k]
+        moments(_group_span(a, c0, c1), state["ref_a"][g], dirty, A, W, s, g0, g1, "a")
         if not autocorrelation:
-            moments(b[c0:c1], state["ref_b"][g], dirty, A, W, s, g0, g1, "b")
+            moments(_group_span(b, c0, c1), state["ref_b"][g], dirty, A, W, s, g0, g1,
+                    "b")
     state["active"] = active
     # the sums for complete data set the block size; the pairwise sums of
     # the rows that need them are computed in blocks of their own
@@ -2127,36 +2178,37 @@ def _causal_pairwise(A, W, S, xa, ok_a, xb, ok_b, ref_a, ref_b):
     the centered, zero-filled columns ``xa`` and ``xb`` (``ok_a``,
     ``ok_b``: their observed samples): ``(r, undefined, zero, few)``, each
     of shape (rows of the group, columns of ``xa``, columns of ``xb``).
+
+    The sums of each column of ``xa`` are matrix products of their own
+    (the items of stacked ``np.matmul`` calls), so they do not depend on
+    the columns of ``xa`` given with it.
     """
-    L = xa.shape[0]
-    sub = (A.shape[0], xa.shape[1], xb.shape[1])
-    pair_ok = ok_a[:, :, np.newaxis] & ok_b[:, np.newaxis, :]
-    x = xa[:, :, np.newaxis] * pair_ok
-    y = xb[:, np.newaxis, :] * pair_ok
-    m = x[0].size
-    terms = np.concatenate(
-        [t.reshape(L, -1) for t in (pair_ok.astype(float), x, y, x**2, y**2)],
-        axis=1,
-    )
-    s0, sx, sy, sxx, syy = np.split(A @ terms, 5, axis=1)
-    w0, wx, wy = np.split(W @ terms[:, : 3 * m], 3, axis=1)
-    wxy = W @ (x * y).reshape(L, -1)
+    m = xb.shape[1]
+    # (columns of xa, timepoints, columns of xb)
+    pair_ok = ok_a.T[:, :, np.newaxis] & ok_b[np.newaxis, :, :]
+    x = xa.T[:, :, np.newaxis] * pair_ok
+    y = xb[np.newaxis, :, :] * pair_ok
+    terms = np.concatenate([pair_ok.astype(float), x, y, x**2, y**2], axis=2)
+    s0, sx, sy, sxx, syy = np.split(np.matmul(A, terms), 5, axis=2)
+    w0, wx, wy = np.split(np.matmul(W, terms[:, :, : 3 * m]), 3, axis=2)
+    wxy = np.matmul(W, x * y)
+    few = np.matmul(S, terms[:, :, :m]) < 3
+    del terms, x, y, pair_ok
     mx = _safe_divide(sx, s0)
     my = _safe_divide(sy, s0)
-    num = (wxy - mx * wy - my * wx + mx * my * w0).reshape(sub)
+    num = wxy - mx * wy - my * wx + mx * my * w0
     var_a = sxx - s0 * mx**2
     var_b = syy - s0 * my**2
-    pairs = sub[1:]
-    ca = np.broadcast_to(ref_a[:, np.newaxis], pairs).reshape(-1)
-    cb = np.broadcast_to(ref_b[np.newaxis, :], pairs).reshape(-1)
+    ca = ref_a[:, np.newaxis, np.newaxis]
+    cb = ref_b[np.newaxis, np.newaxis, :]
     zero = _causal_zero_variance(var_a, sxx, s0, mx + ca) | (
         _causal_zero_variance(var_b, syy, s0, my + cb)
     )
-    var_a, var_b, zero = (v.reshape(sub) for v in (var_a, var_b, zero))
     # two samples always give r = +-1: fewer than 3 is undefined
-    few = (S @ terms[:, :m]).reshape(sub) < 3
     und = zero | few
-    return _correlation_ratio(num, var_a, var_b, und, sub), und, zero, few
+    r = _correlation_ratio(num, var_a, var_b, und, num.shape)
+    # (rows of the group, columns of xa, columns of xb)
+    return tuple(v.transpose(1, 0, 2) for v in (r, und, zero, few))
 
 
 def _causal_block(state, i0, i1, j0):
@@ -2167,69 +2219,109 @@ def _causal_block(state, i0, i1, j0):
     group computes the sums for complete data, on the data with NaN samples
     set to 0; a group with rows that weight a NaN sample also computes the
     pairwise sums, which those rows take.
+
+    The operations that give the correlations of a row of features with
+    other features at a timepoint do not depend on the rows ``i0:i1`` asked
+    for, nor on the length of the series: every group has the shapes of
+    ``_causal_groups``, the cross products of each row of features are one
+    matrix product of their own (the items of a stacked ``np.matmul``), and
+    the features a row is multiplied with are fixed.  For the triangle of
+    an autocorrelation (``state["triangular"]`` and ``j0 == i0``) these are
+    the features from the first row of its ``_CAUSAL_FEATURES`` rows on
+    (``i0`` is a multiple of that number; the entries before it are those
+    of the transposed pairs, computed with the rows before); otherwise the
+    features ``j0:``.
     """
     rows = state["rows"]
     a, b = state["a"], state["b"]
-    shape = (rows.shape[0], i1 - i0, b.shape[1] - j0)
+    Kb = b.shape[1]
+    shape = (rows.shape[0], i1 - i0, Kb - j0)
     r = np.zeros(shape)
     undefined = np.ones(shape, dtype=bool)
     zero_all = np.ones(shape[0], dtype=bool)
     few_any = np.zeros(shape[0], dtype=bool)
-    # rows of ``a`` per block of pairwise sums
-    step = _wcorr_block_rows(state["T"], shape[2], _WCORR_NAN_PRODUCTS)
+    triangular = state["triangular"] and j0 == i0
+    if triangular:
+        assert i0 % _CAUSAL_FEATURES == 0
+        parts = [(s0, min(i1, s0 + _CAUSAL_FEATURES), s0)
+                 for s0 in range(i0, i1, _CAUSAL_FEATURES)]
+    else:
+        parts = [(i0, i1, j0)]
     for g, group in enumerate(state["groups"]):
-        _, g0, g1, c0, c1 = group
-        L = c1 - c0
-        sub = (g1 - g0,) + shape[1:]
-        ref_a = state["ref_a"][g, i0:i1]
-        ref_b = state["ref_b"][g, j0:]
-        xa = a[c0:c1, i0:i1] - ref_a
-        xb = b[c0:c1, j0:] - ref_b
+        _, g0, g1, c0, c1, _ = group
+        k = g1 - g0  # the rows of the group that exist
+        ref_a = state["ref_a"][g]
+        ref_b = state["ref_b"][g]
+        xa = _group_span(a, c0, c1)[:, i0:i1] - ref_a[i0:i1]
+        xb = _group_span(b, c0, c1)[:, j0:] - ref_b[j0:]
         if state["dirty"][g]:
             ok_a = ~np.isnan(xa)
             ok_b = ~np.isnan(xb)
             xa[~ok_a] = 0
             xb[~ok_b] = 0
         W = _group_block(rows, group, "w")
-        prod = (xa[:, :, np.newaxis] * xb[:, np.newaxis, :]).reshape(L, -1)
-        cross = (W @ prod).reshape(sub)
-        del prod
-        ma_i = state["ma"][g0:g1, i0:i1, np.newaxis]
-        mb_j = state["mb"][g0:g1, np.newaxis, j0:]
-        num = (
-            cross
-            - ma_i * state["wb"][g0:g1, np.newaxis, j0:]
-            - mb_j * state["wa"][g0:g1, i0:i1, np.newaxis]
-            + ma_i * mb_j * state["sw"][g0:g1, :, np.newaxis]
-        )
-        var_a = state["va"][g0:g1, i0:i1, np.newaxis]
-        var_b = state["vb"][g0:g1, np.newaxis, j0:]
-        zero = (state["za"][g0:g1, i0:i1, np.newaxis]
-                | state["zb"][g0:g1, np.newaxis, j0:])
-        r_group = _correlation_ratio(num, var_a, var_b, zero, sub)
-        und = zero
-        if state["nan"][g]:
-            # the rows that weight a NaN sample take the pairwise sums
+        pairwise = state["nan"][g]
+        if pairwise:
             need = ~state["plain"][g0:g1]
             A = _group_block(rows, group, "a")
             S = _group_block(rows, group, "s")
-            und = zero.copy()
-            zero = zero.copy()
-            few = np.zeros(sub, dtype=bool)
-            for k0 in range(0, sub[1], step):
-                k1 = min(sub[1], k0 + step)
-                pr, pu, pz, pf = _causal_pairwise(
-                    A, W, S, xa[:, k0:k1], ok_a[:, k0:k1], xb, ok_b,
-                    ref_a[k0:k1], ref_b,
-                )
-                r_group[need, k0:k1] = pr[need]
-                und[need, k0:k1] = pu[need]
-                zero[need, k0:k1] = pz[need]
-                few[need, k0:k1] = pf[need]
-            few_any[g0:g1] = few.reshape(sub[0], -1).any(axis=1)
-        zero_all[g0:g1] = zero.reshape(sub[0], -1).all(axis=1)
-        r[g0:g1] = r_group
-        undefined[g0:g1] = und
+        zero_group = np.ones(k, dtype=bool)
+        few_group = np.zeros(k, dtype=bool)
+        for s0, s1, jb in parts:
+            rows_ = slice(s0 - i0, s1 - i0)
+            cols = slice(jb - j0, None)
+            sub = (k, s1 - s0, Kb - jb)
+            # one product per row of features: (rows of the group) x (columns)
+            stack = xa.T[rows_, :, np.newaxis] * xb[np.newaxis, :, cols]
+            cross = np.matmul(W, stack)[:, :k].transpose(1, 0, 2)
+            del stack
+            ma_i = state["ma"][g0:g1, s0:s1, np.newaxis]
+            mb_j = state["mb"][g0:g1, np.newaxis, jb:]
+            num = (
+                cross
+                - ma_i * state["wb"][g0:g1, np.newaxis, jb:]
+                - mb_j * state["wa"][g0:g1, s0:s1, np.newaxis]
+                + ma_i * mb_j * state["sw"][g0:g1, :, np.newaxis]
+            )
+            var_a = state["va"][g0:g1, s0:s1, np.newaxis]
+            var_b = state["vb"][g0:g1, np.newaxis, jb:]
+            zero = (state["za"][g0:g1, s0:s1, np.newaxis]
+                    | state["zb"][g0:g1, np.newaxis, jb:])
+            r_sub = _correlation_ratio(num, var_a, var_b, zero, sub)
+            und = zero
+            if pairwise:
+                # the rows that weight a NaN sample take the pairwise sums
+                und = zero.copy()
+                zero = zero.copy()
+                few = np.zeros(sub, dtype=bool)
+                # (a few rows of features at a time: 10 products of the
+                # group's timepoints by the pairs; each row of features is
+                # a product of its own, so the split changes no bit)
+                step = _wcorr_block_rows(c1 - c0, Kb - jb, _WCORR_NAN_PRODUCTS)
+                for f0 in range(s0, s1, step):
+                    f1 = min(s1, f0 + step)
+                    at = slice(f0 - i0, f1 - i0)
+                    pr, pu, pz, pf = _causal_pairwise(
+                        A, W, S, xa[:, at], ok_a[:, at], xb[:, cols], ok_b[:, cols],
+                        ref_a[f0:f1], ref_b[jb:],
+                    )
+                    to = slice(f0 - s0, f1 - s0)
+                    r_sub[:, to][need] = pr[:k][need]
+                    und[:, to][need] = pu[:k][need]
+                    zero[:, to][need] = pz[:k][need]
+                    few[:, to][need] = pf[:k][need]
+                few_group |= few.reshape(k, -1).any(axis=1)
+            zero_group &= zero.reshape(k, -1).all(axis=1)
+            r[g0:g1, rows_, cols] = r_sub
+            undefined[g0:g1, rows_, cols] = und
+            if jb > j0:
+                # the pairs with the rows of features before: transposed
+                before = slice(0, jb - j0)
+                r[g0:g1, rows_, before] = r[g0:g1, before, rows_].transpose(0, 2, 1)
+                undefined[g0:g1, rows_, before] = (
+                    undefined[g0:g1, before, rows_].transpose(0, 2, 1))
+        zero_all[g0:g1] = zero_group
+        few_any[g0:g1] = few_group
     return r, undefined, zero_all, few_any
 
 
@@ -2275,6 +2367,9 @@ def _wcorr_blocks(a, b, rows, autocorrelation, causal=False, min_samples=None):
     sparse = np.zeros_like(cancelled)
 
     rows_per_block = _wcorr_block_rows(T, Kb, state["n_products"])
+    if causal:
+        # whole numbers of the rows of features _causal_block computes together
+        rows_per_block = max(1, rows_per_block // _CAUSAL_FEATURES) * _CAUSAL_FEATURES
     for i0 in range(0, Ka, rows_per_block):
         i1 = min(Ka, i0 + rows_per_block)
         j0 = i0 if autocorrelation else 0
@@ -2367,6 +2462,7 @@ def _corr_row_blocks(a, b, weights, symmetric, rows_per_block=None, *,
 
     if causal:
         state = _causal_setup(a, b, rows, symmetric, min_samples)
+        state["triangular"] = False  # every block holds every feature
         warmup = ~state["defined"]
     else:
         rows.zero_rows(rows.support < 3)
@@ -2477,10 +2573,14 @@ def wcorr(a, b, weights, *, causal=False, min_samples=None):
     samples after ``t`` are replaced by any values, NaN and inf included, or
     removed (and, when the kernel gives ``t`` itself no weight, when the
     samples at ``t`` change).  Replacing later samples changes no bit of
-    an earlier timepoint; removing them changes the shapes of the last
-    sums and so their round-off (measured: at most 6e-13, on series with
-    an offset, a random walk, and steps of up to 1e8 standard
-    deviations).  The kernel must give no weight to later timepoints.  The estimate is the same formula, with these differences:
+    an earlier timepoint.  Removing them changes no bit either when the
+    first timepoint that a chunk of 128 kernel rows weights is one its
+    first row weights (the kernels ``timecorr`` builds from the built-in
+    kernel functions, and arrays of the same weights, a Mexican hat whose
+    weight is exactly 0 at a lag inside it excepted): groups of kernel
+    rows have the shapes of a series without an end, with zeros beyond
+    the data, and each feature's products are a matrix product of their
+    own.  For other kernel arrays removal is documented to 1e-9.  The kernel must give no weight to later timepoints.  The estimate is the same formula, with these differences:
 
     - Data are centered, a group of 16 timepoints at a time (more for a
       kernel that weights more than 512 timepoints), on the kernel-weighted
@@ -3424,9 +3524,10 @@ def tstat_combine(corrs, return_pvals=False):
     -inf with the sign of that value (p = 0), or t = 0 (p = 1) when the value
     is 0, with no warning.  Where the values of the matrices nearly coincide
     the statistic is ill-conditioned: round-off of the correlations is
-    divided by a spread close to zero (with ``causal=True`` such entries
-    agree to about 1e-9 of their magnitude, not to 1e-9, when later rows
-    are removed; see ``timecorr``).
+    divided by a spread close to zero (with ``causal=True`` and a kernel
+    function of your own such entries agree to about 1e-9 of their
+    magnitude, not to 1e-9, when later rows are removed; with the built-in
+    kernel functions removal changes no bit; see ``timecorr``).
 
     Parameters
     ----------
@@ -3783,8 +3884,7 @@ class _FittedModel:
     the column's training mean as exactly that mean; other values are
     returned as computed.  The rule reads the training rows and the row it
     is applied to, nothing else, so it is causal; without it the next
-    order would correlate that round-off, which is not reproducible to
-    1e-9 when later rows are removed.
+    order would correlate that round-off.
     """
 
     def __init__(self, model, n_features, pad=0):

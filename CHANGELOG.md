@@ -16,18 +16,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documented and tested:
   - when the rows after `t` are replaced by any values (finite, NaN or inf),
     row `t` is unchanged bit for bit, with every supported reducer;
-  - when the rows after `t` are removed, row `t` is unchanged to 1e-9
-    (absolute) for outputs that depend continuously on the correlations: no
-    reduction, `"strength"`, the summaries (`tc.WeightedStrength`,
-    `tc.Communities`) and the linear models listed below once fitted. Removal
-    changes the correlations by round-off, and the eigenvector-based graph
-    measures (`"eigenvector_centrality"`, `"pagerank_centrality"`,
-    `"pagerank_centrality_abs"`) can differ by more at a correlation matrix
-    whose leading eigenvalues coincide, and the t statistics of
-    `tc.tstat_combine` where the subjects' correlations nearly coincide
-    (always with two subjects and `tc.isfc`): they divide by the spread
-    across subjects and agree to about 1e-9 of their magnitude instead (0.12
-    on 3.8e7 in the case measured; replacement changes no bit);
+  - when the rows after `t` are removed, row `t` is unchanged bit for bit
+    as well with the built-in kernel functions, with every supported
+    reducer and combine function (the graph measures and `tc.tstat_combine`
+    included) and for smoothed values (`cfun=None`): the estimator computes
+    a row with the same operations whatever the length of the series.
+    Kernel rows are taken in groups with the shapes they have in a series
+    without an end (rows and columns beyond the data are zeros), each row of
+    features is a matrix product of its own, and the columns of a chunk of
+    kernel rows are those of its first row. Tested at cuts at, just before
+    and just after multiples of 16 and 128 rows, for every built-in kernel,
+    events, NaN samples, `min_samples`, kernels wider than 512 timepoints,
+    150 features (several blocks of features), every length from 1, fitted
+    reducers and `FeaturesModel.transform`
+    (`tests/test_causal_estimator.py`, `tests/test_causal_features.py`,
+    `tests/test_causal_fit.py`);
+  - with a kernel array or a kernel function of your own, the columns of a
+    chunk are found from its weights and can depend on the length, so
+    removal is documented to 1e-9 (absolute) for outputs that depend
+    continuously on the correlations (no reduction, `"strength"`, the
+    summaries and the linear models listed below once fitted), not for the
+    eigenvector-based graph measures at a correlation matrix whose leading
+    eigenvalues coincide, and to about 1e-9 of their magnitude for the t
+    statistics of `tc.tstat_combine` where the subjects' correlations
+    nearly coincide (no changed bit was measured with such kernels either);
   - with `include_zero=False`, row `t` is also unchanged when row `t` itself
     changes;
   - with a fitted reducer (`fit_timepoints=n`, below) this holds for rows
@@ -35,10 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     removed;
   - smoothed values (`cfun=None`) are on the scale of the data (each chunk of
     128 rows is centered on the kernel-weighted mean at its first row, which
-    is added back, never on a mean over later rows): under removal
-    they agree to round-off relative to the magnitude of the data (to 1e-9 or
-    8 units in the last place of the largest magnitude of the data, whichever
-    is larger); replacement changes no bit;
+    is added back, never on a mean over later rows): replacement
+    changes no bit, nor removal with the built-in kernel functions; with a
+    kernel of your own they agree under removal to round-off relative to
+    the magnitude of the data (to 1e-9 or 8 units in the last place of the
+    largest magnitude of the data, whichever is larger);
   - a series of any length runs (one row included), and its output is the
     first rows of the output of a longer series.
 

@@ -1438,3 +1438,251 @@ def test_tstat_combine_is_exact_under_replacement_and_conditioned_under_removal(
         doc = " ".join(getattr(tc, name).__doc__.split())
         assert "the t statistics of ``tstat_combine``" in doc
         assert "to about 1e-9 of their magnitude" in doc
+
+
+# ----------------------------------------------------------------------------
+# removal changes no bit: the estimator computes a row with the same
+# operations whatever the length of the series
+# ----------------------------------------------------------------------------
+
+
+def _removal_data(n_subjects, T, K, seed=0, missing=False):
+    rng = np.random.default_rng(100 + seed)
+    data = [np.cumsum(rng.standard_normal((T, K)), axis=0) * 0.1
+            + rng.standard_normal((T, K)) for _ in range(n_subjects)]
+    if missing:
+        for x in data:
+            x[rng.random(x.shape) < 0.02] = np.nan
+            x[rng.integers(5, T, 3)] = np.nan       # timepoints without a sample
+            x[rng.integers(5, T), 0] = np.inf
+            x[rng.integers(5, T), 1] = -1e200
+    return data
+
+
+def _cuts(T, near=(16, 128)):
+    """Lengths at, just before and just after multiples of the group and
+    chunk sizes, and a few others."""
+    cuts = set(range(1, 8)) | {T - 1}
+    for m in near:
+        for k in range(m, T, m if m > 16 else 48):
+            cuts |= {k - 1, k, k + 1}
+    cuts |= set(range(23, T, 37))
+    return sorted(c for c in cuts if 1 <= c < T)
+
+
+def _identical_under_removal(run, data, cuts):
+    """The cuts at which the rows of the shorter series are not, bit for
+    bit, the first rows of the whole one (``run``: data -> array or list)."""
+    full = _as_list(run(data))
+    changed = []
+    for n in cuts:
+        out = _as_list(run([x[:n] for x in data]))
+        if not all(np.array_equal(o, f[:n], equal_nan=True) for o, f in zip(out, full)):
+            changed.append(n)
+    return changed
+
+
+def _timecorr_runner(n_subjects, **kwargs):
+    def run(data):
+        return _quiet(tc.timecorr, data[0] if n_subjects == 1 else data,
+                      causal=True, **kwargs)
+    return run
+
+
+G25 = {"weights_params": {"var": 25}}
+# name: (subjects, T, K, missing samples, arguments of timecorr)
+REMOVAL = {
+    "autofc": (1, 300, 6, False, dict(cfun=tc.autofc, **G25)),
+    "autofc-missing": (1, 300, 6, True, dict(cfun=tc.autofc, **G25)),
+    "isfc": (3, 300, 5, False, dict(cfun=tc.isfc, **G25)),
+    "isfc-missing": (3, 300, 5, True, dict(cfun=tc.isfc, **G25)),
+    "isfc-corrmean": (3, 300, 5, True, dict(cfun=tc.isfc, combine=tc.corrmean_combine,
+                                            **G25)),
+    "isfc-tstat": (3, 300, 5, False, dict(cfun=tc.isfc, combine=tc.tstat_combine,
+                                          **G25)),
+    "wisfc": (3, 300, 5, True, dict(
+        cfun=functools.partial(tc.wisfc, subject_weights=SUBJECT_WEIGHTS), **G25)),
+    "events": (1, 300, 5, False, dict(cfun=tc.autofc, events=[40, 128, 131, 200], **G25)),
+    "events-per-subject": (3, 300, 4, True, dict(
+        cfun=tc.isfc, events=[[20, 160], [25, 129, 265], None], **G25)),
+    "min-samples": (1, 300, 5, True, dict(cfun=tc.autofc, min_samples=8, **G25)),
+    "exclude-zero": (1, 300, 5, False, dict(cfun=tc.autofc, include_zero=False, **G25)),
+    "exclude-near": (1, 300, 5, False, dict(cfun=tc.autofc, exclude_timepoints=-3,
+                                            **G25)),
+    "exclude-far": (1, 300, 5, True, dict(cfun=tc.autofc, exclude_timepoints=20, **G25)),
+    "strength": (1, 300, 6, True, dict(cfun=tc.autofc, rfun="strength", **G25)),
+    "laplace": (1, 300, 5, True, dict(cfun=tc.autofc, weights_function=tc.laplace_weights,
+                                      weights_params={"scale": 6})),
+    "t": (1, 300, 5, False, dict(cfun=tc.autofc, weights_function=tc.t_weights,
+                                 weights_params={"df": 3})),
+    "mexican-hat": (1, 300, 5, True, dict(
+        cfun=tc.autofc, weights_function=tc.mexican_hat_weights,
+        weights_params={"sigma": 5})),
+    "mexican-hat-events": (1, 300, 5, False, dict(
+        cfun=tc.autofc, weights_function=tc.mexican_hat_weights,
+        weights_params={"sigma": 5}, events=[123, 251])),
+    "boxcar": (1, 300, 5, True, dict(cfun=tc.autofc, weights_function=tc.boxcar_weights,
+                                     weights_params={"width": 21})),
+    "uniform": (1, 300, 5, False, dict(cfun=tc.autofc, weights_function=tc.uniform_weights,
+                                       weights_params={})),
+    # more than 8 features (the triangle of an autocorrelation is computed 8
+    # rows of features at a time)
+    "autofc-30": (1, 200, 30, True, dict(cfun=tc.autofc, **G25)),
+}
+
+
+@pytest.mark.parametrize("case", sorted(REMOVAL))
+def test_removing_later_rows_changes_no_bit(case):
+    n_subjects, T, K, missing, kw = REMOVAL[case]
+    data = _removal_data(n_subjects, T, K, missing=missing)
+    cuts = _cuts(T) if case in ("autofc", "isfc-missing", "events-per-subject",
+                                "mexican-hat-events") else _cuts(T)[::3]
+    assert _identical_under_removal(_timecorr_runner(n_subjects, **kw), data, cuts) == []
+
+
+# kernels with weight at more than 512 lags: larger groups of rows
+WIDE = {
+    "laplace": dict(weights_function=tc.laplace_weights, weights_params={"scale": 40}),
+    "gaussian": dict(weights_params={"var": 150.0 ** 2}),
+    "boxcar-1000": dict(weights_function=tc.boxcar_weights, weights_params={"width": 1000}),
+    "boxcar-1100": dict(weights_function=tc.boxcar_weights, weights_params={"width": 1100}),
+    "uniform": dict(weights_function=tc.uniform_weights, weights_params={}),
+}
+
+
+@pytest.mark.parametrize("kernel", sorted(WIDE))
+def test_removing_later_rows_changes_no_bit_with_wide_kernels(kernel):
+    data = _removal_data(1, 1300, 4, missing=kernel == "laplace")
+    cuts = [n for m in (496, 512, 544, 640, 1024, 1056, 1152, 1280)
+            for n in (m - 17, m - 1, m, m + 1, m + 15)]
+    run = _timecorr_runner(1, cfun=tc.autofc, **WIDE[kernel])
+    assert _identical_under_removal(run, data, cuts) == []
+
+
+def test_every_length_from_one_row_is_the_start_of_the_whole_series():
+    data = _removal_data(2, 70, 4, missing=True)
+    for kw in (dict(cfun=tc.isfc, **G25), dict(cfun=tc.autofc, **G25),
+               dict(cfun=tc.autofc, combine=tc.mean_combine, **G25)):
+        assert _identical_under_removal(_timecorr_runner(2, **kw), data,
+                                        range(1, 70)) == []
+
+
+def test_removal_changes_no_bit_whatever_the_blocks_of_features():
+    # T * K * K above the estimator's block: the features are computed in
+    # blocks whose size follows from T
+    from timecorr import helpers
+
+    T, K = 420, 150
+    assert helpers._wcorr_block_rows(T, K) < K
+    assert helpers._wcorr_block_rows(160, K) != helpers._wcorr_block_rows(T, K)
+    data = _removal_data(2, T, K, missing=True)
+    for n_subjects, kw in ((1, dict(cfun=tc.autofc, **G25)), (2, dict(cfun=tc.isfc, **G25))):
+        run = _timecorr_runner(n_subjects, **kw)
+        assert _identical_under_removal(run, data[:n_subjects], [129, 160, 331]) == []
+
+
+def test_wcorr_and_the_correlation_functions_are_exact_under_removal():
+    data = _removal_data(2, 200, 5, missing=True)
+    a, b = data
+    cuts = _cuts(200)[::4]
+
+    def kernel(n):
+        return tc.gaussian_weights(n, {"var": 25}, direction="backward")
+
+    for min_samples in (None, 6):
+        full = _quiet(tc.wcorr, a, b, kernel(200), causal=True, min_samples=min_samples)
+        auto = _quiet(tc.autofc, a, kernel(200), causal=True, min_samples=min_samples)
+        inter = _quiet(tc.isfc, data, kernel(200), causal=True, min_samples=min_samples)
+        for n in cuts:
+            assert np.array_equal(
+                _quiet(tc.wcorr, a[:n], b[:n], kernel(n), causal=True,
+                       min_samples=min_samples),
+                full[:, :, :n], equal_nan=True)
+            assert np.array_equal(
+                _quiet(tc.autofc, a[:n], kernel(n), causal=True, min_samples=min_samples),
+                auto[:n], equal_nan=True)
+            cut = _quiet(tc.isfc, [x[:n] for x in data], kernel(n), causal=True,
+                         min_samples=min_samples)
+            assert all(np.array_equal(c, f[:n], equal_nan=True)
+                       for c, f in zip(cut, inter))
+
+
+def test_tstat_combine_is_exact_under_removal():
+    # the whole-branch review's input: a statistic of 3.8e7 that changed by
+    # 0.12 when the rows after row 50 were removed
+    rng = np.random.RandomState(4)
+    xs = [rng.randn(70, 4) for _ in range(2)]
+    xs[0][48, 1] = np.inf
+    run = _timecorr_runner(2, cfun=tc.isfc, combine=tc.tstat_combine, min_samples=3,
+                           events=[[20, 60], [25, 65]], **G25)
+    full = run(xs)
+    assert np.nanmax(np.abs(full[np.isfinite(full)])) > 1e7
+    assert _identical_under_removal(run, xs, range(1, 70)) == []
+    # a spread across subjects that is tiny and real: subject 1 is subject 0
+    # plus noise of 1e-9
+    rng = np.random.RandomState(5)
+    base = rng.randn(120, 4)
+    ys = [base, base + 1e-9 * rng.randn(120, 4)]
+    run = _timecorr_runner(2, cfun=tc.autofc, combine=tc.tstat_combine, **G25)
+    full = run(ys)
+    assert np.nanmax(np.abs(full[np.isfinite(full)])) > 1e9
+    assert _identical_under_removal(run, ys, _cuts(120)) == []
+
+
+def test_the_columns_of_a_group_do_not_depend_on_later_rows():
+    # a Mexican hat is exactly 0 at lag sigma: with an event sigma rows
+    # before a chunk of 128 rows, the chunk's first row has no weight at the
+    # event's first timepoint and its second row has, so the columns of the
+    # chunk, found from its weights, depended on whether that row exists
+    from timecorr import helpers
+
+    assert helpers.mexican_hat_profile(np.arange(8), {"sigma": 5})[5] == 0
+
+    def groups(T):
+        kernel = helpers._lag_kernel(T, tc.mexican_hat_weights, {"sigma": 5},
+                                     "backward", True, None)
+        kernel = kernel.with_events((np.arange(T) >= 123).astype(int))
+        rows = helpers._KernelRows(kernel)
+        rows.prepare(True, always=True)
+        return {g[1]: g for g in helpers._causal_groups(rows)}
+
+    whole = groups(140)
+    for T in (129, 130, 131):
+        cut = groups(T)
+        assert cut[128][3] == whole[128][3] == 123  # c0: the event's first row
+        assert (cut[128][4], cut[128][5]) == (whole[128][4], whole[128][5]) == (144, 16)
+    # the shapes of every group, for cuts of an ordinary kernel
+    for T in (17, 129, 200, 513, 700):
+        for width in (25, 400 ** 2):
+            def shapes(n):
+                kernel = helpers._lag_kernel(n, tc.gaussian_weights, {"var": width},
+                                             "backward", True, None)
+                rows = helpers._KernelRows(kernel)
+                rows.prepare(True, always=True)
+                return {g[1]: g[3:] for g in helpers._causal_groups(rows)}
+            long, short = shapes(1400), shapes(T)
+            assert short and all(long[g0] == s for g0, s in short.items())
+
+
+SMOOTH = {
+    "gaussian": G25,
+    "gaussian-wide": {"weights_params": {"var": 150.0 ** 2}},
+    "laplace": dict(weights_function=tc.laplace_weights, weights_params={"scale": 6}),
+    "mexican-hat": dict(weights_function=tc.mexican_hat_weights,
+                        weights_params={"sigma": 5}),
+    "boxcar": dict(weights_function=tc.boxcar_weights, weights_params={"width": 21}),
+    "uniform": dict(weights_function=tc.uniform_weights, weights_params={}),
+    "events": dict(events=[40, 128, 131, 200], **G25),
+    "min-samples": dict(min_samples=8, **G25),
+    "exclude-zero": dict(include_zero=False, **G25),
+}
+
+
+@pytest.mark.parametrize("case", sorted(SMOOTH))
+def test_removing_later_rows_changes_no_bit_of_smoothed_values(case):
+    for missing in (False, True):
+        data = _removal_data(2, 300, 5, missing=missing)
+        for x in data:
+            x += 1e6  # a level far above the variation
+        run = _timecorr_runner(2, cfun=None, **SMOOTH[case])
+        assert _identical_under_removal(run, data, _cuts(300)[::2]) == []

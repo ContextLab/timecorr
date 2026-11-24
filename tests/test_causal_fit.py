@@ -1247,3 +1247,65 @@ def test_every_reducer_takes_a_partly_nan_row_as_undefined(name):
     reduced = _apply_frozen(smooth, frozen)
     assert np.array_equal(np.isnan(reduced).all(axis=1), partial)
     assert not np.isnan(reduced[~partial]).any()
+
+
+# ----------------------------------------------------------------------------
+# removal changes no bit of the correlations; with reducers fitted on the
+# first rows, none of the features either in the cases below
+# ----------------------------------------------------------------------------
+
+_FITTED_REMOVAL = {
+    "auto": (1, 12, dict(order=3, cfun=tc.autofc)),
+    "auto-isfc": (3, 12, dict(order=2)),
+    "pca": (1, 12, dict(order=3, cfun=tc.autofc, rfun="PCA", delta_rfun="PCA")),
+    "pca-isfc": (3, 9, dict(order=2, rfun="PCA", delta_rfun="PCA", ndims=3)),
+    "strength": (1, 12, dict(order=3, cfun=tc.autofc,
+                             rfun=tc.WeightedStrength(signed=True),
+                             delta_rfun="weighted_strength")),
+    "communities": (1, 12, dict(order=2, cfun=tc.autofc, rfun="weighted_strength",
+                                delta_rfun={1: tc.Communities(n=4),
+                                            2: "weighted_strength"})),
+    "ica": (1, 9, dict(order=2, cfun=tc.autofc, rfun={"model": "FastICA"},
+                       delta_rfun="weighted_strength")),
+    "factor-analysis": (1, 9, dict(order=2, cfun=tc.autofc, rfun="FactorAnalysis",
+                                   delta_rfun="weighted_strength")),
+    "truncated-svd": (1, 9, dict(order=2, cfun=tc.autofc, rfun="TruncatedSVD",
+                                 delta_rfun="weighted_strength")),
+    "incremental-pca": (1, 9, dict(order=2, cfun=tc.autofc, rfun="IncrementalPCA",
+                                   delta_rfun="weighted_strength")),
+    # a streamed step with more nodes than a block of the estimator
+    "streamed-60": (1, 60, dict(order=1, cfun=tc.autofc, rfun="weighted_strength",
+                                delta_rfun=None)),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_FITTED_REMOVAL))
+def test_fitted_features_are_exact_under_removal(case):
+    from .test_causal_features import _first_rows_identical, _modules
+
+    n_subjects, K, kw = _FITTED_REMOVAL[case]
+    data = _modules(n_subjects, 330, K)
+    kw = dict(causal=True, fit_timepoints=150, return_delta=True, **PARAMS, **kw)
+
+    def take(d):
+        return d[0] if n_subjects == 1 else d
+
+    whole, model = _quiet(tc.features, take(data), return_model=True, **kw)
+    for n in (150, 151, 160, 161, 200, 255, 256, 257, 329):
+        part = [x[:n] for x in data]
+        assert _first_rows_identical(whole, _quiet(tc.features, take(part), **kw), n), n
+        # the model of the whole series, applied to the shorter one
+        applied = _quiet(model.transform, take(part), return_delta=True)
+        assert _first_rows_identical(whole, applied, n), n
+
+
+def test_refits_are_exact_under_removal():
+    from .test_causal_features import _first_rows_identical, _modules
+
+    data = _modules(1, 330, 12)[0]
+    kw = dict(order=2, causal=True, cfun=tc.autofc, rfun="PCA",
+              delta_rfun="weighted_strength", fit_timepoints=150, refit_every=40,
+              return_delta=True, **PARAMS)
+    whole = _quiet(tc.features, data, **kw)
+    for n in (151, 190, 191, 230, 256, 271, 329):
+        assert _first_rows_identical(whole, _quiet(tc.features, data[:n], **kw), n), n

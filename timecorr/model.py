@@ -765,9 +765,9 @@ class FeaturesModel:
 
         Every row is computed causally, as by the ``features`` call that
         made the model: row ``t`` of every output uses rows ``0..t`` of
-        ``data`` and the frozen fits only, so it is unchanged (to 1e-9 for
-        features built from correlations; see ``features``) when later rows
-        are replaced or removed, and
+        ``data`` and the frozen fits only, so it is unchanged (bit for
+        bit; under removal with the built-in kernel functions, see
+        ``features``) when later rows are replaced or removed, and
         ``transform`` of the data of the fit returns what that call
         returned.
 

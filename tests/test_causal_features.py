@@ -856,3 +856,69 @@ def test_a_combine_function_of_the_users_warns_once(function):
             warnings.simplefilter("always")
             f(data, **{**kw, "combine": combine})
         assert not [c for c in caught if "guarantee" in str(c.message)]
+
+
+# ----------------------------------------------------------------------------
+# removal changes no bit of the correlations, so none of what is computed
+# from them row by row
+# ----------------------------------------------------------------------------
+
+
+def _modules(n_subjects, T, K, seed=0):
+    rng = np.random.default_rng(100 + seed)
+    shared = np.repeat(rng.standard_normal((T, K // 3 + 1)), 3, axis=1)[:, :K]
+    data = [shared + 0.7 * rng.standard_normal((T, K)) for _ in range(n_subjects)]
+    for x in data:
+        x[rng.random(x.shape) < 0.01] = np.nan
+    return data
+
+
+def _outputs(result):
+    """The arrays of every order of a ``features`` result (with
+    ``return_delta``: of both lists), without the data."""
+    out = []
+    for by_order in (result if isinstance(result, tuple) else (result,)):
+        for value in by_order[1:]:
+            if value is not None:
+                out += value if isinstance(value, list) else [value]
+    return out
+
+
+def _first_rows_identical(whole, part, n):
+    return all(np.array_equal(a[:n], b, equal_nan=True)
+               for a, b in zip(_outputs(whole), _outputs(part)))
+
+
+EXACT_REMOVAL = {
+    "unreduced": (1, 12, dict(order=2, cfun=tc.autofc, rfun=None, delta_rfun=None)),
+    "strength": (1, 12, dict(order=3, cfun=tc.autofc, rfun="strength",
+                             delta_rfun="strength")),
+    "eigenvector": (1, 12, dict(order=2, cfun=tc.autofc, rfun="eigenvector_centrality",
+                                delta_rfun="strength")),
+    "pagerank": (1, 12, dict(order=2, cfun=tc.autofc, rfun="pagerank_centrality",
+                             delta_rfun="strength")),
+    "pagerank-abs": (1, 12, dict(order=2, cfun=tc.autofc,
+                                 rfun="pagerank_centrality_abs", delta_rfun="strength")),
+    "isfc": (3, 9, dict(order=2, rfun="strength", delta_rfun="strength")),
+    "isfc-corrmean": (3, 9, dict(order=2, rfun="strength", delta_rfun="strength",
+                                 combine=tc.corrmean_combine)),
+    "isfc-tstat": (3, 9, dict(order=2, rfun="strength", delta_rfun="strength",
+                              combine=tc.tstat_combine)),
+    "wisfc": (3, 9, dict(order=2, rfun="strength", delta_rfun="strength", cfun=WISFC)),
+    "smoothing": (1, 12, dict(order=2, cfun=None, rfun=None, delta_rfun=None)),
+}
+REMOVAL_CUTS = (17, 65, 129, 160, 161, 255, 256, 257, 329)
+
+
+@pytest.mark.parametrize("case", sorted(EXACT_REMOVAL))
+def test_features_without_a_fit_are_exact_under_removal(case):
+    n_subjects, K, kw = EXACT_REMOVAL[case]
+    data = _modules(n_subjects, 330, K)
+
+    def run(d):
+        return _quiet(tc.features, d[0] if n_subjects == 1 else d, causal=True,
+                      return_delta=True, **PARAMS, **kw)
+
+    whole = run(data)
+    for n in REMOVAL_CUTS:
+        assert _first_rows_identical(whole, run([x[:n] for x in data]), n), n

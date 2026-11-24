@@ -1812,24 +1812,27 @@ def two_path_step(
         here) and recorded in summaries' ``fits_``.  Default: 1.
     causal : bool
         If True (keyword-only), row ``t`` of every output is computed from
-        rows ``0..t`` of the data only: it is unchanged (to 1e-9; bit for
-        bit when later rows are replaced) when later rows are replaced by
-        any values, NaN and inf included, or removed, and with
-        ``include_zero=False`` also when row ``t`` itself changes.
+        rows ``0..t`` of the data only: it is unchanged when later rows
+        are replaced by any values, NaN and inf included, or removed, and
+        with ``include_zero=False`` also when row ``t`` itself changes.
         Replacing later rows changes no bit, with every supported reducer.
-        Removing them changes the correlations by round-off, so the
-        outputs agree to 1e-9 where they depend continuously on the
-        correlations (no reduction, ``"strength"``, the summaries, and
-        linear models such as PCA once fitted); the eigenvector-based
-        graph measures (``"eigenvector_centrality"``, the PageRank
-        measures) can differ by more at a correlation matrix whose leading
-        eigenvalues coincide, and the t statistics of ``tstat_combine``,
-        which divide by the spread of the subjects' correlations, where
-        that spread is close to zero (always with two subjects and
-        ``isfc``: their correlations are the same), to about 1e-9 of
-        their magnitude instead.  With ``cfun=None`` the steps smooth their
-        input, and smoothed values agree to round-off relative to the
-        magnitude of the data (see ``timecorr``).  Default: False.  With
+        With the built-in kernel functions, removing them changes no bit
+        either (every reducer and ``combine`` function and ``cfun=None``
+        included): a row is computed with the same operations whatever
+        the length of the series.  With a kernel function of your own the
+        columns of a chunk of kernel rows are found from its weights and
+        can depend on the length; removal is then documented to 1e-9
+        where the outputs depend continuously on the correlations (no
+        reduction, ``"strength"``, the summaries, and linear models such
+        as PCA once fitted); the eigenvector-based graph measures
+        (``"eigenvector_centrality"``, the PageRank measures) can then
+        differ by more at a correlation matrix whose leading eigenvalues
+        coincide, and the t statistics of ``tstat_combine``, which divide
+        by the spread of the subjects' correlations, where that spread is
+        close to zero, agree to about 1e-9 of their magnitude instead;
+        with ``cfun=None`` the steps smooth their input, and smoothed
+        values then agree to round-off relative to the magnitude of the
+        data (see ``timecorr``).  Default: False.  With
         ``causal=True``:
 
         - both paths use backward kernels (``include_timepoints`` may be
@@ -1904,7 +1907,8 @@ def two_path_step(
         correlations there, a summary 1, the shift null 40 rows of
         input.  The fits do not change, bit for bit, whatever follows row
         ``n-1``.  Every row is then reduced with them: row ``t >= n`` is
-        unchanged (to 1e-9; bit for bit under replacement) when rows after
+        unchanged (bit for bit; under removal with the built-in kernel
+        functions, see ``causal``) when rows after
         ``t`` are replaced or removed, and a row ``t < n`` (in sample: the
         fits have read rows after it) when rows from ``n`` on are replaced
         or removed.  ``n`` equal to the number of timepoints fits on every
@@ -2955,24 +2959,27 @@ def features(
         Default: False.
     causal : bool
         If True (keyword-only), row ``t`` of every output is computed from
-        rows ``0..t`` of the data only: it is unchanged (to 1e-9; bit for
-        bit when later rows are replaced) when later rows are replaced by
-        any values, NaN and inf included, or removed, and with
-        ``include_zero=False`` also when row ``t`` itself changes.
+        rows ``0..t`` of the data only: it is unchanged when later rows
+        are replaced by any values, NaN and inf included, or removed, and
+        with ``include_zero=False`` also when row ``t`` itself changes.
         Replacing later rows changes no bit, with every supported reducer.
-        Removing them changes the correlations by round-off, so the
-        outputs agree to 1e-9 where they depend continuously on the
-        correlations (no reduction, ``"strength"``, the summaries, and
-        linear models such as PCA once fitted); the eigenvector-based
-        graph measures (``"eigenvector_centrality"``, the PageRank
-        measures) can differ by more at a correlation matrix whose leading
-        eigenvalues coincide, and the t statistics of ``tstat_combine``,
-        which divide by the spread of the subjects' correlations, where
-        that spread is close to zero (always with two subjects and
-        ``isfc``: their correlations are the same), to about 1e-9 of
-        their magnitude instead.  With ``cfun=None`` the steps smooth their
-        input, and smoothed values agree to round-off relative to the
-        magnitude of the data (see ``timecorr``).  Default: False.  With
+        With the built-in kernel functions, removing them changes no bit
+        either (every reducer and ``combine`` function and ``cfun=None``
+        included): a row is computed with the same operations whatever
+        the length of the series.  With a kernel function of your own the
+        columns of a chunk of kernel rows are found from its weights and
+        can depend on the length; removal is then documented to 1e-9
+        where the outputs depend continuously on the correlations (no
+        reduction, ``"strength"``, the summaries, and linear models such
+        as PCA once fitted); the eigenvector-based graph measures
+        (``"eigenvector_centrality"``, the PageRank measures) can then
+        differ by more at a correlation matrix whose leading eigenvalues
+        coincide, and the t statistics of ``tstat_combine``, which divide
+        by the spread of the subjects' correlations, where that spread is
+        close to zero, agree to about 1e-9 of their magnitude instead;
+        with ``cfun=None`` the steps smooth their input, and smoothed
+        values then agree to round-off relative to the magnitude of the
+        data (see ``timecorr``).  Default: False.  With
         ``causal=True``:
 
         - both paths use backward kernels (``include_timepoints`` may be
@@ -3047,7 +3054,8 @@ def features(
         correlations there, a summary 1, the shift null 40 rows of
         input.  The fits do not change, bit for bit, whatever follows row
         ``n-1``.  Every row is then reduced with them: row ``t >= n`` is
-        unchanged (to 1e-9; bit for bit under replacement) when rows after
+        unchanged (bit for bit; under removal with the built-in kernel
+        functions, see ``causal``) when rows after
         ``t`` are replaced or removed, and a row ``t < n`` (in sample: the
         fits have read rows after it) when rows from ``n`` on are replaced
         or removed.  ``n`` equal to the number of timepoints fits on every

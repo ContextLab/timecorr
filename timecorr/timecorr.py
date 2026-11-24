@@ -30,6 +30,7 @@ from .helpers import (
     _check_causal_kernel,
     _check_min_samples,
     _check_rfun,
+    _group_span,
     _lag_kernel,
     _warn_user,
     autofc,
@@ -73,29 +74,39 @@ def _causal_smooth(x, weights, min_samples):
     observed = np.where(valid, x, 0.0)
     valid = valid.astype(np.float64)
     out = np.full(observed.shape, np.nan)
-    for t0, t1, c0, c1, _, w in blocks(as_kernel(weights), CHUNK, _abs_weights):
+    for t0, t1, c0, c1, _, block in blocks(as_kernel(weights), CHUNK, _abs_weights):
         if c1 <= c0:
             continue
+        # the chunk with the shapes of a chunk of a series without an end
+        # (rows of zero weight after the last row, columns of zeros after
+        # the last timepoint), so that the operations that give a row do
+        # not depend on the number of rows after it
+        k = t1 - t0
+        end = max(c1, t0 + CHUNK)
+        w = np.zeros((CHUNK, end - c0))
+        w[:k, : c1 - c0] = block
+        c1 = end
         # each row scaled by its largest weight, so squares do not underflow
         peak = w.max(axis=1, keepdims=True, initial=0.0)
         with np.errstate(invalid="ignore"):
             w = np.divide(w, peak, out=np.zeros_like(w), where=peak != 0)
-            den = w @ valid[c0:c1]
+            den = w @ _group_span(valid, c0, c1)
             defined = den > 0
             # the chunk's samples are centered on its first row's weighted
             # mean (of samples that row weights: none after it), so the
             # round-off of the sums is relative to the variation of the
             # data, not to its level
             first = np.zeros(den.shape[1])
-            np.divide(w[0] @ observed[c0:c1], den[0], out=first, where=defined[0])
-            centered = observed[c0:c1] - first
-            centered *= valid[c0:c1]
+            np.divide(w[0] @ _group_span(observed, c0, c1), den[0], out=first,
+                      where=defined[0])
+            centered = _group_span(observed, c0, c1) - first
+            centered *= _group_span(valid, c0, c1)
             num = w @ centered
             if min_samples is not None:
-                ess = np.divide(den**2, (w * w) @ valid[c0:c1],
+                ess = np.divide(den**2, (w * w) @ _group_span(valid, c0, c1),
                                 out=np.zeros_like(den), where=defined)
                 defined &= ess >= min_samples * (1 - _MIN_SAMPLES_RTOL)
-        np.divide(num, den, out=out[t0:t1], where=defined)
+        np.divide(num[:k], den[:k], out=out[t0:t1], where=defined[:k])
         out[t0:t1] += first
     undefined = np.isnan(out).any(axis=1)
     if undefined.any():
@@ -885,26 +896,29 @@ def timecorr(
         raise ``ValueError``.  Default: None.
     causal : bool
         True: row ``t`` of the output uses no sample after timepoint ``t``.
-        It is unchanged (to 1e-9) when the rows after ``t`` are replaced by
-        any values, NaN and inf included, or removed; with
+        It is unchanged when the rows after ``t`` are replaced by any
+        values, NaN and inf included, or removed; with
         ``include_zero=False`` also when row ``t`` itself changes.
         Replacing later rows changes no bit, with every supported ``rfun``.
-        Removing them changes the correlations by round-off, so the
-        outputs agree to 1e-9 where they depend continuously on the
-        correlations (no reduction, ``"strength"``, the summaries, and
-        linear models such as PCA once fitted); the eigenvector-based
-        graph measures (``"eigenvector_centrality"``, the PageRank
-        measures) can differ by more at a correlation matrix whose leading
-        eigenvalues coincide, and the t statistics of ``tstat_combine``,
-        which divide by the spread of the subjects' correlations, where
-        that spread is close to zero (always with two subjects and
-        ``isfc``: their correlations are the same), to about 1e-9 of
-        their magnitude instead.  Smoothed values (``cfun=None``) are on the
-        scale of the data, not bounded like correlations: when later rows
-        are removed they agree to round-off relative to the magnitude of
-        the data, that is to 1e-9 or 8 units in the last place of the
-        largest magnitude of the data, whichever is larger (1.2e-7 for
-        data near 1e8); replacement still changes no bit.  Keyword only.
+        With the built-in kernel functions, removing them changes no bit
+        either (every ``rfun`` and ``combine`` function and ``cfun=None``
+        included): a row is computed with the same operations whatever
+        the length of the series.  With a kernel function of your own the
+        columns of a chunk of kernel rows are found from its weights and
+        can depend on the length; removal is then documented to 1e-9
+        where the outputs depend continuously on the correlations (no
+        reduction, ``"strength"``, the summaries, and linear models such
+        as PCA once fitted); the eigenvector-based graph measures
+        (``"eigenvector_centrality"``, the PageRank measures) can then
+        differ by more at a correlation matrix whose leading eigenvalues
+        coincide, and the t statistics of ``tstat_combine``, which divide
+        by the spread of the subjects' correlations, where that spread is
+        close to zero, agree to about 1e-9 of their magnitude instead;
+        smoothed values (``cfun=None``), which are on the scale of the
+        data, then agree to round-off relative to the magnitude of the
+        data, that is to 1e-9 or 8 units in the last place of the largest
+        magnitude of the data, whichever is larger (1.2e-7 for data near
+        1e8).  Keyword only.
         Default: False.  With ``causal=True``:
 
         - the kernel is backward: ``include_timepoints`` 'all' (the
@@ -976,7 +990,8 @@ def timecorr(
         It is fitted to the correlations of rows ``0..n-1`` that are
         defined (not NaN: see ``min_samples``; a model needs 2 such rows,
         a summary 1) and then reduces every row, so row ``t >= n`` is
-        unchanged (to 1e-9; bit for bit under replacement) when rows after
+        unchanged (bit for bit; under removal with the built-in kernel
+        functions, see ``causal``) when rows after
         ``t`` are replaced or removed, and a row ``t < n`` when rows from
         ``n`` on are.  ``n`` equal to the number of timepoints fits on
         every row.  A model must be a linear map applied to each row by itself.

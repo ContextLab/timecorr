@@ -3866,8 +3866,10 @@ def _varying_first(arrays, rfun):
     multiplied by 0 and the fit holds NaN.  The order of the columns does
     not change what a linear model computes.  FastICA also divides by the
     singular values of its input, so it is asked for no more components
-    than columns vary (a component beyond them is round-off divided by
-    round-off, or NaN).
+    than the rank of its centered rows (``numpy.linalg.matrix_rank``; at
+    most the columns that vary and the rows less one: a component beyond
+    it is round-off divided by round-off, or NaN, and the fit does not
+    reproduce its rows).
     """
     if not _is_fastica(rfun):
         return None, None
@@ -3912,8 +3914,11 @@ def _model_reduce(corrs, rfun, ndims, return_model=False):
                     "before).  Use another model (for example 'PCA') or more "
                     "features at that order."
                 )
-            # no more components than columns that vary (the others add none)
-            n_fit = min(n_fit, varying)
+            # no more components than the rank of the centered rows:
+            # FastICA divides by their singular values
+            stacked = np.vstack(arrays)
+            rank = int(np.linalg.matrix_rank(stacked - stacked.mean(axis=0)))
+            n_fit = min(n_fit, max(1, rank))
             given = rfun.get("model") if isinstance(rfun, dict) else None
             asked = getattr(given, "n_components", None)
             if given is not None and not isinstance(given, (str, type)) and (
@@ -3961,7 +3966,8 @@ def _model_reduce(corrs, rfun, ndims, return_model=False):
         _warn_user(
             f"reduce: the data supply at most {n_fit} components ({n_features} "
             f"features, {n_samples} samples"
-            + (f", {varying} features that vary" if varying is not None else "")
+            + (", FastICA: no more than the rank of the centered samples"
+               if varying is not None else "")
             + f") but {ndims} were requested; the "
             f"output is padded with {pad} zero column{'s' if pad > 1 else ''}."
         )

@@ -1932,13 +1932,17 @@ def two_path_step(
         A model asked for as many components as its input
         has columns, or more, changes nothing (zero columns are appended
         for the components beyond them), as without ``causal``.
-        ``"FastICA"`` is given the columns that vary over the training
-        rows first and is asked for no more components than there are
-        such columns (zero columns are appended for the others, with a
-        warning; ``ValueError`` when no column varies): scikit-learn sets
-        the sign of a component from its loading on the first column,
-        which for vectorized correlations is a diagonal entry, 1 in every
-        row, and the fit held NaN where that loading was exactly 0.
+        ``"FastICA"`` (when it is fitted: asked for fewer components than
+        columns) is given the columns that vary over the training rows
+        first and is asked for no more components than the rank of the
+        centered training rows (zero columns are appended for the
+        others, with a warning; ``ValueError`` when no column varies):
+        scikit-learn sets the sign of a component from its loading on
+        the first column, which for vectorized correlations is a
+        diagonal entry, 1 in every row, and the fit held NaN where that
+        loading was exactly 0; and it divides by the singular values of
+        the rows, so a component beyond their rank did not reproduce the
+        training rows.
         ``"PCA"`` is fitted with ``svd_solver="full"``
         unless a model dict gives a solver, because the randomized solver
         scikit-learn chooses for large inputs does not reproduce its
@@ -3089,13 +3093,17 @@ def features(
         A model asked for as many components as its input
         has columns, or more, changes nothing (zero columns are appended
         for the components beyond them), as without ``causal``.
-        ``"FastICA"`` is given the columns that vary over the training
-        rows first and is asked for no more components than there are
-        such columns (zero columns are appended for the others, with a
-        warning; ``ValueError`` when no column varies): scikit-learn sets
-        the sign of a component from its loading on the first column,
-        which for vectorized correlations is a diagonal entry, 1 in every
-        row, and the fit held NaN where that loading was exactly 0.
+        ``"FastICA"`` (when it is fitted: asked for fewer components than
+        columns) is given the columns that vary over the training rows
+        first and is asked for no more components than the rank of the
+        centered training rows (zero columns are appended for the
+        others, with a warning; ``ValueError`` when no column varies):
+        scikit-learn sets the sign of a component from its loading on
+        the first column, which for vectorized correlations is a
+        diagonal entry, 1 in every row, and the fit held NaN where that
+        loading was exactly 0; and it divides by the singular values of
+        the rows, so a component beyond their rank did not reproduce the
+        training rows.
         ``"PCA"`` is fitted with ``svd_solver="full"``
         unless a model dict gives a solver, because the randomized solver
         scikit-learn chooses for large inputs does not reproduce its

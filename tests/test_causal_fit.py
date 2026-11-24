@@ -19,6 +19,8 @@ import sys
 import warnings
 
 import hypertools as hyp
+import functools
+
 import numpy as np
 import pytest
 
@@ -1373,10 +1375,10 @@ def test_a_frozen_model_reduces_a_row_whatever_the_number_of_rows():
     for columns, ndims in ((136, 3), (153, 3), (21, 5), (45, 9)):
         rows = rng.normal(size=(300, columns))
         _, fitted = _model_reduce([rows[:40]], "PCA", ndims, return_model=True)
-        # the case: one product of all rows differs with the number of rows
+        # one product of all rows differed with the number of rows on macOS
+        # (Accelerate; not with OpenBLAS): at 9 to 11 rows of 153 columns,
+        # at 59 of the 299 lengths of 21 columns
         together = np.asarray(hyp.reduce(rows, reduce=fitted.model))
-        assert any(not np.array_equal(np.asarray(hyp.reduce(rows[:n], reduce=fitted.model)),
-                                      together[:n]) for n in range(2, 12))
         whole = fitted.apply([rows])[0]
         assert np.allclose(whole, together, rtol=0, atol=1e-12)
         for n in list(range(1, 14)) + [41, 127, 128, 129, 255, 256, 257, 299]:
@@ -1399,6 +1401,8 @@ def test_refitted_models_are_exact_under_removal():
     for n in (127, 81, 120, 121, 128, 200, 201, 258):
         assert _first_rows_identical(whole, _quiet(tc.features, x[:n], **kw), n), n
 
+
+WISFC_2 = functools.partial(tc.wisfc, subject_weights=np.ones((2, 2)) - np.eye(2))
 
 _STREAMED = {
     "strength": (1, 30, dict(cfun=tc.autofc, rfun="weighted_strength",
@@ -1538,3 +1542,42 @@ def test_fastica_without_a_varying_column_says_so():
     rows = np.ones((40, 3))
     with pytest.raises(ValueError, match="no column of its input varies"):
         _quiet(_model_reduce, [rows], "FastICA", 2, return_model=True)
+
+
+def test_fastica_with_fewer_training_rows_than_components():
+    # review (a draw of the random removal test that was discarded): 9
+    # defined training rows have rank 8 once centered; FastICA asked for 9
+    # components divides by a singular value of 0, and the fit did not
+    # reproduce its rows (by 0.363).  It gets rows - 1 components.
+    rng = np.random.default_rng(65)
+    data = [rng.standard_normal((60, 15)) for _ in range(2)]
+    kw = dict(causal=True, cfun=tc.autofc, combine=tc.mean_combine, rfun="FastICA",
+              weights_function=tc.uniform_weights, weights_params={}, fit_timepoints=11)
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        whole = tc.timecorr(data, **kw)
+    assert any("at most 8 components" in str(w.message) for w in caught)
+    assert whole.shape == (60, 15)
+    assert np.isnan(whole[:2]).all() and np.isfinite(whole[2:]).all()
+    assert (whole[2:, 8:] == 0).all() and np.ptp(whole[2:, :8], axis=0).min() > 0
+    part = _quiet(tc.timecorr, [x[:28] for x in data], **kw)
+    assert np.array_equal(whole[:28], part, equal_nan=True)
+
+
+def test_fastica_gets_no_more_components_than_the_rank_of_its_rows():
+    # another draw of the random removal test: the correlations of the first
+    # rows of two subjects (5 defined rows each, 91 columns) have rank 4,
+    # and FastICA asked for 9 components did not reproduce them (by 8.7)
+    rng = np.random.default_rng(85)
+    data = [rng.standard_normal((11, 13)) for _ in range(2)]
+    kw = dict(causal=True, cfun=WISFC_2, rfun="FastICA", fit_timepoints=7,
+              weights_function=tc.laplace_weights, weights_params={"scale": 4})
+    whole = _quiet(tc.timecorr, data, **kw)
+    assert [w.shape for w in whole] == [(11, 13)] * 2
+    for w in whole:
+        used = np.flatnonzero(np.ptp(w[2:], axis=0) > 0)
+        assert 1 <= used.size <= 4 and np.isfinite(w[2:]).all()
+    part = _quiet(tc.timecorr, [x[:9] for x in data], **kw)
+    assert all(np.array_equal(w[:9], p, equal_nan=True) for w, p in zip(whole, part))

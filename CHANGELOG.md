@@ -151,9 +151,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     it has columns (with at least as many, the columns are returned as they
     are, as for every model), is given the columns that vary over the
     training rows first
-    and is asked for no more components than there are such columns (zero
-    columns are appended for the others, with the warning of `reduce`;
-    `ValueError` when no column varies). scikit-learn's FastICA sets the
+    and is asked for no more components than the rank of the centered
+    training rows (`numpy.linalg.matrix_rank`; at most the columns that
+    vary and the rows less one: zero columns are appended for the others,
+    with the warning of `reduce`; `ValueError` when no column varies).
+    FastICA divides by the singular values of its rows, and a fit with more
+    components than their rank did not reproduce its training rows (the
+    call raised; found by the random removal test, for example 9 defined
+    training rows and 15 components). scikit-learn's FastICA sets the
     sign of each component from its loading on the first column, which for
     vectorized correlations is a diagonal entry (1 in every row): the
     loading is 0 up to the round-off of the SVD, and where it was exactly 0

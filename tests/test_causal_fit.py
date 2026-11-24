@@ -19,6 +19,8 @@ import sys
 import warnings
 
 import hypertools as hyp
+import functools
+
 import numpy as np
 import pytest
 
@@ -1247,3 +1249,450 @@ def test_every_reducer_takes_a_partly_nan_row_as_undefined(name):
     reduced = _apply_frozen(smooth, frozen)
     assert np.array_equal(np.isnan(reduced).all(axis=1), partial)
     assert not np.isnan(reduced[~partial]).any()
+
+
+# ----------------------------------------------------------------------------
+# removal changes no bit of the correlations; with reducers fitted on the
+# first rows, none of the features either in the cases below
+# ----------------------------------------------------------------------------
+
+_FITTED_REMOVAL = {
+    "auto": (1, 12, dict(order=3, cfun=tc.autofc)),
+    "auto-isfc": (3, 12, dict(order=2)),
+    "pca": (1, 12, dict(order=3, cfun=tc.autofc, rfun="PCA", delta_rfun="PCA")),
+    "pca-isfc": (3, 9, dict(order=2, rfun="PCA", delta_rfun="PCA", ndims=3)),
+    "strength": (1, 12, dict(order=3, cfun=tc.autofc,
+                             rfun=tc.WeightedStrength(signed=True),
+                             delta_rfun="weighted_strength")),
+    "communities": (1, 12, dict(order=2, cfun=tc.autofc, rfun="weighted_strength",
+                                delta_rfun={1: tc.Communities(n=4),
+                                            2: "weighted_strength"})),
+    "ica": (1, 9, dict(order=2, cfun=tc.autofc, rfun={"model": "FastICA"},
+                       delta_rfun="weighted_strength")),
+    "factor-analysis": (1, 9, dict(order=2, cfun=tc.autofc, rfun="FactorAnalysis",
+                                   delta_rfun="weighted_strength")),
+    "truncated-svd": (1, 9, dict(order=2, cfun=tc.autofc, rfun="TruncatedSVD",
+                                 delta_rfun="weighted_strength")),
+    "incremental-pca": (1, 9, dict(order=2, cfun=tc.autofc, rfun="IncrementalPCA",
+                                   delta_rfun="weighted_strength")),
+    # a streamed step with more nodes than a block of the estimator
+    "streamed-60": (1, 60, dict(order=1, cfun=tc.autofc, rfun="weighted_strength",
+                                delta_rfun=None)),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_FITTED_REMOVAL))
+def test_fitted_features_are_exact_under_removal(case):
+    from .test_causal_features import _first_rows_identical, _modules
+
+    n_subjects, K, kw = _FITTED_REMOVAL[case]
+    data = _modules(n_subjects, 330, K)
+    kw = dict(causal=True, fit_timepoints=150, return_delta=True, **PARAMS, **kw)
+
+    def take(d):
+        return d[0] if n_subjects == 1 else d
+
+    whole, model = _quiet(tc.features, take(data), return_model=True, **kw)
+    for n in (150, 151, 160, 161, 200, 255, 256, 257, 329):
+        part = [x[:n] for x in data]
+        assert _first_rows_identical(whole, _quiet(tc.features, take(part), **kw), n), n
+        # the model of the whole series, applied to the shorter one
+        applied = _quiet(model.transform, take(part), return_delta=True)
+        assert _first_rows_identical(whole, applied, n), n
+
+
+def test_refits_are_exact_under_removal():
+    from .test_causal_features import _first_rows_identical, _modules
+
+    data = _modules(1, 330, 12)[0]
+    kw = dict(order=2, causal=True, cfun=tc.autofc, rfun="PCA",
+              delta_rfun="weighted_strength", fit_timepoints=150, refit_every=40,
+              return_delta=True, **PARAMS)
+    whole = _quiet(tc.features, data, **kw)
+    for n in (151, 190, 191, 230, 256, 271, 329):
+        assert _first_rows_identical(whole, _quiet(tc.features, data[:n], **kw), n), n
+
+
+# ----------------------------------------------------------------------------
+# review of the exact-removal branch: nothing depends on the blocks of
+# features of a streamed step, which depend on T and max_memory_gb
+# ----------------------------------------------------------------------------
+
+
+def _review_input():
+    x = np.random.default_rng(123).normal(size=(259, 17))
+    x[50, 3] = np.nan
+    common = dict(causal=True, cfun=tc.autofc, fit_timepoints=40,
+                  weights_params={"var": 25}, delta_weights_params={"var": 9})
+    return x, common
+
+
+def test_streamed_rows_do_not_depend_on_the_block_of_features():
+    from timecorr.helpers import _corr_row_blocks, _lag_kernel
+
+    x, _ = _review_input()
+    kernel = _lag_kernel(len(x), tc.gaussian_weights, {"var": 25}, "backward", True, None)
+
+    def rows(step):
+        return np.concatenate([R for _, _, R, _, _ in _corr_row_blocks(
+            x, x, kernel, True, step, causal=True)])
+
+    whole = rows(17)
+    for step in (1, 3, 8, 16):
+        assert np.array_equal(whole, rows(step), equal_nan=True), step
+    # the diagonal is 1 where defined, and the two orientations of a pair
+    # agree to round-off
+    defined = ~np.isnan(whole[0, 0])
+    assert (whole[np.arange(17), np.arange(17)][:, defined] == 1).all()
+    assert np.nanmax(np.abs(whole - whole.transpose(1, 0, 2))) < 1e-12
+
+
+@pytest.mark.parametrize("order", [1, 2])
+def test_streamed_summaries_are_exact_under_removal_and_max_memory(order):
+    from .test_causal_features import _first_rows_identical
+
+    x, common = _review_input()
+    kw = dict(order=order, rfun="weighted_strength", delta_rfun="weighted_strength",
+              return_delta=True, **common)
+    whole, model = _quiet(tc.features, x, max_memory_gb=0.01, return_model=True, **kw)
+    # the reviewer's cut, and others
+    for n in (63, 41, 64, 127, 129, 200, 258):
+        part = _quiet(tc.features, x[:n], max_memory_gb=0.01, **kw)
+        assert _first_rows_identical(whole, part, n), n
+        assert _first_rows_identical(whole, _quiet(model.transform, x[:n],
+                                                   return_delta=True), n), n
+    for memory in (None, 0.006, 0.008, 0.02, 0.05, 1.0):
+        other = _quiet(tc.features, x, max_memory_gb=memory, **kw)
+        assert _first_rows_identical(whole, other, len(x)), memory
+
+
+def test_a_frozen_model_reduces_a_row_whatever_the_number_of_rows():
+    from timecorr.helpers import _model_reduce
+
+    import hypertools as hyp
+
+    rng = np.random.default_rng(0)
+    for columns, ndims in ((136, 3), (153, 3), (21, 5), (45, 9)):
+        rows = rng.normal(size=(300, columns))
+        _, fitted = _model_reduce([rows[:40]], "PCA", ndims, return_model=True)
+        # one product of all rows differed with the number of rows on macOS
+        # (Accelerate; not with OpenBLAS): at 9 to 11 rows of 153 columns,
+        # at 59 of the 299 lengths of 21 columns
+        together = np.asarray(hyp.reduce(rows, reduce=fitted.model))
+        whole = fitted.apply([rows])[0]
+        assert np.allclose(whole, together, rtol=0, atol=1e-12)
+        for n in list(range(1, 14)) + [41, 127, 128, 129, 255, 256, 257, 299]:
+            assert np.array_equal(fitted.apply([rows[:n]])[0], whole[:n]), n
+        # and whatever the other arrays of the list
+        both = fitted.apply([rows[:127], rows[100:]])
+        assert np.array_equal(both[0], whole[:127])
+        assert fitted.apply([rows[:0]])[0].shape == (0, ndims)
+
+
+def test_refitted_models_are_exact_under_removal():
+    # the reviewer's input: [2][126, 2] was 0.15126289987033542 with 259
+    # rows and 0.15126289987033548 with 127
+    from .test_causal_features import _first_rows_identical
+
+    x, common = _review_input()
+    kw = dict(order=3, rfun="PCA", delta_rfun="PCA", ndims=3, refit_every=40,
+              return_delta=True, **common)
+    whole = _quiet(tc.features, x, **kw)
+    for n in (127, 81, 120, 121, 128, 200, 201, 258):
+        assert _first_rows_identical(whole, _quiet(tc.features, x[:n], **kw), n), n
+
+
+WISFC_2 = functools.partial(tc.wisfc, subject_weights=np.ones((2, 2)) - np.eye(2))
+
+_STREAMED = {
+    "strength": (1, 30, dict(cfun=tc.autofc, rfun="weighted_strength",
+                             delta_rfun="weighted_strength")),
+    "strength-split-signed": (1, 30, dict(
+        cfun=tc.autofc, rfun=tc.WeightedStrength(signed=True, split=True),
+        delta_rfun=tc.WeightedStrength(split=True))),
+    "communities": (1, 30, dict(
+        cfun=tc.autofc, rfun={1: tc.Communities(n=4, signed=True), 2: "weighted_strength"},
+        delta_rfun={1: tc.Communities(n=5), 2: "weighted_strength"})),
+    "auto": (1, 30, dict(cfun=tc.autofc)),
+    "isfc": (3, 24, dict(rfun="weighted_strength", delta_rfun="weighted_strength")),
+    "isfc-auto": (3, 24, dict()),
+    "wisfc-communities": (3, 24, dict(
+        cfun=WISFC, rfun={1: tc.Communities(n=4), 2: "weighted_strength"},
+        delta_rfun="weighted_strength")),
+}
+
+
+@pytest.mark.parametrize("case", sorted(_STREAMED))
+def test_streamed_steps_do_not_depend_on_the_memory_limit(case):
+    # the blocks of nodes of a streamed step follow from max_memory_gb and
+    # T (30 nodes: blocks of 4 to 30 with these limits)
+    from .test_causal_features import _first_rows_identical, _modules
+
+    n_subjects, K, kw = _STREAMED[case]
+    data = _modules(n_subjects, 200, K, seed=3)
+    kw = dict(order=2, causal=True, fit_timepoints=80, return_delta=True,
+              weights_params={"var": 25}, delta_weights_params={"var": 9}, **kw)
+
+    def run(d, memory):
+        return _quiet(tc.features, d[0] if n_subjects == 1 else d,
+                      max_memory_gb=memory, **kw)
+
+    whole = run(data, None)
+    for memory in (0.02, 0.03, 0.05, 0.1):
+        assert _first_rows_identical(whole, run(data, memory), 200), memory
+    for n in (81, 127, 129, 160, 199):
+        assert _first_rows_identical(whole, run([x[:n] for x in data], 0.05), n), n
+
+
+# ----------------------------------------------------------------------------
+# FastICA and the constant columns of vectorized correlations
+# ----------------------------------------------------------------------------
+
+
+def test_fastica_is_fitted_with_a_varying_first_column():
+    # scikit-learn's FastICA multiplies each whitening vector by the sign of
+    # its loading on the first feature.  The first column of vectorized
+    # autocorrelations is a diagonal entry, 1 in every row: its loading is 0
+    # up to the round-off of the SVD, and where it is exactly 0 the
+    # component is multiplied by 0 and the fit holds NaN ("A has a NaN
+    # entry"; 136 of 240 of these calls on macOS, and
+    # test_linear_models_are_taken_and_guaranteed[FastICA] on Linux)
+    kernels = dict(weights_params={"var": 25}, delta_weights_params={"var": 16})
+    for seed in range(20):
+        for K, ndims in ((2, 1), (3, 2), (4, 3), (5, 3)):
+            x = np.random.default_rng(seed).standard_normal((120, K))
+            kw = dict(order=2, causal=True, cfun=tc.autofc, rfun="FastICA",
+                      delta_rfun="FastICA", ndims=ndims, fit_timepoints=80,
+                      return_delta=True, **kernels)
+            # (ndims 1: order 2 has one feature, whose correlations are one
+            # constant column, returned as it is)
+            (X, D), model = _quiet(tc.features, x, return_model=True, **kw)
+            for out in X[1:] + D[1:]:
+                assert out.shape == (120, ndims)
+                defined = ~np.isnan(out).any(axis=1)
+                assert defined[20:].all() and np.isfinite(out[defined]).all()
+            # the model applied to other rows, and to the rows of the fit
+            again = _quiet(model.transform, x[:100], return_delta=True)
+            assert all(np.array_equal(a[:100], b, equal_nan=True)
+                       for a, b in zip(X[1:] + D[1:], again[0][1:] + again[1][1:]))
+    # the fitted model itself: its components are in the order of the
+    # columns given, and it reduces the rows of the fit to what the fit gave
+    from timecorr.helpers import _model_reduce
+
+    rng = np.random.default_rng(2)
+    rows = np.tanh(rng.standard_normal((126, 3)))
+    rows[:, [0, 2]] = 1.0
+    reduced, fitted = _quiet(_model_reduce, [rows], "FastICA", 1, return_model=True)
+    assert list(fitted.order) == [1, 0, 2]
+    assert fitted.components.shape == (1, 3) and fitted.components[0, 1] != 0
+    assert np.allclose(fitted.components[0, [0, 2]], 0, atol=1e-12)
+    assert np.allclose(fitted.apply([rows])[0], reduced[0], rtol=0, atol=1e-9)
+    # other models, and FastICA with a first column that varies, as before
+    assert _quiet(_model_reduce, [rows], "PCA", 1, return_model=True)[1].order is None
+    assert _quiet(_model_reduce, [rows[:, ::-1][:, [1, 0, 2]]], "FastICA", 1,
+                  return_model=True)[1].order is None
+
+
+def test_fastica_asked_for_every_column_changes_nothing():
+    # review: a model asked for at least as many components as columns
+    # returns the columns as they are; the FastICA handling of constant
+    # columns came before that and fitted one component with zero columns
+    from timecorr.helpers import _model_reduce
+
+    rows = np.column_stack([np.ones(40), np.random.default_rng(2).normal(size=40),
+                            np.ones(40)])
+    reduced, fitted = _quiet(_model_reduce, [rows], "FastICA", 3, return_model=True)
+    assert fitted.model is None and fitted.order is None and fitted.pad == 0
+    assert np.array_equal(reduced[0], rows)
+    for K in (1, 2):
+        x = np.random.default_rng(K).standard_normal((120, K))
+        kw = dict(order=1, causal=True, cfun=tc.autofc, delta_rfun=None,
+                  weights_params={"var": 25}, delta_weights_params={"var": 16})
+        plain = _quiet(tc.features, x, rfun=None, **kw)[1]
+        for ndims in (3, 5):
+            out = _quiet(tc.features, x, rfun="FastICA", ndims=ndims, fit_timepoints=80,
+                         **kw)[1]
+            assert out.shape == (120, ndims)
+            assert np.array_equal(out[:, :plain.shape[1]], plain, equal_nan=True)
+            defined = ~np.isnan(plain).any(axis=1)
+            assert (out[defined][:, plain.shape[1]:] == 0).all()
+
+
+def test_fastica_given_as_a_class_or_an_object_is_fastica():
+    # review: only the name was recognized; the class still raised "array
+    # must not contain infs or NaNs"
+    from sklearn.decomposition import FastICA
+
+    x = np.random.default_rng(0).normal(size=(120, 2))
+    kw = dict(causal=True, cfun=tc.autofc, weights_params={"var": 25}, fit_timepoints=80)
+    named = _quiet(tc.timecorr, x, rfun="FastICA", **kw)
+    assert named.shape == (120, 2) and np.isfinite(named[10:]).all()
+    forms = [{"model": FastICA}, {"model": "FastICA"}, {"model": "FastICA", "kwargs": {}},
+             {"model": FastICA, "kwargs": {"max_iter": 300}},
+             {"model": FastICA(random_state=0)}]
+    for rfun in forms:
+        out = _quiet(tc.timecorr, x, rfun=rfun, **kw)
+        assert np.isfinite(out[10:]).all(), rfun
+        assert np.allclose(np.abs(out[10:]), np.abs(named[10:]), rtol=0, atol=1e-6), rfun
+
+
+def test_fastica_without_a_varying_column_says_so():
+    from timecorr.helpers import _model_reduce
+
+    rows = np.ones((40, 3))
+    with pytest.raises(ValueError, match="no column of its input varies"):
+        _quiet(_model_reduce, [rows], "FastICA", 2, return_model=True)
+
+
+def test_fastica_with_fewer_training_rows_than_components():
+    # review (a draw of the random removal test that was discarded): 9
+    # defined training rows have rank 8 once centered; FastICA asked for 9
+    # components divides by a singular value of 0, and the fit did not
+    # reproduce its rows (by 0.363).  It gets rows - 1 components.
+    rng = np.random.default_rng(65)
+    data = [rng.standard_normal((60, 15)) for _ in range(2)]
+    kw = dict(causal=True, cfun=tc.autofc, combine=tc.mean_combine, rfun="FastICA",
+              weights_function=tc.uniform_weights, weights_params={}, fit_timepoints=11)
+    import warnings
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        whole = tc.timecorr(data, **kw)
+    assert any("at most 8 components" in str(w.message) for w in caught)
+    assert whole.shape == (60, 15)
+    assert np.isnan(whole[:2]).all() and np.isfinite(whole[2:]).all()
+    assert (whole[2:, 8:] == 0).all() and np.ptp(whole[2:, :8], axis=0).min() > 0
+    part = _quiet(tc.timecorr, [x[:28] for x in data], **kw)
+    assert np.array_equal(whole[:28], part, equal_nan=True)
+
+
+def test_fastica_gets_no_more_components_than_the_rank_of_its_rows():
+    # another draw of the random removal test: the correlations of the first
+    # rows of two subjects (5 defined rows each, 91 columns) have rank 4,
+    # and FastICA asked for 9 components did not reproduce them (by 8.7)
+    rng = np.random.default_rng(85)
+    data = [rng.standard_normal((11, 13)) for _ in range(2)]
+    kw = dict(causal=True, cfun=WISFC_2, rfun="FastICA", fit_timepoints=7,
+              weights_function=tc.laplace_weights, weights_params={"scale": 4})
+    whole = _quiet(tc.timecorr, data, **kw)
+    assert [w.shape for w in whole] == [(11, 13)] * 2
+    for w in whole:
+        used = np.flatnonzero(np.ptp(w[2:], axis=0) > 0)
+        assert 1 <= used.size <= 4 and np.isfinite(w[2:]).all()
+    part = _quiet(tc.timecorr, [x[:9] for x in data], **kw)
+    assert all(np.array_equal(w[:9], p, equal_nan=True) for w, p in zip(whole, part))
+
+
+# ----------------------------------------------------------------------------
+# fourth review: the identity with few training rows, explicit n_components
+# ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("model", GUARANTEED_MODELS)
+def test_a_model_asked_for_every_column_changes_nothing_with_few_training_rows(model):
+    # the reviewer's input: 4 defined training rows, 10 columns, ndims 10.
+    # The components were capped by the rows before the request was
+    # compared with the columns, so a model was fitted (FastICA differed
+    # from the correlations by 31.9, PCA by 2.63)
+    x = np.random.default_rng(0).normal(size=(31, 4))
+    kw = dict(order=1, causal=True, cfun=tc.autofc, delta_rfun=None,
+              weights_params={"var": 9}, delta_weights_params={"var": 9})
+    plain = _quiet(tc.features, x, rfun=None, **kw)[1]
+    for ndims in (10, 13):
+        out, fitted = _quiet(tc.features, x, rfun=model, ndims=ndims, fit_timepoints=6,
+                             return_model=True, **kw)
+        assert out[1].shape == (31, ndims)
+        assert np.array_equal(out[1][:, :10], plain, equal_nan=True)
+        assert (out[1][2:, 10:] == 0).all()
+        again = _quiet(fitted.transform, x[:20])
+        assert np.array_equal(again[1], out[1][:20], equal_nan=True)
+    # with refits
+    out = _quiet(tc.features, x, rfun=model, ndims=10, fit_timepoints=6, refit_every=8,
+                 **kw)
+    assert np.array_equal(out[1], plain, equal_nan=True)
+
+
+@pytest.mark.parametrize("model", GUARANTEED_MODELS)
+def test_an_explicit_number_of_components_is_capped_like_ndims(model):
+    # the reviewer's input: FastICA with n_components=4 in kwargs was fitted
+    # with 4 components on 4 training rows (rank 3) and did not reproduce
+    # them; the name alone, capped at the rank, ran
+    import sklearn.decomposition
+
+    x = np.random.default_rng(0).normal(size=(31, 4))
+    kw = dict(causal=True, cfun=tc.autofc, fit_timepoints=6, weights_params={"var": 9})
+    cls = getattr(sklearn.decomposition, model)
+
+    def instance(n):
+        # (an object without random_state is not the same model twice)
+        seeded = "random_state" in inspect.signature(cls).parameters
+        return cls(n_components=n, **({"random_state": 0} if seeded else {}))
+
+    named = _quiet(tc.timecorr, x, rfun=model, **kw)
+    assert named.shape == (31, 4) and np.isfinite(named[2:]).all()
+    forms = [{"model": model, "kwargs": {"n_components": 4}},
+             {"model": cls, "kwargs": {"n_components": 4}},
+             {"model": model, "params": {"n_components": 4}},
+             {"model": instance(4)}]
+    for rfun in forms:
+        out = _quiet(tc.timecorr, x, rfun=rfun, **kw)
+        assert out.shape == (31, 4) and np.isfinite(out[2:]).all(), rfun
+        assert np.array_equal(np.ptp(out[2:], axis=0) > 0, np.ptp(named[2:], axis=0) > 0)
+        assert np.array_equal(out[:20], _quiet(tc.timecorr, x[:20], rfun=rfun, **kw),
+                              equal_nan=True)
+    # more components than the 4 training rows give, fewer than the 10
+    # columns: as many as the rows give, and zero columns
+    for rfun in ({"model": model, "kwargs": {"n_components": 7}},
+                 {"model": instance(7)}):
+        out = _quiet(tc.timecorr, x, rfun=rfun, **kw)
+        assert out.shape == (31, 7) and np.isfinite(out[2:]).all(), rfun
+        assert (out[2:, 4:] == 0).all()
+    # at least as many as the columns: the correlations as they are
+    plain = _quiet(tc.timecorr, x, **{**kw, "fit_timepoints": None})
+    for rfun in ({"model": model, "kwargs": {"n_components": 30}},
+                 {"model": instance(30)},
+                 {"model": cls, "kwargs": {"n_components": 10}}):
+        out = _quiet(tc.timecorr, x, rfun=rfun, **kw)
+        assert np.array_equal(out, plain, equal_nan=True), rfun
+
+
+def test_the_width_with_an_explicit_number_of_components_is_that_without_causal():
+    # scoped review: what decides the width when n_components is given with
+    # the model and ndims too.  The causal call returns the width of the
+    # call without causal=True for the same model: n_components when a
+    # model is fitted; the columns as they are when n_components covers
+    # them, with zero columns up to ndims (not up to n_components)
+    import pickle
+
+    from sklearn.decomposition import PCA
+
+    x = np.random.default_rng(0).normal(size=(31, 4))
+    base = dict(order=1, cfun=tc.autofc, delta_rfun=None, weights_params={"var": 9},
+                delta_weights_params={"var": 9})
+    expect = {(13, 2): 10, (10, 13): 13, (30, 4): 10, (3, 2): 3, (3, 5): 3, (7, 2): 7,
+              (7, 9): 7}
+    for (n, ndims), width in expect.items():
+        for rfun in ({"model": "PCA", "kwargs": {"n_components": n}},
+                     {"model": PCA(n_components=n)}):
+            plain = _quiet(tc.features, x, rfun=rfun, ndims=ndims, **base)[1]
+            out, model = _quiet(tc.features, x, rfun=rfun, ndims=ndims, causal=True,
+                                fit_timepoints=6, return_model=True, **base)
+            assert plain.shape == out[1].shape == (31, width), (n, ndims)
+            for fitted in (model, pickle.loads(pickle.dumps(model))):
+                again = _quiet(fitted.transform, x[:20])
+                assert np.array_equal(again[1], out[1][:20], equal_nan=True)
+
+
+def test_a_causal_call_leaves_the_model_object_of_the_caller_as_it_was():
+    from sklearn.decomposition import PCA, FactorAnalysis, FastICA
+
+    x = np.random.default_rng(0).normal(size=(60, 4))
+    kw = dict(order=1, causal=True, cfun=tc.autofc, delta_rfun=None, fit_timepoints=30,
+              ndims=3, weights_params={"var": 9}, delta_weights_params={"var": 9})
+    for given in (PCA(n_components=3), FastICA(random_state=0),
+                  FactorAnalysis(n_components=3, random_state=0)):
+        before = dict(vars(given))
+        out, model = _quiet(tc.features, x, rfun={"model": given}, return_model=True, **kw)
+        assert vars(given) == before  # not fitted, no parameter changed
+        assert np.isfinite(out[1][2:]).all()
+        assert model.fits[(1, "analysis")].model_ is not given

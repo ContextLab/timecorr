@@ -281,7 +281,7 @@ def _match_model(new, previous, order, path):
     signs = np.where(cosine[source, np.arange(c)] < 0, -1.0, 1.0)
     if np.array_equal(source, np.arange(c)) and np.all(signs > 0):
         return new
-    matched = _FittedModel(new.model, new.n_features, new.pad)  # a copy
+    matched = _FittedModel(new.model, new.n_features, new.pad, new.order)  # a copy
     if matched.model is new.model:
         # (a model that cannot be pickled, as one of a class defined in a
         # function, was taken as it is: reorder a copy, not the fit itself)
@@ -298,7 +298,7 @@ def _match_model(new, previous, order, path):
         setattr(estimator, _COLUMN_PER_COMPONENT,
                 np.ascontiguousarray(value[:, source] * signs))
     # as a pickle restores it, like every fitted model (see _FittedModel)
-    matched = _FittedModel(matched.model, new.n_features, new.pad)
+    matched = _FittedModel(matched.model, new.n_features, new.pad, new.order)
     if new.constants is not None:
         columns, means, tol = (np.array(v) for v in new.constants)
         real = columns < c
@@ -765,9 +765,9 @@ class FeaturesModel:
 
         Every row is computed causally, as by the ``features`` call that
         made the model: row ``t`` of every output uses rows ``0..t`` of
-        ``data`` and the frozen fits only, so it is unchanged (to 1e-9 for
-        features built from correlations; see ``features``) when later rows
-        are replaced or removed, and
+        ``data`` and the frozen fits only, so it is unchanged (bit for
+        bit; under removal with the built-in kernel functions, see
+        ``features``) when later rows are replaced or removed, and
         ``transform`` of the data of the fit returns what that call
         returned.
 

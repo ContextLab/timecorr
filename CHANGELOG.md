@@ -16,18 +16,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   documented and tested:
   - when the rows after `t` are replaced by any values (finite, NaN or inf),
     row `t` is unchanged bit for bit, with every supported reducer;
-  - when the rows after `t` are removed, row `t` is unchanged to 1e-9
-    (absolute) for outputs that depend continuously on the correlations: no
-    reduction, `"strength"`, the summaries (`tc.WeightedStrength`,
-    `tc.Communities`) and the linear models listed below once fitted. Removal
-    changes the correlations by round-off, and the eigenvector-based graph
-    measures (`"eigenvector_centrality"`, `"pagerank_centrality"`,
-    `"pagerank_centrality_abs"`) can differ by more at a correlation matrix
-    whose leading eigenvalues coincide, and the t statistics of
-    `tc.tstat_combine` where the subjects' correlations nearly coincide
-    (always with two subjects and `tc.isfc`): they divide by the spread
-    across subjects and agree to about 1e-9 of their magnitude instead (0.12
-    on 3.8e7 in the case measured; replacement changes no bit);
+  - when the rows after `t` are removed, row `t` is unchanged bit for bit
+    as well with the built-in kernel functions, with every supported
+    reducer and combine function (the graph measures and `tc.tstat_combine`
+    included) and for smoothed values (`cfun=None`): the estimator computes
+    a row with the same operations whatever the length of the series.
+    Kernel rows are taken in groups with the shapes they have in a series
+    without an end (rows and columns beyond the data are zeros), each row of
+    features is a matrix product of its own, and the columns of a chunk of
+    kernel rows are those of its first row; the effective sample sizes that
+    `min_samples` is compared with are summed over the same columns; a
+    streamed step leaves every correlation as the product of its own row of
+    features gave it (no average with the transposed pair, which depended
+    on the blocks of nodes, so on T and `max_memory_gb`: the two
+    orientations of a pair agree to round-off); a fitted model reduces 128
+    rows at a time, the last batch filled with rows of zeros. No output of
+    a causal call depends on `max_memory_gb`. This is tested, not proven:
+    it holds when the linear-algebra library computes a row of a matrix
+    product of a given shape from that row's operands alone, and NumPy's
+    elementwise functions a value from that value alone; the tests ran
+    with Accelerate (macOS) when this was written. Tested at cuts at, just before
+    and just after multiples of 16 and 128 rows, for every built-in kernel,
+    events, NaN samples, `min_samples`, kernels wider than 512 timepoints,
+    150 features (several blocks of features), every length from 1, fitted
+    reducers, `refit_every`, `FeaturesModel.transform`, `min_samples` at
+    the effective sizes that occur, several memory limits
+    (`tests/test_causal_estimator.py`, `tests/test_causal_features.py`,
+    `tests/test_causal_fit.py`), and in configurations drawn at random
+    (`tests/test_causal_removal_random.py`: 300 draws in every run, 3000
+    in the slow run);
+  - with a kernel array or a kernel function of your own, the columns of a
+    chunk are found from its weights and can depend on the length, so
+    removal is documented to 1e-9 (absolute) for outputs that depend
+    continuously on the correlations (no reduction, `"strength"`, the
+    summaries and the linear models listed below once fitted), not for the
+    eigenvector-based graph measures at a correlation matrix whose leading
+    eigenvalues coincide, and to about 1e-9 of their magnitude for the t
+    statistics of `tc.tstat_combine` where the subjects' correlations
+    nearly coincide (no changed bit was measured with such kernels either);
   - with `include_zero=False`, row `t` is also unchanged when row `t` itself
     changes;
   - with a fitted reducer (`fit_timepoints=n`, below) this holds for rows
@@ -35,10 +61,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     removed;
   - smoothed values (`cfun=None`) are on the scale of the data (each chunk of
     128 rows is centered on the kernel-weighted mean at its first row, which
-    is added back, never on a mean over later rows): under removal
-    they agree to round-off relative to the magnitude of the data (to 1e-9 or
-    8 units in the last place of the largest magnitude of the data, whichever
-    is larger); replacement changes no bit;
+    is added back, never on a mean over later rows): replacement
+    changes no bit, nor removal with the built-in kernel functions; with a
+    kernel of your own they agree under removal to round-off relative to
+    the magnitude of the data (to 1e-9 or 8 units in the last place of the
+    largest magnitude of the data, whichever is larger);
   - a series of any length runs (one row included), and its output is the
     first rows of the output of a longer series.
 
@@ -119,6 +146,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     without `components_`, or that fails a check, raises `ValueError`
     (`"UMAP"`, `"KernelPCA"`, `"Isomap"`, `"MDS"`, `"TSNE"`,
     `"SpectralEmbedding"`, `"LocallyLinearEmbedding"`).
+  - A model asked for at least as many components as its input has columns
+    is not fitted and returns the columns as they are, whatever the number
+    of training rows (the number asked for is `n_components` given with the
+    model, in its `kwargs` or of a model object, otherwise `ndims`). The
+    widths are those of the call without `causal=True`: `n_components`
+    given with the model is the width of a fitted model's output, and
+    decides whether a model is fitted; when none is, the output has the
+    columns of the input and zero columns up to `ndims` only. A model
+    object given in a model dict is not fitted or changed by a causal call
+    (a copy is fitted; a call without `causal=True` fits the object, as in
+    0.3.1). Asked
+    for fewer components than columns but more than there are defined
+    training rows, it is fitted with as many components as those rows (an
+    `n_components` given with the model is replaced), and zero columns are
+    appended for the others, with the warning of `reduce`.
+  - `"FastICA"` (the name, or a model dict with the name, scikit-learn's
+    class or an object of it), when it is asked for fewer components than
+    it has columns (with at least as many, the columns are returned as they
+    are, as for every model), is given the columns that vary over the
+    training rows first
+    and is asked for no more components than the rank of the centered
+    training rows (`numpy.linalg.matrix_rank`; at most the columns that
+    vary and the rows less one: zero columns are appended for the others,
+    with the warning of `reduce`; `ValueError` when no column varies).
+    FastICA divides by the singular values of its rows, and a fit with more
+    components than their rank did not reproduce its training rows (the
+    call raised; found by the random removal test, for example 9 defined
+    training rows and 15 components). scikit-learn's FastICA sets the
+    sign of each component from its loading on the first column, which for
+    vectorized correlations is a diagonal entry (1 in every row): the
+    loading is 0 up to the round-off of the SVD, and where it was exactly 0
+    the fit held NaN and the call raised ("A has a NaN entry": 136 of 240
+    calls of `features(..., order=2, rfun="FastICA", delta_rfun="FastICA")`
+    measured on macOS, one test on Linux). Calls without `causal=True` are
+    not changed.
   - `"PCA"` is fitted with `svd_solver="full"` in causal mode unless a model
     dict gives a solver (the randomized solver that scikit-learn chooses for
     large inputs failed the check that a model reproduces its training rows,
@@ -203,6 +265,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tests/test_chunked_kernels.py`) pass unchanged. `min_samples`,
   `fit_timepoints`, `refit_every` or `return_model=True` given without
   `causal=True` raise `ValueError`.
+- `tc.tstat_combine`: an entry whose values across subjects differ by
+  round-off only now has the statistic of an entry whose values are equal:
+  t = +inf or -inf with the sign of the mean of its values (p = 0), or 0
+  (p = 1) for a mean of 0. Round-off is a range across the subjects of at
+  most 128 eps (2.8e-14), or that times the largest magnitude when it
+  exceeds 1 (`helpers._round_off_spread`). The bound is absolute for
+  magnitudes up to 1: values closer than 2.8e-14 are treated as equal
+  whatever their size, so `tc.tstat_combine` of 1e-16 and 2e-16 is +inf
+  (3 in 0.3.1). The round-off of a correlation is absolute, at the scale
+  of 1: the same correlation below 0.01 computed in two orders differed by
+  at most 0.19 eps, which was up to 14,000 eps of its own size. In 0.3.1 such an entry had the mean divided
+  by that round-off: a finite t of up to 1e16 in magnitude, and scipy's
+  `RuntimeWarning` about precision loss. This is what differs from 0.3.1,
+  with and without `causal=True`: the entries of `tc.isfc` with two subjects
+  (its two correlation matrices are the same numbers computed in two
+  orders) that were not equal bit for bit, 32 of 700 in one case measured
+  (2 subjects, 70 timepoints, 4 features; |t| up to 1.3e16; the other 668
+  were already +-inf) and 1190 of 39,000 in another (120 timepoints, 25
+  features), and any entry of a list given to `tc.tstat_combine` with a range
+  that small. Every other output is unchanged bit for bit (3000 random
+  lists of 3 to 6 matrices, 288,000 entries, and the stored-output tests).
+  The same correlation computed in two orders differed by at most 61 eps in
+  33.8 million entries measured, except in the first defined row of
+  `causal=True` (3 samples), where 13 entries differed by more than 128 eps
+  (up to 3108 eps) and keep their finite statistic. A range of 1e-13 or
+  more is a difference between subjects, as before.
 - `install_requires`: `hypertools>=1.1` (was `hypertools>=0.8`; see Fixed).
   The `tutorials` extra keeps `hypertools>=1.2`.
 

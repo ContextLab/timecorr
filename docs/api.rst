@@ -209,14 +209,19 @@ With ``causal=True`` (keyword-only, in ``timecorr``, ``features``,
 ``two_path_step``, and in ``wcorr``, ``autofc``, ``isfc`` and ``wisfc``), row
 ``t`` of every output is computed from rows ``0..t`` of the data only. The row
 is unchanged, bit for bit, when later rows are replaced by any values (NaN and
-inf included), and to 1e-9 when later rows are removed, for outputs that depend
-continuously on the correlations (no reduction, ``"strength"``, the summaries,
-and linear models such as PCA once fitted); the eigenvector-based graph
-measures (``"eigenvector_centrality"``, the PageRank measures) can differ by
-more under removal at a correlation matrix whose leading eigenvalues coincide,
-and the t statistics of ``tstat_combine`` where the subjects' correlations
-nearly coincide (always with two subjects and ``isfc``): they divide by the
-spread across subjects, and agree to about 1e-9 of their magnitude instead.
+inf included) and, with the built-in kernel functions, when later rows are
+removed: a row is computed with the same operations whatever the length of the
+series and whatever ``max_memory_gb`` (tested, also in configurations drawn at
+random, not proven: it holds when the linear-algebra library computes a row of
+a matrix product of a given shape from that row's operands alone). With a
+kernel array or a kernel function of your own, removal is
+documented to 1e-9 for outputs that depend continuously on the correlations (no
+reduction, ``"strength"``, the summaries, and linear models such as PCA once
+fitted); the eigenvector-based graph measures (``"eigenvector_centrality"``,
+the PageRank measures) can then differ by more at a correlation matrix whose
+leading eigenvalues coincide, and the t statistics of ``tstat_combine`` where
+the subjects' correlations nearly coincide agree to about 1e-9 of their
+magnitude.
 With ``include_zero=False`` the row is also unchanged when row ``t`` itself
 changes. The calls without ``causal=True`` are not changed by it.
 
@@ -229,7 +234,7 @@ changes. The calls without ``causal=True`` are not changed by it.
    X, model = tc.features(x[:250], order=2, causal=True, cfun=tc.autofc,
                           fit_timepoints=200, return_model=True, **kernels)
    later = model.transform(x)         # all 300 rows, nothing fitted
-   # later[k][:250] equals X[k] to 1e-9; X[k][:2] is NaN (warm-up), X[2][:4] too
+   # later[k][:250] equals X[k] bit for bit; X[k][:2] is NaN (warm-up), X[2][:4] too
 
    # the reducers fitted again every 50 rows, each time on all rows before
    X, info = tc.features(x, order=2, causal=True, cfun=tc.autofc, rfun="PCA",

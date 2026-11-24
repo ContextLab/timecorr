@@ -196,6 +196,117 @@ do not depend on ``cfun``.
 
 .. currentmodule:: timecorr
 
+Causal features
+---------------
+
+.. autosummary::
+   :toctree: generated/
+   :nosignatures:
+
+   FeaturesModel
+
+With ``causal=True`` (keyword-only, in ``timecorr``, ``features``,
+``two_path_step``, and in ``wcorr``, ``autofc``, ``isfc`` and ``wisfc``), row
+``t`` of every output is computed from rows ``0..t`` of the data only. The row
+is unchanged, bit for bit, when later rows are replaced by any values (NaN and
+inf included), and to 1e-9 when later rows are removed, for outputs that depend
+continuously on the correlations (no reduction, ``"strength"``, the summaries,
+and linear models such as PCA once fitted); the eigenvector-based graph
+measures (``"eigenvector_centrality"``, the PageRank measures) can differ by
+more under removal at a correlation matrix whose leading eigenvalues coincide,
+and the t statistics of ``tstat_combine`` where the subjects' correlations
+nearly coincide (always with two subjects and ``isfc``): they divide by the
+spread across subjects, and agree to about 1e-9 of their magnitude instead.
+With ``include_zero=False`` the row is also unchanged when row ``t`` itself
+changes. The calls without ``causal=True`` are not changed by it.
+
+.. code-block:: python
+
+   x = np.random.default_rng(0).standard_normal((300, 6))
+   kernels = dict(weights_params={"var": 25}, delta_weights_params={"var": 25})
+
+   # reducers fitted on rows 0..199, then frozen; the fitted pipeline is returned
+   X, model = tc.features(x[:250], order=2, causal=True, cfun=tc.autofc,
+                          fit_timepoints=200, return_model=True, **kernels)
+   later = model.transform(x)         # all 300 rows, nothing fitted
+   # later[k][:250] equals X[k] to 1e-9; X[k][:2] is NaN (warm-up), X[2][:4] too
+
+   # the reducers fitted again every 50 rows, each time on all rows before
+   X, info = tc.features(x, order=2, causal=True, cfun=tc.autofc, rfun="PCA",
+                         delta_rfun="weighted_strength", fit_timepoints=200,
+                         refit_every=50, return_info=True, **kernels)
+   # info[0]["refit_rows"]: [200, 250]
+
+- **Kernels.** Both paths use backward kernels (``include_timepoints`` may be
+  left out; ``"forward"`` / ``"post"`` raises ``ValueError``), and their
+  parameters must be given (in ``features`` for both paths and every order):
+  widths are not chosen from the data, and ``weights_params=None`` raises
+  ``ValueError`` (``{}`` for a kernel without parameters). ``eye_weights``
+  raises ``ValueError`` (co-fluctuations use series z-scored over the whole
+  recording), as does a kernel array, or a kernel function of your own, with
+  weight above the diagonal.
+- **Samples.** Infinite samples and samples above 1e150 in magnitude are
+  missing data, like NaN.
+- **Warm-up.** A timepoint with fewer than 3 observed timepoints in its kernel
+  row is a row of NaN (0 without ``causal``). ``min_samples`` (default None)
+  also asks for an effective sample size ``(sum |w|)**2 / sum w**2`` over those
+  timepoints; a number that a built-in kernel of the call cannot reach raises
+  ``ValueError``. In ``features`` the NaN rows of an order's feeding features
+  are missing data for the next order, so each order has more of them;
+  ``return_info`` counts them (``"warmup_rows"``).
+- **Reducers.** None and the graph measures need no fit. A reducer that is
+  fitted to data (a hypertools model, ``WeightedStrength``, ``Communities``,
+  and ``"auto"``, the default of ``features``) needs ``fit_timepoints=n``: it
+  is fitted on rows ``0..n-1`` and then applied, unchanged, to every row
+  (without it: ``ValueError``). Row ``t >= n`` is then covered by the
+  guarantee; a row ``t < n`` is unchanged when rows from ``n`` on are replaced
+  or removed. A model must be a linear map applied to each row by itself. The
+  guarantee covers ``"PCA"``, ``"IncrementalPCA"``, ``"TruncatedSVD"``,
+  ``"FastICA"`` and ``"FactorAnalysis"`` (scikit-learn's classes of those
+  names, by exact class). Any other model whose fitted estimator has
+  ``components_``, reproduces its training rows to 1e-9 and reduces rows one
+  at a time as it reduces them together is used with one ``UserWarning`` per
+  call that the guarantee does not cover what its transform does. A model
+  without ``components_``, or that fails a check, raises ``ValueError``
+  (``"UMAP"``, ``"KernelPCA"``, ``"Isomap"``, ``"MDS"``, ``"TSNE"``,
+  ``"SpectralEmbedding"``, ``"LocallyLinearEmbedding"``). ``"PCA"`` is fitted with ``svd_solver="full"`` unless a model
+  dict gives a solver. An output column of a model that is constant on the
+  training rows up to round-off is frozen: at any row, a value within that
+  tolerance of the column's training mean is returned as exactly that mean,
+  and other values (rows that do vary along it) are returned as computed. Every
+  reducer (a model, a summary, a graph measure) reads the rows without any NaN
+  or infinite value only; any other row, as a smoothed row (``cfun=None``)
+  that is partly NaN, is left out of the fit and is a row of NaN in the
+  reduced output.
+  Summary columns that are constant up to round-off are not set to their means,
+  and no warning reports them.
+- **Refits.** ``refit_every=m`` (``features``) fits the reducers again at rows
+  ``n + j * m``, each time on all rows before; the rows from one fit to the
+  next are those of a call with that fit alone. The widths, the number of
+  communities and the choice of an automatic feeding step are those of the
+  first fit (a communities step looks for its number of communities of 2 or
+  more nodes with the first fit's number of clusters and up to 5 more or
+  fewer); a later fit that cannot have them is not used (the fit before
+  stays; ``"refit_kept_previous"`` of ``return_info`` lists its row, and one
+  ``UserWarning`` names it). The
+  components of a model and the communities of ``Communities`` are matched to
+  those of the fit before.
+- **Not covered.** ``cfun=tc.wisfc`` raises ``ValueError`` (its default subject
+  weights use the whole recording; ``functools.partial(tc.wisfc,
+  subject_weights=...)`` is accepted); ``events`` must be boundaries (features
+  to segment raise ``ValueError``), and that the boundaries are known at their
+  own time is the caller's responsibility. A function of your own (``cfun``,
+  ``combine``, ``rfun``, ``delta_rfun``) is called as without ``causal``, with one
+  ``UserWarning`` that the guarantee does not cover what it does. The decoders
+  have no causal form.
+
+``features(..., return_model=True)`` returns the fitted pipeline as a
+``FeaturesModel``; ``model.transform(data)`` computes the features of other
+data with the same number of columns, causally and without fitting anything.
+With ``refit_every`` the model holds the last fit. A model can be pickled when
+the arguments of the call can (no lambdas or local functions). The
+:doc:`causal tutorial <tutorial/causal>` shows these on daily stock returns.
+
 Events
 ------
 

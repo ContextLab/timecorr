@@ -25,6 +25,7 @@ MODULES = [
     "timecorr.timecorr",
     "timecorr.helpers",
     "timecorr.higher_order",
+    "timecorr.model",
     "timecorr.decoding",
     "timecorr.simulate",
     "timecorr.events",

@@ -13,7 +13,7 @@ LICENSE = "MIT"
 
 setup(
     name="timecorr",
-    version="0.3.1",
+    version="0.4.0",
     description="Compute dynamic correlations, dynamic higher-order correlations, and dynamic graph theoretic measures in timeseries data",
     long_description=readme,
     long_description_content_type="text/markdown",
@@ -24,7 +24,7 @@ setup(
     python_requires=">=3.10",
     install_requires=[
         "pydata-wrangler",
-        "hypertools>=0.8",
+        "hypertools>=1.1",
         "numpy",
         "scipy",
         "scikit-learn",

@@ -54,14 +54,19 @@ is None), and the full (d, d, T) array of a subject is held only when one
 block holds all d rows.
 """
 
+import contextlib
+import functools
 import inspect
 import numbers
+import warnings
 
 import numpy as np
 
 from .helpers import (
     _SUMMARY_NAMES,
+    _check_min_samples,
     _check_ndims,
+    _check_reachable,
     _check_rfun,
     _LAG_PROFILES,
     _is_model,
@@ -102,8 +107,23 @@ from .summaries import (
     _Summary,
     _auto_emitter,
     _auto_fallback,
+    _FittedSummary,
 )
-from .timecorr import _event_kernels, _restricted, _shaped_kernel, timecorr
+from .timecorr import (
+    _apply_frozen,
+    _builtin_combine,
+    _check_fit_timepoints,
+    _check_linear_model,
+    _event_kernels,
+    _fit_reducer,
+    _fixed_weights_wisfc,
+    _needs_fit,
+    _restricted,
+    _shaped_kernel,
+    _uncovered_model,
+    _warn_uncovered_models,
+    timecorr,
+)
 
 _BYTES_PER_GB = 1e9
 # outputs computed at fewer timepoints are interpolated to all T timepoints
@@ -139,16 +159,20 @@ def _builtin_kernel(weights_function):
         return False
 
 
-def _dense_analysis(weights_function, cfun=isfc):
+def _dense_analysis(weights_function, cfun=isfc, causal=False):
     """
     True when an analysis step holds T x T kernel arrays: for a kernel
     function of your own, and for a correlation function of your own, which
     ``timecorr`` passes T x T arrays (only ``autofc``, ``isfc``, ``wisfc``
     and the smoothing of ``cfun=None`` read a built-in kernel in chunks of
-    rows).
+    rows; with ``causal``, also ``functools.partial(wisfc,
+    subject_weights=...)``, which ``timecorr`` then calls as ``wisfc``).
     """
     # cfun=None smooths the data with the kernel, also in chunks of rows
-    builtin_cfun = cfun is None or any(cfun is f for f in _STREAMED_CFUNS)
+    builtin_cfun = (
+        cfun is None or any(cfun is f for f in _STREAMED_CFUNS)
+        or (causal and _fixed_weights_wisfc(cfun))
+    )
     return not (_builtin_kernel(weights_function) and builtin_cfun)
 
 
@@ -586,14 +610,35 @@ def _as_summary(rfun):
 
 
 def _apply_reducer(corrs, rfun, ndims, order=None, path=None, null_threshold=None,
-                   append_fit=False):
+                   append_fit=False, causal=False, frozen=None, record=None):
     """
     ``_reduce``; a summary is fit (recording ``order`` and ``path`` in its
     ``fits_``) and then transforms the same correlations.  With
     ``append_fit`` False, ``fits_`` keeps only the new fit (as a direct call
     of the summary does); True appends it (the steps of ``features`` and
     ``two_path_step``).
+
+    ``causal``: the correlations are those of the causal estimator, whose
+    undefined rows are NaN: they, and any row with a NaN or infinite value,
+    are left out of every fit and are rows of NaN in the output (see ``timecorr._fit_reducer`` and
+    ``timecorr._apply_frozen``).  The reducer is fitted to ``corrs`` (the
+    training rows of a causal fit) unless ``frozen`` holds a fit made
+    earlier (a ``_FittedSummary`` or ``_FittedModel``), which then reduces
+    ``corrs``.  ``record`` (a dict): ``record[path]`` is set to what
+    reduced the step (the fit, or the reducer itself when it has none).
     """
+    if causal:
+        if frozen is None:
+            frozen = _fit_reducer(
+                corrs, rfun, ndims, order=order, path=path, append_fit=append_fit,
+                name="rfun" if path == "analysis" else "delta_rfun",
+            )
+        if record is not None:
+            record[path] = frozen
+            # a record of a refit matches the fit to the one before
+            # (model._Matched): what it holds reduces the step
+            frozen = record[path]
+        return _apply_frozen(corrs, frozen)
     summary = _as_summary(rfun)
     if summary is None:
         return _reduce(corrs, rfun, ndims)
@@ -609,12 +654,44 @@ def _apply_reducer(corrs, rfun, ndims, order=None, path=None, null_threshold=Non
     return out
 
 
-def _streams(rfun, cfun, combine, groups=None):
-    """Whether an analysis step is streamed (see the module docstring)."""
+class _causal_step:
+    """
+    Context of one ``timecorr`` call of a step: the keyword arguments of the
+    causal estimator (none without ``causal``).  ``timecorr``'s warning about
+    a correlation or combine function of the user's is not repeated at every step
+    (``_check_causal`` issued it once for the call).
+    """
+
+    def __init__(self, causal, min_samples):
+        self.causal = causal
+        self.min_samples = min_samples
+        self._caught = None
+
+    def __enter__(self):
+        if not self.causal:
+            return {}
+        self._caught = warnings.catch_warnings()
+        self._caught.__enter__()
+        warnings.filterwarnings(
+            "ignore", message=r"causal=True: (cfun|combine|cfun and combine) "
+                              r"(is a function|are functions) of your own"
+        )
+        return {"causal": True, "min_samples": self.min_samples}
+
+    def __exit__(self, *exc):
+        if self._caught is not None:
+            self._caught.__exit__(*exc)
+        return False
+
+
+def _streams(rfun, cfun, combine, groups=None, causal=False):
+    """Whether an analysis step is streamed (see the module docstring);
+    with ``causal``, ``wisfc`` with fixed subject weights is streamed too."""
     return (
         groups is None
         and combine is null_combine
-        and any(cfun is f for f in _STREAMED_CFUNS)
+        and (any(cfun is f for f in _STREAMED_CFUNS)
+             or (causal and _fixed_weights_wisfc(cfun)))
         and _is_summary(rfun)
     )
 
@@ -639,25 +716,30 @@ def _bandwidth(weights_function, weights_params):
 
 
 def _step_kernels(T, n_subjects, weights_function, weights_params,
-                  include_timepoints="all", include_zero=True, events=None):
+                  include_timepoints="all", include_zero=True, events=None,
+                  causal=False):
     """
     The kernel(s) ``timecorr`` builds for these arguments and RESOLVED events:
     one kernel, or one per subject when the subjects' events differ
     (``LagKernel`` objects for a built-in kernel function, T x T arrays
-    otherwise).
+    otherwise).  ``causal``: as ``timecorr(..., causal=True)`` builds them.
     """
     weights = _shaped_kernel(
-        T, weights_function, weights_params, include_timepoints, include_zero
+        T, weights_function, weights_params, include_timepoints, include_zero,
+        causal=causal,
     )
-    resolved = resolve_events(events, T, n_subjects, None)
-    return _event_kernels(weights, resolved, n_subjects)
+    resolved = resolve_events(events, T, n_subjects, None, causal=causal)
+    return _event_kernels(weights, resolved, n_subjects, causal)
 
 
 def _run_streamed(subjects, summary, cfun, kernels, *, max_memory_gb, order, path,
-                  auto_n, bandwidth, append_fit=False, dense=False):
+                  auto_n, bandwidth, append_fit=False, dense=False, estimator=None,
+                  frozen=None, record=None):
     """
     ``summaries._streamed_summary`` under a memory budget; issues the
     estimator's warning.  ``append_fit`` as in ``_apply_reducer``.
+    ``estimator``: the keyword arguments of the causal estimator (None
+    without ``causal``); ``frozen`` and ``record`` as in ``_apply_reducer``.
     """
     # C-ordered float copies: the blocked arithmetic's round-off then does not
     # depend on the memory layout of the inputs (reducers can return views)
@@ -666,11 +748,7 @@ def _run_streamed(subjects, summary, cfun, kernels, *, max_memory_gb, order, pat
     max_block = _streamed_block_elements(
         d, T, len(subjects), max_memory_gb, order, path, dense
     )
-    out, message = _streamed_summary(
-        subjects,
-        kernels,
-        summary,
-        cfun,
+    step = dict(
         max_block_elements=max_block,
         order=order,
         path=path,
@@ -679,9 +757,23 @@ def _run_streamed(subjects, summary, cfun, kernels, *, max_memory_gb, order, pat
         # the shift null (when it runs) chooses its timepoints: every s-th
         # for a stationary built-in kernel, every timepoint otherwise
         null_row_stride=None,
+        estimator=estimator,
     )
-    if not append_fit:
-        del summary.fits_[:-1]
+    out, message = _streamed_summary(subjects, kernels, summary, cfun,
+                                     fitted=frozen, **step)
+    if frozen is None:
+        if record is not None:
+            made = _FittedSummary(summary, summary.fits_[-1])
+            record[path] = made
+            if record[path] is not made:
+                # a refit, matched to the fit before (model._Matched): the
+                # matched fit summarizes the step
+                out, _ = _streamed_summary(subjects, kernels, summary, cfun,
+                                           fitted=record[path], **step)
+        if not append_fit:
+            del summary.fits_[:-1]
+    elif record is not None:
+        record[path] = frozen
     if message is not None:
         _warn_user(message)
     return out
@@ -707,9 +799,18 @@ def _analysis_path(
     held_elements=0,
     reducers=(),
     input_elements=0,
+    causal=False,
+    min_samples=None,
+    frozen=None,
+    record=None,
 ):
     """
     Analysis path of one order: ``reduce(combine(timecorr(subjects, kernel, cfun)))``.
+
+    ``causal`` and ``min_samples`` are ``timecorr``'s (the arguments were
+    checked by ``_check_causal``); ``frozen`` and ``record`` as in
+    ``_apply_reducer`` (with ``causal`` a reducer is fitted to the rows
+    given, the training rows of a causal fit, or ``frozen`` is applied).
 
     ``held_elements``: float64 values the caller retains (earlier outputs of
     a ``features`` run), counted against ``max_memory_gb``; ``reducers``: the
@@ -744,8 +845,9 @@ def _analysis_path(
     ``append_fit``, otherwise the only entry; see ``_apply_reducer``).
     """
     T, d = subjects[0].shape
-    dense = _dense_analysis(weights_function, cfun)
-    if _streams(rfun, cfun, combine, groups):
+    dense = _dense_analysis(weights_function, cfun, causal)
+    estimator = {"causal": True, "min_samples": min_samples} if causal else None
+    if _streams(rfun, cfun, combine, groups, causal):
         summary = _as_summary(rfun)
         # the distinct event kernels and earlier fits are held while the step
         # runs: checked before the kernels are built
@@ -757,7 +859,7 @@ def _analysis_path(
         )
         kernels = _step_kernels(
             T, len(subjects), weights_function, weights_params,
-            include_timepoints, include_zero, events,
+            include_timepoints, include_zero, events, causal,
         )
         return _run_streamed(
             subjects,
@@ -771,6 +873,9 @@ def _analysis_path(
             bandwidth=_bandwidth(weights_function, weights_params),
             append_fit=append_fit,
             dense=dense,
+            estimator=estimator,
+            frozen=frozen,
+            record=record,
         )
     _check_step_memory(d, T, len(subjects), n_outputs, max_memory_gb, order,
                        kernel_feeding,
@@ -778,26 +883,28 @@ def _analysis_path(
                        dense=dense, combine=combine)
 
     def analyze(members, member_events):
-        return combine(
-            _as_list(
-                timecorr(
-                    members,
-                    weights_function=weights_function,
-                    weights_params=weights_params,
-                    include_timepoints=include_timepoints,
-                    combine=null_combine,
-                    cfun=cfun,
-                    rfun=None,
-                    include_zero=include_zero,
-                    events=member_events,
+        with _causal_step(causal, min_samples) as estimator:
+            return combine(
+                _as_list(
+                    timecorr(
+                        members,
+                        weights_function=weights_function,
+                        weights_params=weights_params,
+                        include_timepoints=include_timepoints,
+                        combine=null_combine,
+                        cfun=cfun,
+                        rfun=None,
+                        include_zero=include_zero,
+                        events=member_events,
+                        **estimator,
+                    )
                 )
             )
-        )
 
     if groups is None:
         return _apply_reducer(
             analyze(subjects, events), rfun, ndims, order, "analysis",
-            append_fit=append_fit,
+            append_fit=append_fit, causal=causal, frozen=frozen, record=record,
         )
 
     def group_events(g):
@@ -867,6 +974,10 @@ def _delta_path(
     held_elements=0,
     append_fit=False,
     retained_elements=0,
+    causal=False,
+    min_samples=None,
+    frozen=None,
+    record=None,
 ):
     """
     Feeding (delta) path of one order: per-subject correlations with the
@@ -894,7 +1005,8 @@ def _delta_path(
     (``include_timepoints``, ``include_zero``, and the RESOLVED ``events``
     entry), NaN samples are left out pairwise by the estimator, and the
     estimator's warning is issued at most once.  A summary reducer is
-    streamed.
+    streamed.  ``causal``, ``min_samples``, ``frozen`` and ``record`` as in
+    ``_analysis_path``.
     """
     T, d = subjects[0].shape
     S = len(subjects)
@@ -912,7 +1024,7 @@ def _delta_path(
             )
             kernels = _step_kernels(
                 T, S, weights_function, weights_params, include_timepoints,
-                include_zero, events,
+                include_zero, events, causal,
             )
             return _run_streamed(
                 subjects,
@@ -926,24 +1038,32 @@ def _delta_path(
                 bandwidth=_bandwidth(weights_function, weights_params),
                 append_fit=append_fit,
                 dense=dense,
+                estimator=({"causal": True, "min_samples": min_samples}
+                           if causal else None),
+                frozen=frozen,
+                record=record,
             )
         _check_step_memory(d, T, S, n_outputs, max_memory_gb, order, True,
                            retained_elements, dense=dense)
-        corrs = _as_list(
-            timecorr(
-                subjects,
-                weights_function=weights_function,
-                weights_params=weights_params,
-                include_timepoints=include_timepoints,
-                include_zero=include_zero,
-                combine=null_combine,
-                cfun=autofc,
-                rfun=None,
-                events=events,
+        with _causal_step(causal, min_samples) as estimator:
+            corrs = _as_list(
+                timecorr(
+                    subjects,
+                    weights_function=weights_function,
+                    weights_params=weights_params,
+                    include_timepoints=include_timepoints,
+                    include_zero=include_zero,
+                    combine=null_combine,
+                    cfun=autofc,
+                    rfun=None,
+                    events=events,
+                    **estimator,
+                )
             )
-        )
         return _as_list(
-            _apply_reducer(corrs, rfun, ndims, order, "feeding", append_fit=append_fit)
+            _apply_reducer(corrs, rfun, ndims, order, "feeding",
+                           append_fit=append_fit, causal=causal, frozen=frozen,
+                           record=record)
         )
 
     _check_step_memory(d, T, S, n_outputs, max_memory_gb, order,
@@ -1083,7 +1203,7 @@ _AUTO_FEEDING_MIN_K = 4
 _AUTO_FEEDING_MIN_T = 40
 
 
-def _check_auto_feeding(delta_rfun, d, T, order, previous=None):
+def _check_auto_feeding(delta_rfun, d, T, order, previous=None, training=False):
     """
     Raise ``ValueError`` naming the alternatives when the feeding reducer
     resolved from ``delta_rfun="auto"`` (communities) cannot be fitted to
@@ -1093,7 +1213,8 @@ def _check_auto_feeding(delta_rfun, d, T, order, previous=None):
     ``previous``: the number of communities found at the
     previous order when the d inputs are the community columns of an
     explicit ``Communities`` there (the automatic reducer keeps at least 4
-    columns; see ``summaries._auto_emitter``).
+    columns; see ``summaries._auto_emitter``).  ``training``: the T rows
+    are the rows a causal call fits its reducers on (``fit_timepoints``).
     """
     if not getattr(delta_rfun, "_from_auto", False):
         return
@@ -1114,8 +1235,10 @@ def _check_auto_feeding(delta_rfun, d, T, order, previous=None):
         raise ValueError(
             f'The default feeding reducer (delta_rfun="auto": communities, counted '
             f"with a shift null){at} needs at least {_AUTO_FEEDING_MIN_K} features "
-            f"and {_AUTO_FEEDING_MIN_T} timepoints; got {d} feature"
-            f"{'' if d == 1 else 's'}{source} and T = {T}. " + alternatives
+            f"and {_AUTO_FEEDING_MIN_T} timepoints"
+            f"{' to be fitted on (fit_timepoints)' if training else ''}; got "
+            f"{d} feature{'' if d == 1 else 's'}{source} and "
+            f"{'fit_timepoints' if training else 'T'} = {T}. " + alternatives
         )
 
 
@@ -1191,7 +1314,7 @@ def _known_width(rfun, d, ndims):
 
 def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfun,
                           combine, feeding_function, ndims, weights_function=None,
-                          later_T=None):
+                          later_T=None, causal=False):
     """
     Raise MemoryError, before anything is computed, for a streamed step of
     ``features`` that does not fit ``max_memory_gb`` with one row per block.
@@ -1205,6 +1328,8 @@ def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfu
     rows assumed for orders 2 and above (None: T); ``features`` gives the
     fewest rows such an order can have when feeding features are passed on
     at a lower rate, so that a step is refused here only if it cannot fit.
+    ``causal``: the call has ``causal=True``, where ``wisfc`` with fixed
+    subject weights is streamed too (``_streams``).
     """
     d = int(K)
     rows = {k: T if k == 1 or later_T is None else later_T for k in analysis}
@@ -1212,7 +1337,7 @@ def _check_streamed_steps(K, T, S, max_memory_gb, analysis, feeding, fed, *, cfu
     dense_feeding = not _builtin_kernel(feeding_function)
     for k in sorted(analysis):
         if d is not None:
-            if _streams(analysis[k], cfun, combine):
+            if _streams(analysis[k], cfun, combine, causal=causal):
                 _streamed_block_elements(d, rows[k], S, max_memory_gb, k, "analysis",
                                          dense_analysis)
             if (k in fed and feeding_function is not eye_weights
@@ -1581,6 +1706,9 @@ def two_path_step(
     delta_weights_function=None,
     delta_weights_params=None,
     order=1,
+    causal=False,
+    min_samples=None,
+    fit_timepoints=None,
 ):
     """
     Compute one order of the two-path pipeline from the previous feeding features.
@@ -1682,6 +1810,136 @@ def two_path_step(
         The order this step computes (keyword-only), used to resolve
         ``"auto"`` and order maps (whose keys may be any positive integers
         here) and recorded in summaries' ``fits_``.  Default: 1.
+    causal : bool
+        If True (keyword-only), row ``t`` of every output is computed from
+        rows ``0..t`` of the data only: it is unchanged (to 1e-9; bit for
+        bit when later rows are replaced) when later rows are replaced by
+        any values, NaN and inf included, or removed, and with
+        ``include_zero=False`` also when row ``t`` itself changes.
+        Replacing later rows changes no bit, with every supported reducer.
+        Removing them changes the correlations by round-off, so the
+        outputs agree to 1e-9 where they depend continuously on the
+        correlations (no reduction, ``"strength"``, the summaries, and
+        linear models such as PCA once fitted); the eigenvector-based
+        graph measures (``"eigenvector_centrality"``, the PageRank
+        measures) can differ by more at a correlation matrix whose leading
+        eigenvalues coincide, and the t statistics of ``tstat_combine``,
+        which divide by the spread of the subjects' correlations, where
+        that spread is close to zero (always with two subjects and
+        ``isfc``: their correlations are the same), to about 1e-9 of
+        their magnitude instead.  With ``cfun=None`` the steps smooth their
+        input, and smoothed values agree to round-off relative to the
+        magnitude of the data (see ``timecorr``).  Default: False.  With
+        ``causal=True``:
+
+        - both paths use backward kernels (``include_timepoints`` may be
+          left out; ``"forward"``/``"post"`` raises ``ValueError``), and
+          the correlations are those of the causal estimator (see
+          ``timecorr`` and ``wcorr``): infinite samples and samples above
+          1e150 in magnitude are missing, like NaN;
+        - the kernel parameters of both paths must be given
+          (``weights_params`` and ``delta_weights_params``):
+          widths are not chosen from the data.  ``eye_weights`` on either
+          path raises ``ValueError`` (co-fluctuations use series z-scored
+          over the whole recording);
+        - a reducer that is fitted to data (a model such as ``"PCA"``, a
+          summary, and ``"auto"``, the default of ``rfun`` and
+          ``delta_rfun``) needs ``fit_timepoints``: it is fitted on the
+          first ``fit_timepoints`` rows and then applied, unchanged, to
+          every row.  None and the graph measures (``"strength"``,
+          ``"eigenvector_centrality"``, ``"pagerank_centrality"``,
+          ``"pagerank_centrality_abs"``) need no fit.  Every reducer (a
+          model, a summary, a graph measure) reads the rows without any
+          NaN or infinite value only: any other row (the undefined rows
+          of the estimator; a smoothed row of ``cfun=None`` that is
+          partly NaN) is left out of the fit and is a row of NaN in the
+          reduced output.  A function of your
+          own (as ``cfun``, ``combine``, ``rfun`` or ``delta_rfun``) is called as
+          without ``causal``, with one ``UserWarning`` that the guarantee
+          does not cover what it does; so is a model outside the list
+          under ``fit_timepoints``, with one ``UserWarning`` of its own;
+        - ``cfun=tc.wisfc`` raises ``ValueError`` (its default subject
+          weights use the whole recording);
+          ``functools.partial(tc.wisfc, subject_weights=...)`` is accepted;
+        - ``events`` must be boundaries (features to segment raise
+          ``ValueError``); that the boundaries are known at their own time
+          is the caller's responsibility, and the warm-up starts again at
+          each boundary.  Boundaries at or beyond the end of the data are
+          ignored (times the series has not reached), and events that
+          leave no timepoint with 3 samples give rows of NaN, not an
+          error, so a prefix of a series runs with the events of the whole
+          series;
+        - a row with too few earlier samples (see ``min_samples``) is NaN
+          in every column, not 0.  The NaN rows of an order's feeding
+          features are missing data for the next order, so each order has
+          more of them than the one before; graph measures are computed
+          for the other rows.  A series of any length runs, and its output
+          is the first rows of the output of a longer series;
+        - a feature whose kernel-weighted standard deviation at a timepoint
+          is below 1e-9 of the magnitude of its kernel-weighted mean has
+          correlation 0 with every feature there (a column that is constant
+          up to round-off; see ``wcorr``).
+    min_samples : float or None
+        With ``causal=True`` (keyword-only), a timepoint with fewer than 3
+        observed timepoints in its kernel row is undefined (NaN).  A number
+        (>= 1) is also the effective sample size ``(sum |w|)**2 / sum
+        w**2`` a row needs over the observed timepoints it weights, on both
+        paths (see ``timecorr``); a number that a built-in
+        kernel of the call cannot reach with any number of earlier
+        timepoints raises ``ValueError`` before anything is computed.
+        Given without ``causal=True``, it raises ``ValueError``.  Default:
+        None.
+    fit_timepoints : int or None
+        With ``causal=True`` (keyword-only), the number ``n`` of first rows
+        that the reducers are fitted on: an integer from 1 to the number
+        of timepoints.  Every reducer that is fitted to data is fitted to
+        the correlations of rows ``0..n-1`` alone and then frozen:
+        hypertools models (the components of ``"PCA"``), the pair weights
+        and communities of ``WeightedStrength`` and ``Communities`` (with
+        ``n=None``, the shift null runs on those rows), and the automatic
+        reducers (``"auto"``), whose feeding step chooses between
+        communities and weighted strength on those rows.  The rows
+        without defined correlations (the warm-up, see ``min_samples``) are
+        left out of the fits; a model needs 2 rows with defined
+        correlations there, a summary 1, the shift null 40 rows of
+        input.  The fits do not change, bit for bit, whatever follows row
+        ``n-1``.  Every row is then reduced with them: row ``t >= n`` is
+        unchanged (to 1e-9; bit for bit under replacement) when rows after
+        ``t`` are replaced or removed, and a row ``t < n`` (in sample: the
+        fits have read rows after it) when rows from ``n`` on are replaced
+        or removed.  ``n`` equal to the number of timepoints fits on every
+        row.  A model must be a linear map applied to each row by itself.  The
+        guarantee covers ``"PCA"``, ``"IncrementalPCA"``, ``"TruncatedSVD"``,
+        ``"FastICA"`` and ``"FactorAnalysis"`` (scikit-learn's classes of those
+        names, by exact class: a subclass is not one).  Any other model whose
+        fitted estimator has ``components_``, reproduces its training rows to
+        1e-9 and reduces rows one at a time as it reduces them together
+        (``"MiniBatchDictionaryLearning"``, a class of your own) is used with
+        one ``UserWarning`` per call that the guarantee does not cover what its
+        transform does: those checks read a few training rows and cannot show
+        how it reduces later rows.  A model without ``components_``, or that
+        fails a check, raises ``ValueError`` (``"UMAP"``, ``"KernelPCA"``,
+        ``"Isomap"``, ``"MDS"``, ``"TSNE"``, ``"SpectralEmbedding"``,
+        ``"LocallyLinearEmbedding"``: the transform of some of them depends on
+        the rows it is given together).
+        A model asked for as many components as its input
+        has columns, or more, changes nothing (zero columns are appended
+        for the components beyond them), as without ``causal``.
+        ``"PCA"`` is fitted with ``svd_solver="full"``
+        unless a model dict gives a solver, because the randomized solver
+        scikit-learn chooses for large inputs does not reproduce its
+        rows.  An output column of a model that is constant on the
+        training rows up to round-off (a range of at most 1e-9 of its
+        largest magnitude, or 1e-12 of the largest magnitude of the
+        output: for example a principal component along which those rows
+        do not vary) is frozen: at every row, a value within that
+        tolerance of the column's training mean is returned as exactly
+        that mean, so the next order does not correlate round-off.  Output
+        columns of a summary that are constant up to round-off
+        are not set to their mean (see ``WeightedStrength``), and no
+        warning reports them.  Not used by reducers that need no fit;
+        required (``ValueError``) when a reducer is fitted.  Given without
+        ``causal=True``, it raises ``ValueError``.  Default: None.
 
     Returns
     -------
@@ -1750,6 +2008,21 @@ def two_path_step(
         specification, a dict ``events``, or events that leave no kernel row
         with 3 or more non-zero weights).  The events are resolved (and
         features segmented) before any correlations are computed.
+    ValueError
+        With ``causal=True``, before anything is computed: for the
+        arguments listed under ``causal`` that have no causal form, and
+        for a ``min_samples`` that is not None or a finite number >= 1 or
+        that a built-in kernel of the call cannot reach; for
+        ``min_samples`` given without ``causal=True``.
+    ValueError
+        With ``causal=True``, for an ``rfun`` or ``delta_rfun`` that is
+        fitted to data (the defaults included) when ``fit_timepoints`` is
+        not given; for a ``fit_timepoints`` that is not an integer from 1
+        to the number of timepoints, or given without ``causal=True``;
+        when the first ``fit_timepoints`` rows hold no row with defined
+        correlations for a fit (2 for a model), or fewer than 40 rows for
+        the default feeding reducer or a shift null; and for a model that
+        is not a linear map applied row by row (see ``fit_timepoints``).
     RuntimeError, ImportError
         As raised by ``segment`` for features entries of ``events``.
     TypeError
@@ -1788,6 +2061,27 @@ def two_path_step(
     ...                        delta_weights_function=tc.eye_weights)
     >>> X1[0].shape, D1[0].shape
     ((300, 24), (300, 24))
+
+    A causal step (row ``t`` uses rows ``0..t`` only; the first 2 rows have
+    fewer than 3 samples and are NaN):
+
+    >>> import numpy as np
+    >>> X1, D1 = two_path_step(data[0], causal=True, cfun=tc.autofc,
+    ...                        rfun="strength", delta_rfun="strength",
+    ...                        weights_params={"var": 100},
+    ...                        delta_weights_params={"var": 25})
+    >>> X1.shape, D1.shape, int(np.isnan(D1).all(axis=1).sum())
+    ((300, 24), (300, 24), 2)
+
+    With the default reducers, fitted on the first 200 rows and applied to
+    every row:
+
+    >>> X1, D1 = two_path_step(data[0], causal=True, cfun=tc.autofc,
+    ...                        weights_params={"var": 100},
+    ...                        delta_weights_params={"var": 25},
+    ...                        fit_timepoints=200)
+    >>> X1.shape, D1.shape
+    ((300, 24), (300, 6))
     """
     if (
         not isinstance(order, numbers.Integral)
@@ -1796,6 +2090,7 @@ def two_path_step(
     ):
         raise ValueError(f"order must be a positive integer; got {order!r}.")
     order = int(order)
+    min_samples = _check_min_samples(min_samples, causal)
     _refuse_params_map(weights_params, "weights_params")
     _refuse_params_map(delta_weights_params, "delta_weights_params")
     analysis, feeding = _resolve_reducers(rfun, delta_rfun, [order], None)
@@ -1809,6 +2104,23 @@ def two_path_step(
     )
     single = not isinstance(data, (list, tuple))
     subjects = format_data(data, fill_nan=False)
+    fit_timepoints = _check_fit_timepoints(fit_timepoints, causal,
+                                           subjects[0].shape[0])
+    estimator = {}
+    if causal:
+        _check_causal(
+            function="two_path_step", include_timepoints=include_timepoints,
+            weights_function=weights_function,
+            delta_weights_function=delta_weights_function, cfun=cfun, rfun=rfun,
+            delta_rfun=delta_rfun, analysis_rfun=analysis, feeding_rfun=feeding,
+            analysis_params={order: weights_params},
+            feeding_params={order: delta_weights_params}, events=[events],
+            T=subjects[0].shape[0], n_subjects=len(subjects),
+            include_zero=include_zero, min_samples=min_samples,
+            fit_timepoints=fit_timepoints, combine=combine,
+        )
+        include_timepoints = "backward"
+        estimator = {"causal": True, "min_samples": min_samples}
     analysis_auto, feeding_auto = _auto_params(
         subjects,
         auto_analysis and weights_params is None,
@@ -1819,10 +2131,9 @@ def two_path_step(
     if feeding_auto is not None:
         feeding_params = feeding_auto
     resolved = resolve_events(
-        events, subjects[0].shape[0], len(subjects), events_params
+        events, subjects[0].shape[0], len(subjects), events_params, causal=causal
     )
-    X_next, D_next = _two_path_step(
-        subjects,
+    step = dict(
         weights_function=weights_function,
         weights_params=weights_params,
         cfun=cfun,
@@ -1837,8 +2148,21 @@ def two_path_step(
         include_timepoints=include_timepoints,
         include_zero=include_zero,
         max_memory_gb=max_memory_gb,
-        events=resolved,
+        **estimator,
     )
+    frozen = None
+    if causal and (_needs_fit(analysis[order]) or _needs_fit(feeding[order])):
+        # the reducers are fitted on the first fit_timepoints rows alone,
+        # then applied to every row
+        frozen = {}
+        with _fit_pass():
+            _two_path_step(
+                [x[:fit_timepoints] for x in subjects],
+                events=resolve_events(events, fit_timepoints, len(subjects), None,
+                                      causal=True),
+                record=frozen, **step,
+            )
+    X_next, D_next = _two_path_step(subjects, events=resolved, frozen=frozen, **step)
     if single:
         if isinstance(X_next, list):
             X_next = X_next[0]
@@ -1861,6 +2185,8 @@ def _two_path_step(
     previous_communities=None,
     input_elements=0,
     auto_analysis=False,
+    frozen=None,
+    record=None,
     **analysis
 ):
     """
@@ -1882,21 +2208,30 @@ def _two_path_step(
     ``auto_analysis``: the analysis reducer comes from ``rfun="auto"``; only
     then may a MemoryError of the analysis step carry the streamed-reducer
     hint.
+
+    With ``causal`` (in ``analysis``): the reducers are fitted to the rows
+    given, which are the training rows of a causal fit, and ``record`` (a
+    dict) receives what reduced each path (``record["analysis"]``,
+    ``record["feeding"]``: see ``_apply_reducer``); or ``frozen``, such a
+    dict of an earlier call, reduces these rows without any fit.
     """
     if delta_rfun is None:
         delta_rfun = analysis.get("rfun", "PCA")
     T, d = subjects[0].shape
-    if feed:
-        _check_auto_feeding(delta_rfun, d, T, order, previous_communities)
+    causal = analysis.get("causal", False)
+    frozen = frozen or {}
+    if feed and "feeding" not in frozen:
+        _check_auto_feeding(delta_rfun, d, T, order, previous_communities,
+                            training=causal)
     analysis_streamed = _streams(
         analysis.get("rfun", "PCA"), analysis.get("cfun", isfc),
-        analysis.get("combine", null_combine),
+        analysis.get("combine", null_combine), causal=causal,
     )
     feeding_streamed = feeding_function is not eye_weights and _is_summary(delta_rfun)
     n_outputs = 2 if feed and not (analysis_streamed or feeding_streamed) else 1
     kernel_feeding = feed and feeding_function is not eye_weights
     dense_analysis = _dense_analysis(analysis.get("weights_function"),
-                                     analysis.get("cfun", isfc))
+                                     analysis.get("cfun", isfc), causal)
     dense_feeding = feed and not _builtin_kernel(feeding_function)
     dense = dense_analysis or dense_feeding
     S = len(subjects)
@@ -1969,6 +2304,7 @@ def _two_path_step(
         subjects, max_memory_gb=max_memory_gb, n_outputs=n_outputs, order=order,
         append_fit=True, kernel_feeding=kernel_feeding, held_elements=retained,
         reducers=(delta_rfun,) + reducers, input_elements=int(input_elements),
+        frozen=frozen.get("analysis"), record=record,
         **analysis
     )
     if not feed:
@@ -1990,8 +2326,168 @@ def _two_path_step(
         held_elements=retained + _output_elements(X_next) + fits,
         append_fit=True,
         retained_elements=retained_m + fits,
+        causal=causal,
+        min_samples=analysis.get("min_samples"),
+        frozen=frozen.get("feeding"),
+        record=record,
     )
     return X_next, D_next
+
+
+@contextlib.contextmanager
+def _fit_pass():
+    """
+    The pass of a causal call that fits the reducers on the first
+    ``fit_timepoints`` rows: the estimator's warnings about its rows are
+    not issued (the pass over every row, which follows, issues them).
+    """
+    with warnings.catch_warnings():
+        warnings.filterwarnings(
+            "ignore",
+            message=r"(Subjects? [0-9, ]+: )?[0-9]+ of [0-9]+ timepoints have",
+        )
+        yield
+
+
+def _check_causal(*, function, include_timepoints, weights_function,
+                  delta_weights_function, cfun, rfun, delta_rfun, analysis_rfun,
+                  feeding_rfun, analysis_params, feeding_params, events, T,
+                  n_subjects, include_zero, min_samples, fit_timepoints=None,
+                  combine=null_combine):
+    """
+    The checks of ``features`` and ``two_path_step`` with ``causal=True``
+    (``function``: the name of the caller, for the messages), before
+    anything is computed.  ``analysis_rfun`` and ``feeding_rfun`` are the
+    resolved reducers by order, ``analysis_params`` and ``feeding_params``
+    the kernel parameters GIVEN for each order (None: not given),
+    ``events`` the specifications to check (one per order that has one).
+
+    Raises ``ValueError`` for what has no causal form (a forward kernel,
+    ``eye_weights``, kernel parameters that are not given, the default
+    subject weights of ``wisfc``, events given as features, a
+    ``min_samples`` no row of a built-in kernel can reach, a reducer that
+    is fitted to data without ``fit_timepoints``); warns once when ``cfun``
+    or a reducer is a function of the user's.
+    """
+    side = str(include_timepoints).lower()
+    if side in ("forward", "post"):
+        raise ValueError(
+            f"causal=True: include_timepoints={include_timepoints!r} weights "
+            "later timepoints.  Leave include_timepoints out (causal=True uses "
+            "'backward' on both paths), or pass causal=False."
+        )
+    for name, kernel in (("weights_function", weights_function),
+                         ("delta_weights_function", delta_weights_function)):
+        if kernel is eye_weights:
+            raise ValueError(
+                f"causal=True: {name}=eye_weights gives co-fluctuations of series "
+                "z-scored over the whole recording, which use later timepoints.  "
+                f"Pass a kernel with a width, for example {name}="
+                f"tc.gaussian_weights with {name.replace('function', 'params')}="
+                "{'var': 25}."
+            )
+    for name, params in (("weights_params", analysis_params),
+                         ("delta_weights_params", feeding_params)):
+        for k in sorted(params):
+            if params[k] is None:
+                raise ValueError(
+                    f"causal=True: {name} must be given for every order (kernel "
+                    "widths are not chosen from the data, which would read later "
+                    f"timepoints); order {k} has none.  Pass for example "
+                    f"{name}={{'var': 25}} for a Gaussian kernel, {{}} for a "
+                    "kernel without parameters, or in features an order map "
+                    "that names every order."
+                )
+    if cfun is wisfc or (
+        isinstance(cfun, functools.partial) and cfun.func is wisfc
+        and not _fixed_weights_wisfc(cfun)
+    ):
+        raise ValueError(
+            "causal=True: the default subject_weights of wisfc are computed "
+            "from every timepoint of the recording.  Pass cfun="
+            "functools.partial(tc.wisfc, subject_weights=...) with weights of "
+            "your own and nothing else bound, or cfun=tc.isfc."
+        )
+    for spec in events:
+        if _has_features(_parse_spec(spec, T, n_subjects, True)):
+            raise ValueError(
+                "causal=True: events given as features are segmented from the "
+                "whole recording.  Pass the boundaries (the timepoints where a "
+                "new block starts), for example events=[100, 250]."
+            )
+    for name, given, resolved in (("rfun", rfun, analysis_rfun),
+                                  ("delta_rfun", delta_rfun, feeding_rfun)):
+        for k in sorted(resolved):
+            _check_linear_model(resolved[k], f"{name} at order {k}")
+            if _needs_fit(resolved[k]) and fit_timepoints is None:
+                raise ValueError(
+                    f"causal=True: {name}={_requested(given, k)!r} (order {k}) is "
+                    "fitted to data and needs fit_timepoints=n: the reducers "
+                    "are then fitted on the first n rows and applied to every "
+                    "row.  Or pass rfun and delta_rfun as None or a graph "
+                    "measure such as 'strength', which need no fit (the "
+                    "defaults are fitted)."
+                )
+    if min_samples is not None:
+        # a number no kernel row can reach, whatever the length of the data
+        for kernel, params in ((weights_function, analysis_params),
+                               (delta_weights_function, feeding_params)):
+            kernel = gaussian_weights if kernel is None else kernel
+            for k in sorted(params):
+                lag_kernel = _lag_kernel(2, kernel, params[k], "backward", include_zero)
+                if lag_kernel is not None:
+                    _check_reachable(lag_kernel, min_samples)
+    builtin = cfun is None or cfun in (isfc, autofc) or _fixed_weights_wisfc(cfun)
+    theirs = [name for name, ours in (
+        ("cfun", builtin),
+        ("combine", _builtin_combine(combine)),
+        ("rfun", not any(_theirs(r) for r in analysis_rfun.values())),
+        ("delta_rfun", not any(_theirs(r) for r in feeding_rfun.values())),
+    ) if not ours]
+    if theirs:
+        one = len(theirs) == 1
+        _warn_user(
+            f"causal=True: {', '.join(theirs[:-1])}{'' if one else ' and '}"
+            f"{theirs[-1]} {'is a function' if one else 'are functions'} of your "
+            "own; the guarantee that row t does not depend on later rows does "
+            f"not cover what {'it does' if one else 'they do'}."
+        )
+    _warn_uncovered_models([
+        (_uncovered_model(resolved[k]), f"{name} at order {k}")
+        for name, resolved in (("rfun", analysis_rfun), ("delta_rfun", feeding_rfun))
+        for k in sorted(resolved)
+    ])
+
+
+def _check_refit_every(refit_every, causal, fit_timepoints):
+    """
+    ``refit_every`` as None or an int: ``ValueError`` unless it is None or
+    an integer >= 1 given with ``causal=True`` and ``fit_timepoints``.
+    """
+    if refit_every is None:
+        return None
+    if (
+        isinstance(refit_every, (bool, np.bool_))
+        or not isinstance(refit_every, numbers.Integral)
+        or refit_every < 1
+    ):
+        raise ValueError(
+            "refit_every must be None or a positive integer (the number of "
+            f"rows between two fits of the reducers); got {refit_every!r}."
+        )
+    if not causal or fit_timepoints is None:
+        raise ValueError(
+            f"refit_every={refit_every!r} applies with causal=True and "
+            "fit_timepoints=n only (the reducers are fitted on the first n "
+            f"rows, then again every {refit_every} rows, each time on all "
+            "rows before); pass both, or leave refit_every out."
+        )
+    return int(refit_every)
+
+
+def _theirs(reducer):
+    """True for a reducer that is a function of the user's (not a summary)."""
+    return callable(reducer) and not isinstance(reducer, _Summary)
 
 
 def _requested(value, k):
@@ -2018,10 +2514,12 @@ def _width(out):
 
 
 def _step_info(k, inputs, x, delta, analysis_rfun, feeding_rfun, requested,
-               requested_delta):
+               requested_delta, feeding_fit=None):
     """
     The ``return_info`` entries of order ``k`` of ``features``: one dict for
     the analysis path and, when it was computed, one for the feeding path.
+    ``feeding_fit``: the fit record of the feeding step when it is not the
+    last of ``feeding_rfun.fits_`` for this order (a frozen fit).
     """
     d = _width(inputs)
     entries = [{
@@ -2036,11 +2534,12 @@ def _step_info(k, inputs, x, delta, analysis_rfun, feeding_rfun, requested,
         "effective": _describe(feeding_rfun), "input_width": d,
         "output_width": _width(delta), "labels": None,
     }
-    fit = None
+    fit = feeding_fit
     if isinstance(feeding_rfun, Communities):
         # this step's fit (the same object may also reduce the analysis path)
-        fit = next(f for f in reversed(feeding_rfun.fits_)
-                   if f["order"] == k and f["path"] == "feeding")
+        if fit is None:
+            fit = next(f for f in reversed(feeding_rfun.fits_)
+                       if f["order"] == k and f["path"] == "feeding")
         if fit.get("fallback") is None:
             entry["labels"] = fit["labels"].tolist()
     if getattr(feeding_rfun, "_from_auto", False):
@@ -2057,18 +2556,36 @@ def _step_info(k, inputs, x, delta, analysis_rfun, feeding_rfun, requested,
     return entries
 
 
-def _constant_columns(out):
+def _constant_columns(out, causal=False):
     """
     The columns of an output that are constant over time
     (``np.ptp(x, axis=0) == 0``), as a list of ints; for a list of arrays,
-    one such list per array.
+    one such list per array.  ``causal``: over the rows that are not
+    entirely NaN (the warm-up rows of the causal estimator are left out; an
+    output without any other row has no constant column).
     """
     if isinstance(out, list):
-        return [_constant_columns(x) for x in out]
-    return np.flatnonzero(np.ptp(np.asarray(out), axis=0) == 0).tolist()
+        return [_constant_columns(x, causal) for x in out]
+    x = np.asarray(out)
+    if causal:
+        x = x[~np.isnan(x).all(axis=1)]
+        if not x.shape[0]:
+            return []
+    return np.flatnonzero(np.ptp(x, axis=0) == 0).tolist()
 
 
-def _check_events_order_zero(events, T, n_subjects, events_params):
+def _warmup_rows(out):
+    """
+    The number of rows of an output that are entirely NaN (the rows the
+    causal estimator leaves undefined), as an int; for a list of arrays,
+    one int per array.
+    """
+    if isinstance(out, list):
+        return [_warmup_rows(x) for x in out]
+    return int(np.isnan(np.asarray(out)).all(axis=1).sum())
+
+
+def _check_events_order_zero(events, T, n_subjects, events_params, causal=False):
     """
     Check ``events`` / ``events_params`` for ``features(order=0)``, which has no
     kernel to restrict: a dict with any key raises, and a non-dict
@@ -2082,7 +2599,7 @@ def _check_events_order_zero(events, T, n_subjects, events_params):
             )
         events = None
     _check_params_keys(events_params)
-    parsed = _parse_spec(events, T, n_subjects)
+    parsed = _parse_spec(events, T, n_subjects, causal)
     if events_params and not _has_features(parsed):
         raise ValueError("events_params was given but no events entry holds features")
 
@@ -2107,6 +2624,11 @@ def features(
     delta_weights_function=None,
     delta_weights_params=None,
     return_info=False,
+    causal=False,
+    min_samples=None,
+    fit_timepoints=None,
+    refit_every=None,
+    return_model=False,
 ):
     """
     Compute features of every order from 0 to ``order`` with the two-path pipeline.
@@ -2172,7 +2694,12 @@ def features(
     The summaries' weights and communities are fitted on all timepoints and
     all events of a step (the fit is not causal, also with
     ``include_timepoints="backward"``); ``fit`` and ``transform`` of an
-    instance allow fitting on other data.
+    instance allow fitting on other data.  With ``causal=True`` and
+    ``fit_timepoints=n`` every reducer is fitted on the first ``n`` rows
+    only: the pipeline first runs on those rows alone, order by order (each
+    order's fit reads the feeding features of those rows), and then on
+    every row with the fits frozen (see ``fit_timepoints`` and
+    ``FeaturesModel``).
 
     Parameters
     ----------
@@ -2406,7 +2933,223 @@ def features(
         list per subject when the output is a list; for feeding features
         that are not returned (``return_delta=False``), in the rows
         computed.  No arrays: numbers, strings, None and lists of ints.
+        With ``causal=True`` every entry also has ``"weights_params"`` (a
+        dict: the kernel parameters of that step) and ``"warmup_rows"`` (the
+        number of rows of the step's output that are entirely NaN, an int,
+        or one int per subject when the output is a list), and
+        ``"constant_columns"`` is taken over the other rows; the entry of
+        a step whose reducer was fitted has ``"fit_timepoints"`` (the
+        number of rows it was fitted on), ``"refit_rows"`` (the rows of
+        the fits: ``[fit_timepoints]``, and with ``refit_every`` every
+        row at which the reducers were fitted again) and
+        ``"refit_kept_previous"`` (those of them whose fit could not
+        have the output columns of the first fit, so that the fit before
+        was kept, of every order; one ``UserWarning`` names them; see
+        ``refit_every``), and
+        what describes a fit (``"labels"``, ``"n_communities"``,
+        ``"fallback"``, ...) is that of the fit on those rows (with
+        ``refit_every``: of the last fit).  When a later fit took another
+        number of clusters than the ``n`` of a ``Communities`` object (see
+        ``refit_every``), ``"effective"`` shows the object with that
+        number.
         Default: False.
+    causal : bool
+        If True (keyword-only), row ``t`` of every output is computed from
+        rows ``0..t`` of the data only: it is unchanged (to 1e-9; bit for
+        bit when later rows are replaced) when later rows are replaced by
+        any values, NaN and inf included, or removed, and with
+        ``include_zero=False`` also when row ``t`` itself changes.
+        Replacing later rows changes no bit, with every supported reducer.
+        Removing them changes the correlations by round-off, so the
+        outputs agree to 1e-9 where they depend continuously on the
+        correlations (no reduction, ``"strength"``, the summaries, and
+        linear models such as PCA once fitted); the eigenvector-based
+        graph measures (``"eigenvector_centrality"``, the PageRank
+        measures) can differ by more at a correlation matrix whose leading
+        eigenvalues coincide, and the t statistics of ``tstat_combine``,
+        which divide by the spread of the subjects' correlations, where
+        that spread is close to zero (always with two subjects and
+        ``isfc``: their correlations are the same), to about 1e-9 of
+        their magnitude instead.  With ``cfun=None`` the steps smooth their
+        input, and smoothed values agree to round-off relative to the
+        magnitude of the data (see ``timecorr``).  Default: False.  With
+        ``causal=True``:
+
+        - both paths use backward kernels (``include_timepoints`` may be
+          left out; ``"forward"``/``"post"`` raises ``ValueError``), and
+          the correlations are those of the causal estimator (see
+          ``timecorr`` and ``wcorr``): infinite samples and samples above
+          1e150 in magnitude are missing, like NaN;
+        - the kernel parameters of both paths must be given
+          (``weights_params`` and ``delta_weights_params``, for every order when they are order maps):
+          widths are not chosen from the data.  ``eye_weights`` on either
+          path raises ``ValueError`` (co-fluctuations use series z-scored
+          over the whole recording);
+        - a reducer that is fitted to data (a model such as ``"PCA"``, a
+          summary, and ``"auto"``, the default of ``rfun`` and
+          ``delta_rfun``) needs ``fit_timepoints``: it is fitted on the
+          first ``fit_timepoints`` rows and then applied, unchanged, to
+          every row.  None and the graph measures (``"strength"``,
+          ``"eigenvector_centrality"``, ``"pagerank_centrality"``,
+          ``"pagerank_centrality_abs"``) need no fit.  Every reducer (a
+          model, a summary, a graph measure) reads the rows without any
+          NaN or infinite value only: any other row (the undefined rows
+          of the estimator; a smoothed row of ``cfun=None`` that is
+          partly NaN) is left out of the fit and is a row of NaN in the
+          reduced output.  A function of your
+          own (as ``cfun``, ``combine``, ``rfun`` or ``delta_rfun``) is called as
+          without ``causal``, with one ``UserWarning`` that the guarantee
+          does not cover what it does; so is a model outside the list
+          under ``fit_timepoints``, with one ``UserWarning`` of its own;
+        - ``cfun=tc.wisfc`` raises ``ValueError`` (its default subject
+          weights use the whole recording);
+          ``functools.partial(tc.wisfc, subject_weights=...)`` is accepted;
+        - ``events`` must be boundaries (features to segment raise
+          ``ValueError``); that the boundaries are known at their own time
+          is the caller's responsibility, and the warm-up starts again at
+          each boundary.  Boundaries at or beyond the end of the data are
+          ignored (times the series has not reached), and events that
+          leave no timepoint with 3 samples give rows of NaN, not an
+          error, so a prefix of a series runs with the events of the whole
+          series;
+        - a row with too few earlier samples (see ``min_samples``) is NaN
+          in every column, not 0.  The NaN rows of an order's feeding
+          features are missing data for the next order, so each order has
+          more of them than the one before; graph measures are computed
+          for the other rows.  A series of any length runs, and its output
+          is the first rows of the output of a longer series;
+        - a feature whose kernel-weighted standard deviation at a timepoint
+          is below 1e-9 of the magnitude of its kernel-weighted mean has
+          correlation 0 with every feature there (a column that is constant
+          up to round-off; see ``wcorr``).
+    min_samples : float or None
+        With ``causal=True`` (keyword-only), a timepoint with fewer than 3
+        observed timepoints in its kernel row is undefined (NaN).  A number
+        (>= 1) is also the effective sample size ``(sum |w|)**2 / sum
+        w**2`` a row needs over the observed timepoints it weights, on both
+        paths and at every order (see ``timecorr``); a number that a built-in
+        kernel of the call cannot reach with any number of earlier
+        timepoints raises ``ValueError`` before anything is computed.
+        Given without ``causal=True``, it raises ``ValueError``.  Default:
+        None.
+    fit_timepoints : int or None
+        With ``causal=True`` (keyword-only), the number ``n`` of first rows
+        that the reducers are fitted on: an integer from 1 to the number
+        of timepoints.  Every reducer that is fitted to data is fitted to
+        the correlations of rows ``0..n-1`` alone and then frozen:
+        hypertools models (the components of ``"PCA"``), the pair weights
+        and communities of ``WeightedStrength`` and ``Communities`` (with
+        ``n=None``, the shift null runs on those rows), and the automatic
+        reducers (``"auto"``), whose feeding step chooses between
+        communities and weighted strength on those rows.  The rows
+        without defined correlations (the warm-up, see ``min_samples``) are
+        left out of the fits; a model needs 2 rows with defined
+        correlations there, a summary 1, the shift null 40 rows of
+        input.  The fits do not change, bit for bit, whatever follows row
+        ``n-1``.  Every row is then reduced with them: row ``t >= n`` is
+        unchanged (to 1e-9; bit for bit under replacement) when rows after
+        ``t`` are replaced or removed, and a row ``t < n`` (in sample: the
+        fits have read rows after it) when rows from ``n`` on are replaced
+        or removed.  ``n`` equal to the number of timepoints fits on every
+        row.  A model must be a linear map applied to each row by itself.  The
+        guarantee covers ``"PCA"``, ``"IncrementalPCA"``, ``"TruncatedSVD"``,
+        ``"FastICA"`` and ``"FactorAnalysis"`` (scikit-learn's classes of those
+        names, by exact class: a subclass is not one).  Any other model whose
+        fitted estimator has ``components_``, reproduces its training rows to
+        1e-9 and reduces rows one at a time as it reduces them together
+        (``"MiniBatchDictionaryLearning"``, a class of your own) is used with
+        one ``UserWarning`` per call that the guarantee does not cover what its
+        transform does: those checks read a few training rows and cannot show
+        how it reduces later rows.  A model without ``components_``, or that
+        fails a check, raises ``ValueError`` (``"UMAP"``, ``"KernelPCA"``,
+        ``"Isomap"``, ``"MDS"``, ``"TSNE"``, ``"SpectralEmbedding"``,
+        ``"LocallyLinearEmbedding"``: the transform of some of them depends on
+        the rows it is given together).
+        A model asked for as many components as its input
+        has columns, or more, changes nothing (zero columns are appended
+        for the components beyond them), as without ``causal``.
+        ``"PCA"`` is fitted with ``svd_solver="full"``
+        unless a model dict gives a solver, because the randomized solver
+        scikit-learn chooses for large inputs does not reproduce its
+        rows.  An output column of a model that is constant on the
+        training rows up to round-off (a range of at most 1e-9 of its
+        largest magnitude, or 1e-12 of the largest magnitude of the
+        output: for example a principal component along which those rows
+        do not vary) is frozen: at every row, a value within that
+        tolerance of the column's training mean is returned as exactly
+        that mean, so the next order does not correlate round-off.  Output
+        columns of a summary that are constant up to round-off
+        are not set to their mean (see ``WeightedStrength``), and no
+        warning reports them.  Not used by reducers that need no fit;
+        required (``ValueError``) when a reducer is fitted.  Given without
+        ``causal=True``, it raises ``ValueError``.  Default: None.
+    refit_every : int or None
+        With ``causal=True`` and ``fit_timepoints=n`` (keyword-only): the
+        number of rows ``m >= 1`` after which the reducers are fitted
+        again, each time on every row before.  The fits are at rows
+        ``s_j = n + j * m`` for ``j = 0, 1, ...`` while ``s_j`` is less
+        than the number of timepoints; fit ``j`` reads rows ``0..s_j - 1``
+        only.  Rows ``s_j`` to ``s_{j+1} - 1`` of every output (to the
+        last row for the last fit) are the rows that this call returns
+        with ``fit_timepoints=s_j`` and no ``refit_every``, up to the two
+        rules below; rows before ``n`` are those of fit 0.  So the
+        guarantee of ``fit_timepoints`` holds: a row ``t >= n`` is
+        unchanged when rows after ``t`` are replaced or removed, and a
+        row ``t < n`` when rows from ``n`` on are.  Every fit is a pass
+        over its rows and one over all rows, so the time grows with the
+        number of fits.
+
+        - The structure is that of fit 0, so that every output has the
+          same columns at every row.  Fit 0 fixes: what an automatic
+          feeding step chose (communities or weighted strength; the
+          shift null runs in fit 0 only); the number of output columns
+          of a communities step, which is its number of communities of
+          2 or more nodes; and the number of components of a model
+          (``ndims``).  The number of clusters is not fixed: a weakly
+          attached node is a cluster of its own in one fit and a member
+          of a community in the next, so a later fit clusters its rows
+          with fit 0's number of clusters ``n0`` and then, while the
+          communities of 2 or more nodes are not as many as fit 0's,
+          with ``n0 + 1``, ``n0 - 1``, ``n0 + 2``, ``n0 - 2``, ... up to
+          ``n0 + 5`` and ``n0 - 5`` (between 2 and the number of
+          features), and takes the first clustering that has them.  A
+          later fit that cannot have the structure (none of those
+          clusterings has fit 0's number of communities of 2 or more
+          nodes, its model has another number of components or does not
+          reproduce its rows, or its rows hold no defined correlations)
+          is not used: the fit before, of every order, stays for its
+          rows, the row is listed in ``"refit_kept_previous"`` of
+          ``return_info``, and one ``UserWarning`` for the call names
+          those rows and the step (order and path) that could not be
+          fitted.  All of this reads the rows before the fit's row only.
+        - The columns of a fit are matched to those of the fit before,
+          order by order, before the next order of that fit is fitted:
+          the components of a model (the one-to-one assignment with the
+          largest sum of absolute cosines between component vectors;
+          a component is negated when its cosine is negative), and the
+          communities of ``Communities`` (the assignment with the most
+          shared nodes).  The
+          columns of ``WeightedStrength`` belong to the nodes and are not
+          matched; with ``split=True`` a node that changes community
+          changes which pairs its own and other columns sum.
+
+        Summary objects passed as reducers keep the records of fit 0 in
+        ``fits_``; the last fit is in the model (``return_model``).
+        Default: None (one fit).
+    return_model : bool
+        If True (keyword-only; needs ``causal=True``), also return the
+        fitted pipeline as a ``tc.FeaturesModel``, last: ``(X, model)``,
+        ``((X, D), model)``, ``(X, info, model)`` or ``((X, D), info,
+        model)``.  ``model.transform(data)`` computes the features of
+        other data (the same series with later rows, for example) with the
+        reducers as fitted here, causally and without fitting anything;
+        ``model.transform`` of this data returns these outputs.  With
+        ``refit_every`` the model holds the last fit, which
+        ``model.transform`` applies to every row: it returns these
+        outputs from the last row of ``model.refits`` on, and the rows
+        before as the last fit gives them, not as returned here (they
+        came from earlier fits).  The model
+        can be pickled (see ``FeaturesModel``).  Default: False.
 
     Returns
     -------
@@ -2420,6 +3163,9 @@ def features(
     info : list of dict
         Only with ``return_info=True`` (see ``return_info``); the call then
         returns ``(X, info)`` or ``((X, D), info)``.
+    model : FeaturesModel
+        Only with ``return_model=True`` (see ``return_model``), after the
+        other items.
 
     Warns
     -----
@@ -2448,6 +3194,11 @@ def features(
         strength; the message gives the threshold and the number of input
         features.  Communities that were found but emit fewer than 4 columns
         fall back without a warning (see ``return_info``).
+    UserWarning
+        Once per call with ``causal=True``: for a model outside the list
+        the guarantee covers (see ``fit_timepoints``), and when a fit of
+        ``refit_every`` could not have the structure of the first fit and
+        was left out (the message names the rows and the step).
 
     Raises
     ------
@@ -2481,6 +3232,23 @@ def features(
         segmented) before anything is computed.
     RuntimeError, ImportError
         As raised by ``segment`` for features entries of ``events``.
+    ValueError
+        With ``causal=True``, before anything is computed: for the
+        arguments listed under ``causal`` that have no causal form, and
+        for a ``min_samples`` that is not None or a finite number >= 1 or
+        that a built-in kernel of the call cannot reach; for
+        ``min_samples`` given without ``causal=True``.
+    ValueError
+        With ``causal=True``, for an ``rfun`` or ``delta_rfun`` that is
+        fitted to data (the defaults included) when ``fit_timepoints`` is
+        not given; for a ``fit_timepoints`` that is not an integer from 1
+        to the number of timepoints, or given without ``causal=True``;
+        when the first ``fit_timepoints`` rows hold no row with defined
+        correlations for a fit (2 for a model), or fewer than 40 rows for
+        the default feeding reducer or a shift null; for a model that
+        is not a linear map applied row by row (see ``fit_timepoints``);
+        and for a ``refit_every`` that is not None or an integer >= 1,
+        or that is given without ``causal=True`` and ``fit_timepoints``.
     TypeError
         If ``rfun`` or ``delta_rfun`` is not None, a string, a dict or a
         callable, or ``delta_weights_function`` is not None or callable.
@@ -2680,6 +3448,53 @@ def features(
     ...                    delta_weights_function=tc.eye_weights, return_delta=True)
     >>> X[1].shape, D[1].shape
     ((50, 6), (50, 6))
+
+    Causal features: row ``t`` uses rows ``0..t`` of the data only.  The
+    kernel parameters of both paths and reducers that are not fitted are
+    given; the first rows have too few earlier samples and are NaN, more of
+    them at each order (a ``UserWarning`` per step says so):
+
+    >>> x = np.random.RandomState(1).randn(200, 5)
+    >>> kw = dict(order=2, causal=True, cfun=tc.autofc, rfun="strength",
+    ...           delta_rfun="strength", weights_params={"var": 25},
+    ...           delta_weights_params={"var": 25})
+    >>> X, info = tc.features(x, return_info=True, **kw)
+    >>> [(e["order"], e["path"], e["warmup_rows"]) for e in info]
+    [(1, 'analysis', 2), (1, 'feeding', 2), (2, 'analysis', 4)]
+    >>> later = x.copy()
+    >>> later[101:] = 1000.0
+    >>> changed = tc.features(later, **kw)
+    >>> bool(np.array_equal(changed[2][:101], X[2][:101], equal_nan=True))
+    True
+
+    Reducers that are fitted (here PCA and weighted strength) are fitted
+    on the first ``fit_timepoints`` rows and then frozen; the model applies
+    them to other data, such as the same series with more rows:
+
+    >>> kw = dict(order=2, causal=True, cfun=tc.autofc, rfun="PCA",
+    ...           delta_rfun="weighted_strength", weights_params={"var": 25},
+    ...           delta_weights_params={"var": 25}, fit_timepoints=120)
+    >>> X, model = tc.features(x[:150], return_model=True, **kw)
+    >>> model
+    FeaturesModel(order=2, fit_timepoints=120, n_features=5, n_subjects=1)
+    >>> longer = model.transform(x)
+    >>> longer[2].shape
+    (200, 5)
+    >>> bool(np.allclose(longer[2][:150], X[2], atol=1e-9, equal_nan=True))
+    True
+
+    With ``refit_every`` the reducers are fitted again every so many rows,
+    each time on all rows before; the rows from a fit to the next are those
+    of a call with that fit alone (the columns of a model or of
+    communities are also matched to those of the fit before):
+
+    >>> kw["rfun"] = "weighted_strength"
+    >>> X, info = tc.features(x, refit_every=40, return_info=True, **kw)
+    >>> info[0]["refit_rows"], info[0]["refit_kept_previous"]
+    ([120, 160], [])
+    >>> alone = tc.features(x, **{**kw, "fit_timepoints": 160})
+    >>> bool(np.array_equal(X[2][160:], alone[2][160:]))
+    True
     """
     if (
         not isinstance(order, numbers.Integral)
@@ -2688,6 +3503,13 @@ def features(
     ):
         raise ValueError(f"order must be a non-negative integer; got {order!r}.")
     order = int(order)
+    min_samples = _check_min_samples(min_samples, causal)
+    if return_model and not causal:
+        raise ValueError(
+            "return_model=True applies with causal=True only (the model holds "
+            "the reducers fitted on the first fit_timepoints rows); pass "
+            "causal=True, or leave return_model out."
+        )
     # every reducer is checked and resolved here, including ones a short run
     # never calls
     orders = range(1, order + 1)
@@ -2736,12 +3558,28 @@ def features(
     delta_unreduced = all(feeding_rfun[k] is None for k in orders)
 
     S = len(subjects)
+    fit_timepoints = _check_fit_timepoints(fit_timepoints, causal, T)
+    refit_every = _check_refit_every(refit_every, causal, fit_timepoints)
+    if causal:
+        _check_causal(
+            function="features", include_timepoints=include_timepoints,
+            weights_function=weights_function,
+            delta_weights_function=delta_weights_function, cfun=cfun, rfun=rfun,
+            delta_rfun=delta_rfun, analysis_rfun=analysis_rfun,
+            feeding_rfun=feeding_rfun, analysis_params=analysis_params,
+            feeding_params=given_feeding,
+            events=list(events.values()) if isinstance(events, dict) else [events],
+            T=T, n_subjects=S, include_zero=include_zero, min_samples=min_samples,
+            fit_timepoints=fit_timepoints, combine=combine,
+        )
+        include_timepoints = "backward"
     # events are resolved (and features segmented) once, before anything is computed
     if order == 0:
-        _check_events_order_zero(events, T, S, events_params)
+        _check_events_order_zero(events, T, S, events_params, causal)
         resolved = {}
     else:
-        resolved = resolve_events_by_order(events, T, S, order, events_params)
+        resolved = resolve_events_by_order(events, T, S, order, events_params,
+                                           causal=causal)
 
     # with both kernels automatic at every order, no events and two-sided
     # kernels, each order's feeding features are passed on at a lower rate
@@ -2759,7 +3597,7 @@ def features(
         # widths are known in advance: refuse before computing anything
         kernels = dict(
             kernel_feeding=feeding_function is not eye_weights,
-            dense=_dense_analysis(weights_function, cfun),
+            dense=_dense_analysis(weights_function, cfun, causal),
             combine=combine,
             dense_feeding=not _builtin_kernel(feeding_function),
         )
@@ -2797,7 +3635,29 @@ def features(
         _check_streamed_steps(
             K, T, S, max_memory_gb, analysis_rfun, feeding_rfun, fed, cfun=cfun,
             combine=combine, feeding_function=feeding_function, ndims=ndims,
-            weights_function=weights_function, later_T=later_T,
+            weights_function=weights_function, later_T=later_T, causal=causal,
+        )
+
+    if causal:
+        from .model import _causal_features  # timecorr.model imports this module
+
+        return _causal_features(
+            subjects, single, events,
+            dict(
+                order=order, weights_function=weights_function,
+                weights_params=analysis_params, cfun=cfun, combine=combine,
+                rfun=analysis_rfun, delta_rfun=feeding_rfun, ndims=ndims,
+                delta_weights_function=feeding_function,
+                delta_weights_params=feeding_params, include_zero=include_zero,
+                min_samples=min_samples, max_memory_gb=max_memory_gb,
+                requested={k: (_describe(_requested(rfun, k)),
+                               _describe(_requested(delta_rfun, k))) for k in orders},
+                auto={k: _auto_at(rfun, k) for k in orders},
+                fed=list(fed),
+            ),
+            fit_timepoints=fit_timepoints, refit_every=refit_every,
+            return_delta=return_delta, return_info=return_info,
+            return_model=return_model,
         )
 
     X = [subjects]
@@ -2876,9 +3736,8 @@ def features(
                     entry["sampling"] = int(rows[1] - rows[0]) if len(rows) > 1 else 1
             if delta is not None and not return_delta:
                 # feeding features that are not returned: as computed
-                entries[-1]["constant_columns"] = _constant_columns(
-                    delta[0] if single else delta
-                )
+                computed = delta[0] if single else delta
+                entries[-1]["constant_columns"] = _constant_columns(computed)
             info.extend(entries)
         if delta is not None:
             fed_by = delta

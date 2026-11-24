@@ -42,8 +42,9 @@ Quick start
 New to timecorr? The :doc:`quickstart tutorial <tutorial/quickstart>` computes
 dynamic correlations, combines subjects and computes higher-order features, and
 the :doc:`tutorial gallery <tutorials>` shows every part of the toolbox.
-Three tutorials use real data: :doc:`brain networks during story listening
-<tutorial/htfa_network_animations>`, :doc:`the stock market <tutorial/stocks>`
+Four tutorials use real data: :doc:`brain networks during story listening
+<tutorial/htfa_network_animations>`, :doc:`the stock market <tutorial/stocks>`,
+:doc:`causal features of stock returns (no look-ahead) <tutorial/causal>`
 and :doc:`trajectories of features at orders 1 to 4 <tutorial/trajectories>`.
 
 .. code-block:: python

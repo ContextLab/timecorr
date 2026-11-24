@@ -82,6 +82,16 @@ def check_boundaries(b, T):
     >>> check_boundaries([7, 3, 3, 5], 10)
     array([0, 3, 5, 7])
     """
+    return _boundaries(b, T)
+
+
+def _boundaries(b, T, causal=False):
+    """
+    ``check_boundaries``; with ``causal`` (the causal mode of ``timecorr``
+    and ``features``), boundaries at or beyond ``T`` are left out instead of
+    raising: they are times the series has not reached, so a prefix of a
+    series takes the events of the whole series.
+    """
     T = _check_T(T)
     if pl is not None and isinstance(b, pl.Series):
         arr = b.to_numpy()
@@ -102,6 +112,10 @@ def check_boundaries(b, T):
         return np.zeros(1, dtype=np.int64)
     if not np.issubdtype(arr.dtype, np.integer):
         raise ValueError(f"boundaries must have an integer dtype, got {arr.dtype}")
+    if causal and arr.min() >= 0:
+        arr = arr[arr < T]
+        if arr.size == 0:
+            return np.zeros(1, dtype=np.int64)
     if arr.min() < 0 or arr.max() >= T:
         raise ValueError(
             f"boundaries must lie in [0, {T}), got values from {arr.min()} to {arr.max()}"
@@ -158,8 +172,9 @@ def _is_single_entry(x):
     return pl is not None and isinstance(x, (pl.DataFrame, pl.Series))
 
 
-def _parse_entry(x, T):
-    """Parse one entry: None, boundaries, or features. Returns array, None or _Features."""
+def _parse_entry(x, T, causal=False):
+    """Parse one entry: None, boundaries, or features. Returns array, None or _Features.
+    ``causal``: see ``_boundaries``."""
     if x is None:
         return None
     if _is_features_array(x):
@@ -171,10 +186,10 @@ def _parse_entry(x, T):
             )
         return _Features(x)
     if _is_single_entry(x):
-        return check_boundaries(x, T)  # 1-D (or an error for other shapes)
+        return _boundaries(x, T, causal)  # 1-D (or an error for other shapes)
     if isinstance(x, (list, tuple)):
         if all(_is_int_scalar(e) for e in x):
-            return check_boundaries(list(x), T)
+            return _boundaries(list(x), T, causal)
         raise ValueError(
             "an events entry that is a list must hold only integer boundaries; "
             "pass features as an array or DataFrame"
@@ -185,8 +200,9 @@ def _parse_entry(x, T):
     )
 
 
-def _parse_spec(events, T, n_subjects):
-    """Parse a specification for one order into array, None, list, or _Features entries."""
+def _parse_spec(events, T, n_subjects, causal=False):
+    """Parse a specification for one order into array, None, list, or _Features entries.
+    ``causal``: see ``_boundaries``."""
     if events is None:
         return None
     if isinstance(events, dict):
@@ -196,10 +212,10 @@ def _parse_spec(events, T, n_subjects):
             "weighted_timepoint_decoder_ec); here, pass one events specification"
         )
     if _is_single_entry(events):
-        return _parse_entry(events, T)
+        return _parse_entry(events, T, causal)
     if isinstance(events, (list, tuple)):
         if all(_is_int_scalar(e) for e in events):
-            return check_boundaries(list(events), T)
+            return _boundaries(list(events), T, causal)
         # scalars are checked before the length, so that a list of non-integer
         # scalars gets this message whatever its length
         for i, e in enumerate(events):
@@ -215,7 +231,7 @@ def _parse_spec(events, T, n_subjects):
                 f"per-subject events must have one entry per subject: got {len(events)} "
                 f"entries for {n_subjects} subjects"
             )
-        return [_parse_entry(e, T) for e in events]
+        return [_parse_entry(e, T, causal) for e in events]
     raise ValueError(
         f"events must be None, boundaries, features, or a per-subject list; "
         f"got {type(events).__name__}"
@@ -287,7 +303,7 @@ def _finish(parsed, params, cache):
     return one(parsed)
 
 
-def resolve_events(events, T, n_subjects, events_params=None):
+def resolve_events(events, T, n_subjects, events_params=None, *, causal=False):
     """
     Parse the event specification for one order.
 
@@ -310,6 +326,11 @@ def resolve_events(events, T, n_subjects, events_params=None):
         Keyword arguments for :func:`segment` when an entry holds features. Allowed keys are
         ``n``, ``kind``, ``max_events`` and ``random_state``. Unknown keys, or giving this
         when no entry holds features, raise ``ValueError``.
+    causal : bool
+        If True (keyword-only; the causal mode of ``timecorr`` and ``features``), boundaries
+        at or beyond ``T`` are left out instead of raising ``ValueError``: they are times the
+        series has not reached, so a prefix of a series takes the events of the whole
+        series. Default: False.
 
     Returns
     -------
@@ -337,7 +358,7 @@ def resolve_events(events, T, n_subjects, events_params=None):
     """
     params = events_params
     _check_params_keys(params)
-    parsed = _parse_spec(events, _check_T(T), _check_n_subjects(n_subjects))
+    parsed = _parse_spec(events, _check_T(T), _check_n_subjects(n_subjects), causal)
     if params and not _has_features(parsed):
         raise ValueError("events_params was given but no events entry holds features")
     return _finish(parsed, params, {})
@@ -349,7 +370,8 @@ def _order_key(k, order):
     return int(k)
 
 
-def resolve_events_by_order(events, T, n_subjects, order, events_params=None):
+def resolve_events_by_order(events, T, n_subjects, order, events_params=None, *,
+                            causal=False):
     """
     Parse the event specification for orders ``1..order``.
 
@@ -367,6 +389,8 @@ def resolve_events_by_order(events, T, n_subjects, order, events_params=None):
         As in :func:`resolve_events`. When ``events`` is a dict, ``events_params`` may instead
         be a dict keyed by order whose values are dicts of segmentation parameters; each such
         order must hold features.
+    causal : bool
+        As in :func:`resolve_events` (keyword-only). Default: False.
 
     Returns
     -------
@@ -394,7 +418,8 @@ def resolve_events_by_order(events, T, n_subjects, order, events_params=None):
             specs[_order_key(k, order)] = v
     else:
         specs = {k: events for k in range(1, order + 1)}
-    parsed = {k: _parse_spec(specs.get(k), T, n_subjects) for k in range(1, order + 1)}
+    parsed = {k: _parse_spec(specs.get(k), T, n_subjects, causal)
+              for k in range(1, order + 1)}
 
     flat, by_order = None, None
     if events_params is not None:
@@ -475,13 +500,24 @@ def mask_kernel(weights, boundaries):
     >>> masked[0].astype(int), masked[5].astype(int)
     (array([1, 1, 1, 0, 0, 0]), array([0, 0, 0, 1, 1, 1]))
     """
+    return _mask_kernel(weights, boundaries)
+
+
+def _mask_kernel(weights, boundaries, check=True):
+    """
+    ``mask_kernel``.  ``check=False`` (the causal mode of ``timecorr`` and
+    ``features``): a kernel whose blocks are all too short for a correlation
+    is returned, not refused; its rows are undefined (NaN) there, as the
+    first rows of every block are.
+    """
     if boundaries is None:
         return weights
     if isinstance(weights, LagKernel):
         # the kernels of timecorr, features and the decoders: rows computed
         # when read, so no T x T array is built here either
         out = weights.with_events(block_labels(boundaries, weights.T))
-        if weights.max_row_support(CHUNK) >= 2 and out.max_row_support(CHUNK) < 3:
+        if (check and weights.max_row_support(CHUNK) >= 2
+                and out.max_row_support(CHUNK) < 3):
             raise ValueError(_TOO_SHORT)
         return out
     w = np.asarray(weights)
@@ -491,7 +527,8 @@ def mask_kernel(weights, boundaries):
     labels = block_labels(boundaries, T)
     same = labels[:, None] == labels[None, :]
     out = np.where(same, w, np.zeros((), dtype=w.dtype))
-    if np.sum(w != 0, axis=1).max() >= 2 and np.sum(out != 0, axis=1).max() < 3:
+    if (check and np.sum(w != 0, axis=1).max() >= 2
+            and np.sum(out != 0, axis=1).max() < 3):
         raise ValueError(_TOO_SHORT)
     return out
 

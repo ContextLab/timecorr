@@ -187,6 +187,7 @@ The tutorials are Jupyter notebooks in `docs/tutorial/`; [Read the Docs](https:/
 - [**Decoding timepoints**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/decoding.ipynb) (`decoding.ipynb`): one decoding step by hand and the four decoders.
 - [**Brain-network animations with HTFA**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/htfa_network_animations.ipynb) (`htfa_network_animations.ipynb`): features of orders 1 to 4 of the story-listening fMRI data analyzed by Owen, Chang & Manning (2021), drawn on the brain with the [htfa](https://htfa.readthedocs.io/en/latest/) toolbox.
 - [**Stock-market correlations**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/stocks.ipynb) (`stocks.ipynb`): 20 years of daily returns of 49 US industry portfolios (Kenneth R. French Data Library), correlations around market crises, `tc.features` at orders 1 to 3, and a video of the market as a network.
+- [**Causal features: no look-ahead**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/causal.ipynb) (`causal.ipynb`): `causal=True` on the daily returns of the 49 industry portfolios: the look-ahead of an ordinary call, reducers fitted on a training span (`fit_timepoints`) and applied to later days with a `tc.FeaturesModel`, warm-up rows, refits (`refit_every`), and what causal mode does not accept.
 - [**Trajectories of features**](https://colab.research.google.com/github/ContextLab/timecorr/blob/master/docs/tutorial/trajectories.ipynb) (`trajectories.ipynb`): features of orders 1 to 4 of story-listening brain data, the stock market and human movement (CMU Motion Capture Database), animated as trajectories with hypertools.
 
 # Installation
@@ -213,7 +214,7 @@ pip install --upgrade git+https://github.com/ContextLab/timecorr.git
 
 Python 3.10 or later. The toolbox is currently supported on Mac and Linux.  It has not been tested on Windows (and we expect key functionality not to work properly on Windows systems).
 
-Dependencies (installed by pip): pydata-wrangler, hypertools>=0.8, numpy, scipy, scikit-learn, pandas, matplotlib. Optional: polars (for polars DataFrame input); hmmlearn, used only by `tc.segment`, which installs it on demand the first time it is needed (the `segment` extra, `pip install "timecorr[segment]"`; setting `TIMECORR_AUTO_INSTALL=0` turns automatic installation off); and the `test`, `docs` (building the documentation) and `tutorials` (what the real-data tutorial notebooks import) extras (`pip install "timecorr[test]"`, `pip install "timecorr[docs]"`, `pip install "timecorr[tutorials]"`).
+Dependencies (installed by pip): pydata-wrangler, hypertools>=1.1, numpy, scipy, scikit-learn, pandas, matplotlib. Optional: polars (for polars DataFrame input); hmmlearn, used only by `tc.segment`, which installs it on demand the first time it is needed (the `segment` extra, `pip install "timecorr[segment]"`; setting `TIMECORR_AUTO_INSTALL=0` turns automatic installation off); and the `test`, `docs` (building the documentation) and `tutorials` (what the real-data tutorial notebooks import) extras (`pip install "timecorr[test]"`, `pip install "timecorr[docs]"`, `pip install "timecorr[tutorials]"`).
 
 # Citing this toolbox
 

@@ -1,7 +1,9 @@
 # coding: utf-8
+import functools
 import inspect
 import numbers
 import os
+import pickle
 import sys
 import warnings
 
@@ -501,7 +503,8 @@ def _lag_kernel(T, weights_function, weights_params, include="all", include_zero
         return None
     params = defaults if weights_params is None else weights_params
     return LagKernel(profile(np.arange(int(T), dtype=np.int64), params), include,
-                     include_zero, exclude)
+                     include_zero, exclude,
+                     lag_profile=functools.partial(profile, params=params))
 
 
 def _as_kernel_array(weights):
@@ -556,7 +559,8 @@ def _kernel_row_problems(weights):
     return undefined, ~undefined & (ess < 2)
 
 
-def _estimator_message(weights, cancelled=None, sparse=None):
+def _estimator_message(weights, cancelled=None, sparse=None, warmup=None,
+                       min_samples=None):
     """
     The one warning of a correlation call, or None.
 
@@ -567,11 +571,33 @@ def _estimator_message(weights, cancelled=None, sparse=None):
     (undefined, set to 0), and the timepoints (``cancelled``, a boolean mask)
     where every correlation was set to 0 because the kernel-weighted variances
     there are zero.
+
+    ``warmup`` (the causal estimator: a boolean mask of its undefined rows,
+    with ``min_samples``) replaces the first of these: the message names how
+    many rows are undefined and returned as NaN.
     """
     T = _kernel_shape(weights)[0]
     parts = []
     problems = _kernel_row_problems(weights)
-    if problems is not None:
+    if warmup is not None:
+        if np.any(warmup):
+            rule = "" if min_samples is None else (
+                " or an effective sample size ((sum |w|)**2 / sum w**2 over the "
+                f"kernel row) below min_samples={min_samples:g}"
+            )
+            parts.append(
+                f"{int(np.sum(warmup))} of {T} timepoints have fewer than 3 "
+                f"weighted, observed samples{rule}; their correlations are "
+                "undefined and returned as NaN (causal=True)."
+            )
+        low = None if problems is None else problems[1] & ~warmup
+        if low is not None and low.any():
+            parts.append(
+                f"{int(low.sum())} of {T} timepoints have an effective sample size "
+                "((sum |w|)**2 / sum w**2 over the kernel row) below 2; the kernel "
+                "is too narrow to estimate correlations reliably there."
+            )
+    elif problems is not None:
         undefined, low = problems
         if undefined.any():
             parts.append(
@@ -1011,6 +1037,7 @@ class _KernelRows:
                 self._peak[t0:t1] = np.maximum(w.max(axis=1), -w.min(axis=1))
                 self._first[t0:t1] = c0 + np.argmax(w != 0, axis=1)
         self.zero = None
+        self.zero_cols = None
         self._scale = None
         self.spans = None
         self._cache = {}
@@ -1025,9 +1052,22 @@ class _KernelRows:
         """Set the rows in ``mask`` to 0 (before ``prepare``)."""
         self.zero = np.asarray(mask, dtype=bool)
 
-    def prepare(self, finite):
-        """Rescale the extreme rows and choose each chunk's columns."""
-        T_out = self.shape[0]
+    def zero_columns(self, mask):
+        """
+        Set the columns in ``mask`` to 0 (before ``prepare``): timepoints
+        that no row weights (the causal estimator's timepoints without a
+        sample).
+        """
+        mask = np.asarray(mask, dtype=bool)
+        self.zero_cols = mask if mask.any() else None
+
+    def prepare(self, finite, always=False):
+        """
+        Rescale the extreme rows and choose each chunk's columns
+        (``always``: the columns where the chunk has weight before
+        ``zero_rows``, however much of the kernel they cover, as the causal
+        estimator needs).
+        """
         T = self.shape[1] if len(self.shape) == 2 else 0
         peak = self._peak if self.zero is None else np.where(self.zero, 0.0, self._peak)
         extreme = (
@@ -1040,7 +1080,19 @@ class _KernelRows:
         self._cache = {}
         self._cached = 0
         self._kept = set()
-        slices = _time_slices(self, finite) if len(self.shape) == 2 else None
+        slices = None
+        if len(self.shape) == 2:
+            if always:
+                # from the kernel before any row or column is set to 0:
+                # which rows the causal estimator leaves undefined and which
+                # timepoints have no sample depends on the data, and the
+                # columns of a chunk (the shapes of its sums) must not
+                zero, cols = self.zero, self.zero_cols
+                self.zero = self.zero_cols = None
+                slices = _time_slices(self, finite, True)
+                self.zero, self.zero_cols = zero, cols
+            else:
+                slices = _time_slices(self, finite)
         if slices is None:
             slices = [(t0, t1, 0, T) for t0, t1, _, _, _ in self._chunks]
         self.spans = slices
@@ -1069,24 +1121,32 @@ class _KernelRows:
             self._kept.add(id(block))  # cached arrays are never dropped
         return block
 
-    def _row_state(self, t0, t1):
-        """The zeroed rows and scales of rows t0:t1, as part of a cache key."""
+    def _row_state(self, t0, t1, c0=0, c1=0):
+        """
+        The zeroed rows and scales of rows t0:t1 and the zeroed columns
+        among c0:c1, as part of a cache key.
+        """
         zero = None if self.zero is None else self.zero[t0:t1].tobytes()
         scale = None if self._scale is None else self._scale[t0:t1].tobytes()
-        return zero, scale
+        cols = None
+        if self.zero_cols is not None and self.zero_cols[c0:c1].any():
+            cols = self.zero_cols[c0:c1].tobytes()
+        return zero, scale, cols
 
     def _final(self, i):
         """
-        Chunk i over its columns: NaN weights 0, the zeroed rows 0, the
-        extreme rows rescaled.  Chunks with equal blocks, equal zeroed rows
-        and equal scales share one array (do not modify it).
+        Chunk i over its columns: NaN weights 0, the zeroed rows and
+        columns 0, the extreme rows rescaled.  Chunks with equal blocks,
+        equal zeroed rows and columns and equal scales share one array (do
+        not modify it).
         """
         t0, t1, c0, c1, key = self._chunks[i]
         zero = None if self.zero is None else self.zero[t0:t1]
         scale = None if self._scale is None else self._scale[t0:t1]
         # a chunk without a shared key (at an edge or an event boundary) is
         # kept under its own index
-        key = ("final", ("chunk", i) if key is None else key) + self._row_state(t0, t1)
+        key = (("final", ("chunk", i) if key is None else key)
+               + self._row_state(t0, t1, c0, c1))
         hit = self._cache.get(key)
         if hit is not None:
             return hit
@@ -1096,6 +1156,8 @@ class _KernelRows:
         w[np.isnan(w)] = 0
         if zero is not None:
             w[zero] = 0
+        if key[-1] is not None:
+            w[:, self.zero_cols[c0:c1]] = 0
         if scale is not None:
             rows = scale != 1.0
             if rows.any():
@@ -1108,7 +1170,8 @@ class _KernelRows:
         # chunks with equal blocks, equal rows zeroed and rescaled (as in
         # _final) and the same span relative to t0 have equal blocks
         key = (("chunk", i) if key is None
-               else (key, c0 - t0, c1 - t0) + self._row_state(t0, t1))
+               else (key, c0 - t0, c1 - t0)
+               + self._row_state(t0, t1, *self._chunks[i][2:4]))
         hit = self._cache.get((key, kind))
         if hit is not None:
             return hit
@@ -1171,14 +1234,14 @@ def _delta_wcorr(a, b, rows):
     return np.einsum("ti,tj->ijt", za, zb)
 
 
-def _wcorr_inputs(a, b, weights):
+def _wcorr_inputs(a, b, weights, causal=False):
     """
     The estimator's inputs: ``a`` and ``b`` as float (T, K) matrices and the
     kernel as a ``_KernelRows`` (NaN weights count as 0).  Returns
     ``(a, b, rows)``.
 
     Raises ``ValueError`` if the shapes do not match (T rows in ``a`` and
-    ``b``, T columns in ``weights``) or if every row of the kernel is zero.
+    ``b``, T columns in ``weights``) or, unless ``causal``, if every row of the kernel is zero.
     """
     a = np.asarray(a, dtype=np.float64)
     b = np.asarray(b, dtype=np.float64)
@@ -1193,14 +1256,16 @@ def _wcorr_inputs(a, b, weights):
             f"must have T columns; got a {a.shape}, b {b.shape}, weights {rows.shape}."
         )
 
-    if np.all(rows.support == 0):
+    # (the causal estimator returns rows without weight as NaN: a series of
+    # one timepoint has such a kernel when the diagonal is left out)
+    if np.all(rows.support == 0) and not causal:
         raise ValueError(
             "Every row of the kernel is zero; no correlation can be estimated."
         )
     return a, b, rows
 
 
-def _time_slices(weights, finite=True):
+def _time_slices(weights, finite=True, always=False):
     """
     Chunks of a kernel's rows and the span of columns where each has weight,
     or None when slicing would not save work.
@@ -1216,12 +1281,13 @@ def _time_slices(weights, finite=True):
     products have non-finite operands, where the full products give
     ``0 * inf = NaN`` that slicing would skip), when T' or T is 0, or when
     the spans cover more than ``_TIME_SLICE_MAX_FRACTION`` of the kernel's
-    entries.
+    entries.  ``always=True`` (the causal estimator) returns the spans
+    whatever ``_TIME_SLICING``, ``finite`` and the fraction covered are.
     """
     kernel = as_kernel(weights)
     T_out, T = kernel.shape
     slices = None
-    if _TIME_SLICING and finite and T_out and T:
+    if (always or (_TIME_SLICING and finite)) and T_out and T:
         slices, covered = [], 0
         for t0, t1, c0, _, _, w in blocks(kernel, CHUNK):
             cols = (w != 0).any(axis=0)
@@ -1232,7 +1298,7 @@ def _time_slices(weights, finite=True):
                 s0 = s1 = 0
             slices.append((t0, t1, s0, s1))
             covered += (t1 - t0) * (s1 - s0)
-        if covered > _TIME_SLICE_MAX_FRACTION * T_out * T:
+        if not always and covered > _TIME_SLICE_MAX_FRACTION * T_out * T:
             slices = None
     if _time_slice_log is not None:
         _time_slice_log.append(slices)
@@ -1319,6 +1385,8 @@ def _wcorr_block(state, i0, i1, j0):
     whether some pair has fewer than 3 observed samples with non-zero weight
     (always False without NaN samples).
     """
+    if state.get("causal"):
+        return _causal_block(state, i0, i1, j0)
     T = state["T"]
     rows = state["rows"]
     Kb = state["b"].shape[1]
@@ -1373,6 +1441,15 @@ def _wcorr_block(state, i0, i1, j0):
         undefined = zero | few
 
     zero_all = zero.reshape(shape[0], -1).all(axis=1)
+    r = _correlation_ratio(num, var_a, var_b, undefined, shape)
+    return r, undefined, zero_all, few_any
+
+
+def _correlation_ratio(num, var_a, var_b, undefined, shape):
+    """
+    ``num / sqrt(var_a * var_b)`` clipped to [-1, 1], with 0 where
+    ``undefined``; arrays of ``shape`` (the variances may broadcast to it).
+    """
     with np.errstate(over="ignore", under="ignore"):
         product = np.where(undefined, 1.0, var_a * var_b)
     den = np.sqrt(product)
@@ -1384,7 +1461,775 @@ def _wcorr_block(state, i0, i1, j0):
             np.sqrt(np.broadcast_to(var_a, shape)[extreme])
             * np.sqrt(np.broadcast_to(var_b, shape)[extreme])
         )
-    r = np.where(undefined, 0.0, np.clip(num / den, -1.0, 1.0))
+    return np.where(undefined, 0.0, np.clip(num / den, -1.0, 1.0))
+
+
+# ----------------------------------------------------------------------------
+# the causal estimator (``causal=True``)
+# ----------------------------------------------------------------------------
+
+# Samples larger than this in magnitude (their squares overflow), and
+# infinite ones, are missing data for the causal estimator.
+_CAUSAL_MAX = 1e150
+# Relative tolerance of the comparison of a row's effective sample size with
+# ``min_samples`` (three equal weights give 3 up to round-off).
+_MIN_SAMPLES_RTOL = 1e-12
+
+
+def _check_min_samples(min_samples, causal):
+    """
+    ``min_samples`` as None or a float; ``ValueError`` unless it is None or
+    a finite number >= 1, and when it is given without ``causal=True``.
+    """
+    if min_samples is None:
+        return None
+    if (
+        isinstance(min_samples, (bool, np.bool_))
+        or not isinstance(min_samples, numbers.Real)
+        or not 1 <= min_samples < np.inf
+    ):
+        raise ValueError(
+            "min_samples must be None or a finite number >= 1 (the effective "
+            f"number of weighted samples a row needs); got {min_samples!r}."
+        )
+    if not causal:
+        raise ValueError(
+            f"min_samples={min_samples!r} applies with causal=True only; pass "
+            "causal=True, or leave min_samples out."
+        )
+    return float(min_samples)
+
+
+# ``_kernel_reach`` evaluates a lag profile at up to this many lags.
+_REACH_LAGS = 2 ** 22
+
+
+def _profile_tails(profile, n):
+    """
+    ``(sum of |w|, sum of w**2)`` over the lags ``n, n + 1, ...`` of the lag
+    profile of a built-in kernel function, from the profile's formula (the
+    sums over a heavy or very wide tail converge too slowly to be added
+    up), or None when there is no formula (or the tail has no end:
+    ``uniform_weights``).
+
+    - ``laplace_weights``: the two geometric series, exactly.
+    - ``boxcar_weights``: the number of lags below ``width / 2``, exactly.
+    - ``t_weights`` and ``gaussian_weights`` (densities): the integral of
+      the tail from the survival function, with the first two terms of the
+      Euler-Maclaurin formula (``f(n) / 2 - f'(n) / 12``); the square of
+      either density is a multiple of a density of the same family.
+    - ``mexican_hat_weights``, for ``n >= 2 sigma`` (where ``|w|``
+      decreases): an upper bound of the sum of ``|w|``, and 0 for the sum
+      of squares, so that the reach computed from them is an upper bound.
+    """
+    from scipy.stats import norm, t as student
+
+    family = getattr(profile, "func", None)
+    params = (getattr(profile, "keywords", None) or {}).get("params")
+    if params is None:
+        return None
+    n = int(n)
+
+    def value(x):
+        return float(profile(np.array([float(x)]))[0])
+
+    with np.errstate(all="ignore"):
+        if family is boxcar_profile:
+            last = float(params["width"]) / 2.0  # lags d < last have weight 1
+            if np.isnan(last):
+                return None
+            count = np.inf if np.isinf(last) and last > 0 else max(
+                0.0, float(np.ceil(last)) - n)
+            return count, count
+        if family is laplace_profile:
+            scale = float(params["scale"])
+            if not (np.isfinite(scale) and scale > 0):
+                return None
+            f = abs(value(n))
+            return f / -np.expm1(-1.0 / scale), f * f / -np.expm1(-2.0 / scale)
+        if family is gaussian_profile:
+            var = float(params["var"])
+            if not (np.isfinite(var) and var > 0):
+                return None
+            f = value(n)
+            slope = -n / var * f
+            first = norm.sf(n / np.sqrt(var)) + f / 2 - slope / 12
+            second = (norm.sf(n / np.sqrt(var / 2)) / (2 * np.sqrt(np.pi * var))
+                      + f * f / 2 - 2 * f * slope / 12)
+            return float(first), float(second)
+        if family is t_profile:
+            df = float(params["df"])
+            f, peak = value(n), value(0)
+            if not (np.isfinite(df) and df > 0 and np.isfinite(peak) and peak > 0):
+                return None
+            slope = f * (-(df + 1) * n / df) / (1 + n * n / df)
+            first = student.sf(n, df) + f / 2 - slope / 12
+            # the squared density is a t density of 2 df + 1 degrees of
+            # freedom on a rescaled axis
+            df2 = 2 * df + 1
+            second = (peak * peak * np.sqrt(df / df2)
+                      * student.sf(n * np.sqrt(df2 / df), df2) / student.pdf(0, df2)
+                      + f * f / 2 - 2 * f * slope / 12)
+            return float(first), float(second)
+        if family is mexican_hat_profile:
+            sigma = abs(float(params["sigma"]))
+            if not (np.isfinite(sigma) and sigma > 0) or n < 2 * sigma:
+                return None
+            # the integral of |w| from n on is n |w(n)| / (n**2 / sigma**2 - 1)
+            f = abs(value(n))
+            return f + n * f / (n * n / (sigma * sigma) - 1), 0.0
+    return None
+
+
+# ``_strided_reach`` evaluates a lag profile at this many lags, a stride apart
+_STRIDED_LAGS = 2 ** 16
+# and returns its estimate times this, so that it is an upper bound
+_STRIDED_MARGIN = 1.01
+
+
+def _flat_profile(profile):
+    """Whether a lag profile is the same weight at every lag
+    (``uniform_weights``; ``boxcar_weights`` of infinite width)."""
+    family = getattr(profile, "func", None)
+    if family is uniform_profile:
+        return True
+    if family is boxcar_profile:
+        params = (getattr(profile, "keywords", None) or {}).get("params") or {}
+        try:
+            return float(params.get("width")) == np.inf
+        except (TypeError, ValueError):
+            return False
+    return False
+
+
+def _strided_reach(profile, lo):
+    """
+    An upper bound of the largest effective sample size over the lags
+    ``lo..n``, for every n, of a profile too wide for its lags to be added
+    up one by one: the profile is read at every ``s``-th lag, for the
+    smallest stride ``s`` (a power of 16) at which the sums converge within
+    ``_STRIDED_LAGS`` lags, and the result is ``s`` times the effective
+    sample size of those lags (the profile varies little within a stride;
+    there are at least ``_STRIDED_LAGS / 16`` lags in its extent), times
+    ``_STRIDED_MARGIN``.  None when the sums converge at no stride.
+    """
+    k = np.arange(_STRIDED_LAGS, dtype=np.float64)
+    half = _STRIDED_LAGS // 2
+    stride = 16.0
+    while np.isfinite(lo + stride * _STRIDED_LAGS):
+        with np.errstate(all="ignore"):
+            a = np.abs(np.asarray(profile(lo + stride * k), dtype=np.float64))
+        a[~np.isfinite(a)] = 0
+        peak = a.max()
+        if peak > 0:
+            a /= peak
+            total, squares = np.cumsum(a), np.cumsum(a * a)
+            if total[-1] - total[half - 1] <= 1e-12 * total[-1]:
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    ess = total**2 / squares
+                return float(_STRIDED_MARGIN * stride * np.nanmax(ess))
+        stride *= 16.0
+    return None
+
+
+def _profile_reach(profile, include_zero, exclude):
+    """``_kernel_reach`` from the lag profile function and the restrictions
+    of a backward kernel (``exclude``: ``exclude_timepoints`` or None)."""
+    lo, hi = (0 if include_zero else 1), np.inf  # the lags lo..hi are kept
+    if exclude is not None:
+        x = int(abs(exclude))
+        if exclude >= 0:
+            hi = x
+        else:
+            lo = max(lo, x + 1)
+    if lo > hi:
+        return 0.0
+    if _flat_profile(profile):
+        # equal weights: the number of lags
+        return None if np.isinf(hi) else float(hi - lo + 1)
+    n = 1024
+    while n <= _REACH_LAGS:
+        with np.errstate(over="ignore", invalid="ignore"):
+            a = np.abs(np.asarray(profile(np.arange(n, dtype=np.int64)), dtype=np.float64))
+        a[~np.isfinite(a)] = 0
+        a[:lo] = 0
+        if hi < n:
+            a[hi + 1:] = 0
+        peak = a.max()
+        if peak > 0:
+            a /= peak  # so that tiny weights do not underflow when squared
+            total = np.cumsum(a)
+            squares = np.cumsum(a * a)
+            with np.errstate(invalid="ignore", divide="ignore"):
+                ess = total**2 / squares
+            # converged: the later half of the lags adds nothing to the sums
+            if total[-1] - total[n // 2 - 1] <= 1e-15 * total[-1]:
+                return float(np.nanmax(ess))
+            # not converged: the rest of the sums from the profile's formula
+            # (the lags from n on: all kept when no lag ends them)
+            tails = _profile_tails(profile, n) if np.isinf(hi) else None
+            if tails is not None and np.isfinite(tails[0]):
+                first, second = tails[0] / peak, tails[1] / peak**2
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    limit = (total[-1] + first) ** 2 / (squares[-1] + second)
+                return float(np.nanmax([np.nanmax(ess), limit]))
+        elif hi < n:
+            return 0.0  # every lag kept was read, and none has weight
+        n *= 2
+    n //= 2  # the lags 0..n-1 were read
+    if np.isfinite(hi):
+        # kept up to a lag beyond those read
+        if peak == 0:
+            return 0.0  # no weight at any lag read
+        near, far = _profile_tails(profile, n), _profile_tails(profile, hi + 1)
+        if near is not None and far is not None and near[1] > 0 and np.isfinite(near[0]):
+            # weights that fall with the lag: the sums over the lags n..hi
+            # from the formula, and the largest value at the last lag
+            first = (near[0] - far[0]) / peak
+            second = (near[1] - far[1]) / peak**2
+            with np.errstate(invalid="ignore", divide="ignore"):
+                limit = (total[-1] + first) ** 2 / (squares[-1] + second)
+            return float(np.nanmax([np.nanmax(ess), limit]))
+        # no formula: at most what the kernel reaches without that end
+        return _profile_reach(profile, lo == 0, None)
+    if lo >= n:
+        # only lags beyond those read.  The four families whose weights
+        # fall with the lag: the effective sample size grows with every
+        # lag added, to the limit of the formula's sums
+        tails = _profile_tails(profile, lo)
+        if tails is not None and tails[1] > 0:
+            return float(tails[0] ** 2 / tails[1]) if np.isfinite(tails[0]) else None
+        if tails is not None and tails[0] == 0:
+            return 0.0
+    elif peak == 0:
+        return 0.0  # no weight at any lag read (parameters that are not finite)
+    return _strided_reach(profile, lo)
+
+
+def _kernel_reach(kernel):
+    """
+    The largest effective sample size ``(sum |w|)**2 / sum w**2`` a row of a
+    backward kernel can have with any number of earlier timepoints: the
+    largest over the lags kept up to lag n, for every n.  The lags kept are
+    those the kernel's restrictions leave: from 1 without the diagonal
+    (``include_zero=False``); up to ``x`` with ``exclude_timepoints=x >=
+    0``, from ``x + 1`` with ``exclude_timepoints=-x``.  It does not depend
+    on the length of the series (nor on events: the last block of a series
+    grows with it).
+
+    For a kernel with the same weight at every lag (``uniform_weights``, a
+    ``boxcar_weights`` of infinite width) it is the number of lags kept.
+    Otherwise the sums are added up over the first lags; when they have not
+    converged there (a heavy tail, as of ``t_weights`` with few degrees of
+    freedom, or a very wide kernel), the rest comes from the profile's
+    formula (``_profile_tails``).  So the result is known for every
+    built-in kernel function and parameter value: exactly for
+    ``boxcar_weights``, ``laplace_weights`` and ``uniform_weights``, to
+    round-off of the tail formula for ``gaussian_weights`` and
+    ``t_weights``, and as an upper bound (so that a ``min_samples`` is
+    never refused wrongly) for a ``mexican_hat_weights`` wider than about
+    1000 samples (beyond 2 million samples from ``_strided_reach``; one
+    that ``exclude_timepoints`` ends beyond the 4 million lags added up
+    has what it reaches without that end).  0 for a kernel without weight
+    at the lags kept.
+
+    None when it has no limit (equal weights at lags without end: the
+    effective sample size grows with the number of earlier timepoints) and
+    for a kernel without a lag profile function (an array, a kernel
+    function of the user's).  The result is kept on the kernel.
+    """
+    profile = getattr(kernel, "lag_profile", None)
+    if profile is None or kernel.include != "backward":
+        return None
+    cached = getattr(kernel, "_reach", None)
+    if cached is not None:
+        return cached[0]
+    reach = _profile_reach(profile, kernel.include_zero, kernel.exclude)
+    if reach is not None and not np.isfinite(reach):
+        reach = None
+    kernel._reach = (reach,)
+    return reach
+
+
+def _check_reachable(kernel, min_samples):
+    """
+    ``ValueError`` when no row of ``kernel``, however many timepoints come
+    before it, reaches ``min_samples`` (``_kernel_reach``; never for a kernel
+    without a lag profile function).  The decision does not depend on the
+    length of the series: rows of a short series that do not reach
+    ``min_samples`` are undefined, not an error.
+    """
+    most = _kernel_reach(as_kernel(kernel))
+    if most is None or most >= min_samples * (1 - _MIN_SAMPLES_RTOL):
+        return
+    raise ValueError(
+        f"min_samples={min_samples:g} is more than a row of the kernel can "
+        "have: with any number of earlier timepoints its largest effective "
+        f"sample size ((sum |w|)**2 / sum w**2 over a row) is {most:.4g}.  "
+        "Pass a min_samples of at most that, a wider kernel, or leave "
+        "min_samples out."
+    )
+
+
+def _causal_clean(x):
+    """
+    ``x`` as the causal estimator reads it: infinite samples and samples
+    above ``_CAUSAL_MAX`` in magnitude are NaN (missing).  ``x`` itself when
+    it has none, otherwise a copy.
+    """
+    x = np.asarray(x, dtype=np.float64)
+    with np.errstate(invalid="ignore"):
+        bad = np.abs(x) > _CAUSAL_MAX
+    if bad.any():
+        x = x.copy()
+        x[bad] = np.nan
+    return x
+
+
+def _abs_weights(w):
+    """The absolute values of a kernel block, NaN weights as 0 (a new array)."""
+    w = np.abs(w)
+    w[np.isnan(w)] = 0
+    return w
+
+
+def _check_causal_kernel(weights, what="the kernel"):
+    """
+    ``ValueError`` if a (T', T) kernel (an array or a ``LagKernel``) has
+    weight above its diagonal: row t would weight timepoints after t.
+    """
+    kernel = as_kernel(weights)
+    if isinstance(kernel, LagKernel) and kernel.include == "backward":
+        return
+    if len(kernel.shape) != 2:
+        return
+    for t0, t1, c0, c1, _, w in blocks(kernel, CHUNK):
+        later = np.triu(w, t0 - c0 + 1)
+        if np.any((later != 0) & ~np.isnan(later)):
+            raise ValueError(
+                f"causal=True: {what} gives weight to later timepoints (it has "
+                "non-zero entries above its diagonal).  Pass a kernel whose row "
+                "t weights only timepoints at or before t, for example "
+                "tc.one_sided(weights, 'backward') or a kernel function called "
+                "with direction='backward'."
+            )
+
+
+def _check_causal_rows(rows):
+    """
+    The checks of a causal call on its kernel (a ``_KernelRows``).
+
+    A delta kernel is one with a single non-zero weight in every row at any
+    length of the series.  The one row of a series of one timepoint has a
+    single weight whatever the kernel: it is a delta kernel only when the
+    kernel's lag profile says so (``_kernel_reach`` of at most 1), so a
+    prefix of a series is never refused where the series is not; the same
+    holds for a built-in kernel whose rows are cut by events.
+    """
+    delta = bool(rows.support.size) and bool(np.all(rows.support == 1))
+    if delta and (rows.shape[0] == 1 or getattr(rows.kernel, "labels", None) is not None):
+        # one row, or rows cut by events (blocks of one timepoint): the
+        # kernel's own lag profile decides
+        reach = _kernel_reach(rows.kernel)
+        delta = reach is not None and reach <= 1 + _MIN_SAMPLES_RTOL
+    if delta:
+        raise ValueError(
+            "causal=True: a delta kernel (one non-zero weight in every row, as "
+            "eye_weights gives) yields co-fluctuations of series z-scored over "
+            "the whole recording, which use later timepoints.  Pass a kernel "
+            "with at least 3 weights per row, for example "
+            "tc.boxcar_weights(T, {'width': 5}, direction='backward')."
+        )
+    _check_causal_kernel(rows.kernel)
+
+
+def _kernel_samples(kernel, observed=None):
+    """
+    ``(count, ess)`` per row of a kernel: the number of observed timepoints
+    with non-zero weight, and the effective sample size
+    ``(sum |w|)**2 / sum w**2`` over them (0 for a row without any).
+
+    ``observed`` is a boolean vector over the T timepoints (None: all).
+    Each row is scaled by its largest weight first, so tiny weights do not
+    underflow when squared.
+    """
+    T_out = kernel.shape[0]
+    count = np.zeros(T_out, dtype=np.int64)
+    ess = np.zeros(T_out)
+    everything = observed is None or bool(np.all(observed))
+    if not everything:
+        observed = np.asarray(observed, dtype=np.float64)
+    seen = {}
+    for t0, t1, c0, c1, key, w in blocks(kernel, CHUNK, _abs_weights):
+        stats = seen.get(key) if (key is not None and everything) else None
+        if stats is None:
+            if not everything:
+                w = w * observed[c0:c1]
+            n = np.count_nonzero(w, axis=1)
+            peak = w.max(axis=1, keepdims=True, initial=0.0)
+            with np.errstate(invalid="ignore"):
+                w = np.divide(w, peak, out=np.zeros_like(w), where=peak != 0)
+                total = w.sum(axis=1)
+                np.multiply(w, w, out=w)
+                stats = n, _safe_divide(total**2, w.sum(axis=1))
+            if key is not None and everything:
+                seen[key] = stats
+        count[t0:t1], ess[t0:t1] = stats
+    return count, ess
+
+
+def _causal_defined(kernel, observed, min_samples, min_count=3):
+    """
+    The rows of a causal kernel that are defined: at least ``min_count``
+    observed timepoints with non-zero weight and, with ``min_samples`` (not
+    None), an effective sample size over the observed timepoints of at
+    least ``min_samples`` (relative tolerance ``_MIN_SAMPLES_RTOL``).
+
+    ``observed`` is a boolean vector over the T timepoints (a timepoint with
+    no sample at all is not observed).  ``ValueError`` when the kernel
+    cannot reach ``min_samples`` at any length (``_check_reachable``).
+    """
+    if min_samples is not None:
+        _check_reachable(kernel, min_samples)
+    count, ess = _kernel_samples(kernel, observed)
+    defined = count >= min_count
+    if min_samples is not None:
+        with np.errstate(invalid="ignore"):
+            defined &= ess >= min_samples * (1 - _MIN_SAMPLES_RTOL)
+    return defined
+
+
+# The causal estimator also counts a kernel-weighted standard deviation below
+# this fraction of the magnitude of the kernel-weighted mean as zero: a column
+# that is constant up to the round-off of the computation that produced it
+# (an output of an earlier order; such columns are not set to their mean in
+# causal mode, which would read later rows).
+_CAUSAL_CONSTANT = 1e-9
+
+
+def _causal_zero_variance(var, msq, s, mean):
+    """
+    The zero-variance rule of the causal estimator: ``_zero_variance`` (with
+    ``msq`` the kernel-weighted mean square about the chunk's reference), or
+    a kernel-weighted standard deviation ``sqrt(var / s)`` below
+    ``_CAUSAL_CONSTANT`` times ``|mean|``, the kernel-weighted mean of the
+    raw column.  Every quantity is a kernel-weighted sum of the row, so the
+    rule reads no later sample.
+    """
+    sd = np.sqrt(np.maximum(var, 0.0))
+    return _zero_variance(var, msq, s, mean) | (
+        sd < _CAUSAL_CONSTANT * np.sqrt(s) * np.abs(mean)
+    )
+
+
+# The causal estimator centers the data anew for every group of this many
+# kernel rows (see ``_group_reference``): a few standard deviations of a
+# kernel as narrow as a Gaussian of variance 25.  Each group multiplies the
+# centered columns over all the columns its chunk weights, so a chunk that
+# weights more than ``_CAUSAL_SPAN`` columns (a kernel with weight at every
+# lag, such as ``laplace_weights``) has proportionally larger groups, up to
+# the whole chunk.
+_CAUSAL_GROUP = 16
+_CAUSAL_SPAN = 512
+
+
+def _causal_reference(x, c0, t0, c1):
+    """
+    A centering reference of the columns of ``x`` for kernel rows from
+    ``t0`` on that weight rows ``c0:c1``: the mean of each column's observed
+    samples in rows ``c0:t0`` (before every such row); for a column without
+    any, its first observed sample in rows ``c0:c1`` (0 when it has none).
+    A kernel row that has samples of the column has that first sample in
+    its past, so no row's reference holds a sample from its future.
+    """
+    past = x[c0:max(c0, t0)]
+    ok = ~np.isnan(past)
+    n = ok.sum(axis=0)
+    ref = _safe_divide(np.where(ok, past, 0.0).sum(axis=0), n)
+    none = n == 0
+    if none.any():
+        span = x[c0:c1][:, none]
+        ok = ~np.isnan(span)
+        first = span[ok.argmax(axis=0), np.arange(span.shape[1])]
+        ref[none] = np.where(ok.any(axis=0), first, 0.0)
+    return ref
+
+
+def _group_reference(x, weights, c0, g0, c1):
+    """
+    The centering reference of the columns of ``x`` for a group of kernel
+    rows that starts at row ``g0`` and weights rows ``c0:c1``: the
+    kernel-weighted mean of each column's observed samples at row ``g0``
+    (``weights``: the absolute weights of that row over ``c0:c1``), which
+    every row of the group may read and which lies within the samples the
+    group weights.  For a column without a weighted sample at row ``g0``
+    (the first rows of a series or of an event, a row left undefined):
+    ``_causal_reference``.
+
+    A correlation does not depend on the reference; a reference close to
+    the samples a row weights keeps its sums well conditioned.
+    """
+    span = x[c0:c1]
+    ok = ~np.isnan(span)
+    num = weights @ np.where(ok, span, 0.0)
+    den = weights @ ok.astype(np.float64)
+    ref = _safe_divide(num, den)
+    none = den == 0
+    if none.any():
+        ref[none] = _causal_reference(x[:, none], c0, g0, c1)
+    return ref
+
+
+def _causal_groups(rows):
+    """
+    ``(i, g0, g1, c0, c1)`` for the groups of consecutive rows ``g0:g1`` of
+    each chunk ``i`` of a prepared ``_KernelRows`` whose kernel has no
+    weight above its diagonal: the group's weights lie in columns ``c0:c1``
+    (the chunk's columns before row ``g1``).  A group has ``_CAUSAL_GROUP``
+    rows, times the number of ``_CAUSAL_SPAN`` columns the chunk weights
+    (rounded up), at most the chunk.
+    """
+    groups = []
+    for i, (t0, t1, c0, c1) in enumerate(rows.spans):
+        size = _CAUSAL_GROUP * max(1, -(-(c1 - c0) // _CAUSAL_SPAN))
+        for g0 in range(t0, t1, size):
+            g1 = min(t1, g0 + size)
+            if min(c1, g1) > c0:
+                groups.append((i, g0, g1, c0, min(c1, g1)))
+    return groups
+
+
+def _group_block(rows, group, kind):
+    """The rows and columns of a group of ``_causal_groups`` (a new array)."""
+    i, g0, g1, c0, c1 = group
+    t0 = rows.spans[i][0]
+    return np.ascontiguousarray(rows._block(i, kind)[g0 - t0 : g1 - t0, : c1 - c0])
+
+
+def _causal_setup(a, b, rows, autocorrelation, min_samples):
+    """
+    ``_wcorr_setup`` for the causal estimator (``a`` and ``b`` from
+    ``_causal_clean``, the kernel checked by ``_check_causal_rows``).
+
+    Nothing computed for a kernel row uses a sample after the row, and the
+    floating-point operations that give a row do not depend on the samples
+    it does not weight:
+
+    - the undefined rows (``_causal_defined``, from the timepoints where
+      both ``a`` and ``b`` have a sample) are set to 0 here and to NaN in the
+      output;
+    - every chunk of ``CHUNK`` rows is multiplied with the columns where it
+      has weight, whatever fraction of the kernel they cover, a group of
+      ``_CAUSAL_GROUP`` rows at a time (``_causal_groups``);
+    - each group centers the data on its own reference
+      (``_group_reference``), and the zero-variance rule compares a
+      variance with the kernel-weighted mean square about that reference
+      and with the kernel-weighted mean (``_causal_zero_variance``);
+    - a timepoint where ``a`` or ``b`` has no sample at all (a row of NaN,
+      as the undefined rows of an earlier order are) has weight 0 in every
+      row;
+    - a row is computed with the sums for complete data exactly when no
+      timepoint it weights has a NaN sample (``"plain"``), and with the
+      pairwise sums otherwise.  NaN samples are set to 0 after centering, so
+      the sums for complete data of such a row hold only exact zeros from
+      the timepoints it does not weight: a NaN (or any other value) after a
+      row changes no bit of the row.
+
+    Returns a dict with ``"causal": True`` for ``_wcorr_block``.
+    """
+    T_out = rows.shape[0]
+    Ka, Kb = a.shape[1], b.shape[1]
+    nan_a = np.isnan(a)
+    nan_b = nan_a if autocorrelation else np.isnan(b)
+    # timepoints without a sample of ``a`` or of ``b``: no pair of features
+    # has one there, so no row weights them (their kernel columns are 0)
+    missing = nan_a.all(axis=1) | nan_b.all(axis=1)
+    defined = _causal_defined(rows.kernel, ~missing, min_samples)
+    rows.zero_rows(~defined)
+    rows.zero_columns(missing)
+    rows.prepare(True, always=True)
+    # the timepoints with a NaN sample, their number before each row, and
+    # those among them that rows can weight
+    with_nan = nan_a.any(axis=1) | nan_b.any(axis=1)
+    nan_before = np.concatenate([[0], np.cumsum(with_nan)])
+    with_nan = (with_nan & ~missing).astype(np.float64)
+    del nan_a, nan_b
+    groups = _causal_groups(rows)
+    n = len(groups)
+    state = {
+        "causal": True, "T": a.shape[0], "rows": rows, "a": a, "b": b,
+        "defined": defined, "groups": groups,
+        # groups whose columns hold a NaN sample; groups with a row that
+        # weights one; the rows that weight none
+        "dirty": np.zeros(n, dtype=bool),
+        "nan": np.zeros(n, dtype=bool),
+        "plain": np.ones(T_out, dtype=bool),
+        "ref_a": np.zeros((n, Ka)),
+        "sw": np.zeros((T_out, 1)),
+        "ma": np.zeros((T_out, Ka)), "wa": np.zeros((T_out, Ka)),
+        "va": np.zeros((T_out, Ka)), "za": np.ones((T_out, Ka), dtype=bool),
+    }
+    if autocorrelation:
+        state.update(ref_b=state["ref_a"], mb=state["ma"], wb=state["wa"],
+                     vb=state["va"], zb=state["za"])
+    else:
+        state.update({
+            "ref_b": np.zeros((n, Kb)),
+            "mb": np.zeros((T_out, Kb)), "wb": np.zeros((T_out, Kb)),
+            "vb": np.zeros((T_out, Kb)), "zb": np.ones((T_out, Kb), dtype=bool),
+        })
+    active = np.zeros(T_out, dtype=bool)
+
+    def moments(x, ref, dirty, A, W, s, g0, g1, side):
+        x = x - ref
+        if dirty:
+            x[np.isnan(x)] = 0
+        mean = _safe_divide(A @ x, s)
+        msq = A @ x**2
+        var = msq - s * mean**2
+        zero = _causal_zero_variance(var, msq, s, mean + ref)
+        state["m" + side][g0:g1] = mean
+        state["w" + side][g0:g1] = W @ x
+        state["v" + side][g0:g1] = np.where(zero, 0.0, var)
+        state["z" + side][g0:g1] = zero
+
+    for g, group in enumerate(groups):
+        _, g0, g1, c0, c1 = group
+        A = _group_block(rows, group, "a")
+        s = A.sum(axis=1)[:, np.newaxis]
+        active[g0:g1] = s[:, 0] > 0
+        dirty = state["dirty"][g] = nan_before[c1] > nan_before[c0]
+        if dirty:
+            plain = (_group_block(rows, group, "s") @ with_nan[c0:c1]) == 0
+            state["plain"][g0:g1] = plain
+            state["nan"][g] = not plain.all()
+        state["ref_a"][g] = _group_reference(a, A[0], c0, g0, c1)
+        if not autocorrelation:
+            state["ref_b"][g] = _group_reference(b, A[0], c0, g0, c1)
+        W = _group_block(rows, group, "w")
+        state["sw"][g0:g1, 0] = W.sum(axis=1)
+        moments(a[c0:c1], state["ref_a"][g], dirty, A, W, s, g0, g1, "a")
+        if not autocorrelation:
+            moments(b[c0:c1], state["ref_b"][g], dirty, A, W, s, g0, g1, "b")
+    state["active"] = active
+    # the sums for complete data set the block size; the pairwise sums of
+    # the rows that need them are computed in blocks of their own
+    # (``_causal_block``), so the blocks of the first do not depend on
+    # whether the data hold NaN samples
+    state["n_products"] = 1
+    return state
+
+
+def _causal_pairwise(A, W, S, xa, ok_a, xb, ok_b, ref_a, ref_b):
+    """
+    The pairwise sums of a group of rows of the causal estimator (``A``,
+    ``W``, ``S``: the group's absolute weights, weights and support) for
+    the centered, zero-filled columns ``xa`` and ``xb`` (``ok_a``,
+    ``ok_b``: their observed samples): ``(r, undefined, zero, few)``, each
+    of shape (rows of the group, columns of ``xa``, columns of ``xb``).
+    """
+    L = xa.shape[0]
+    sub = (A.shape[0], xa.shape[1], xb.shape[1])
+    pair_ok = ok_a[:, :, np.newaxis] & ok_b[:, np.newaxis, :]
+    x = xa[:, :, np.newaxis] * pair_ok
+    y = xb[:, np.newaxis, :] * pair_ok
+    m = x[0].size
+    terms = np.concatenate(
+        [t.reshape(L, -1) for t in (pair_ok.astype(float), x, y, x**2, y**2)],
+        axis=1,
+    )
+    s0, sx, sy, sxx, syy = np.split(A @ terms, 5, axis=1)
+    w0, wx, wy = np.split(W @ terms[:, : 3 * m], 3, axis=1)
+    wxy = W @ (x * y).reshape(L, -1)
+    mx = _safe_divide(sx, s0)
+    my = _safe_divide(sy, s0)
+    num = (wxy - mx * wy - my * wx + mx * my * w0).reshape(sub)
+    var_a = sxx - s0 * mx**2
+    var_b = syy - s0 * my**2
+    pairs = sub[1:]
+    ca = np.broadcast_to(ref_a[:, np.newaxis], pairs).reshape(-1)
+    cb = np.broadcast_to(ref_b[np.newaxis, :], pairs).reshape(-1)
+    zero = _causal_zero_variance(var_a, sxx, s0, mx + ca) | (
+        _causal_zero_variance(var_b, syy, s0, my + cb)
+    )
+    var_a, var_b, zero = (v.reshape(sub) for v in (var_a, var_b, zero))
+    # two samples always give r = +-1: fewer than 3 is undefined
+    few = (S @ terms[:, :m]).reshape(sub) < 3
+    und = zero | few
+    return _correlation_ratio(num, var_a, var_b, und, sub), und, zero, few
+
+
+def _causal_block(state, i0, i1, j0):
+    """
+    ``_wcorr_block`` for the causal estimator (``state`` from
+    ``_causal_setup``): the same sums, a group of kernel rows at a time,
+    each over its own columns and about its own centering reference.  Every
+    group computes the sums for complete data, on the data with NaN samples
+    set to 0; a group with rows that weight a NaN sample also computes the
+    pairwise sums, which those rows take.
+    """
+    rows = state["rows"]
+    a, b = state["a"], state["b"]
+    shape = (rows.shape[0], i1 - i0, b.shape[1] - j0)
+    r = np.zeros(shape)
+    undefined = np.ones(shape, dtype=bool)
+    zero_all = np.ones(shape[0], dtype=bool)
+    few_any = np.zeros(shape[0], dtype=bool)
+    # rows of ``a`` per block of pairwise sums
+    step = _wcorr_block_rows(state["T"], shape[2], _WCORR_NAN_PRODUCTS)
+    for g, group in enumerate(state["groups"]):
+        _, g0, g1, c0, c1 = group
+        L = c1 - c0
+        sub = (g1 - g0,) + shape[1:]
+        ref_a = state["ref_a"][g, i0:i1]
+        ref_b = state["ref_b"][g, j0:]
+        xa = a[c0:c1, i0:i1] - ref_a
+        xb = b[c0:c1, j0:] - ref_b
+        if state["dirty"][g]:
+            ok_a = ~np.isnan(xa)
+            ok_b = ~np.isnan(xb)
+            xa[~ok_a] = 0
+            xb[~ok_b] = 0
+        W = _group_block(rows, group, "w")
+        prod = (xa[:, :, np.newaxis] * xb[:, np.newaxis, :]).reshape(L, -1)
+        cross = (W @ prod).reshape(sub)
+        del prod
+        ma_i = state["ma"][g0:g1, i0:i1, np.newaxis]
+        mb_j = state["mb"][g0:g1, np.newaxis, j0:]
+        num = (
+            cross
+            - ma_i * state["wb"][g0:g1, np.newaxis, j0:]
+            - mb_j * state["wa"][g0:g1, i0:i1, np.newaxis]
+            + ma_i * mb_j * state["sw"][g0:g1, :, np.newaxis]
+        )
+        var_a = state["va"][g0:g1, i0:i1, np.newaxis]
+        var_b = state["vb"][g0:g1, np.newaxis, j0:]
+        zero = (state["za"][g0:g1, i0:i1, np.newaxis]
+                | state["zb"][g0:g1, np.newaxis, j0:])
+        r_group = _correlation_ratio(num, var_a, var_b, zero, sub)
+        und = zero
+        if state["nan"][g]:
+            # the rows that weight a NaN sample take the pairwise sums
+            need = ~state["plain"][g0:g1]
+            A = _group_block(rows, group, "a")
+            S = _group_block(rows, group, "s")
+            und = zero.copy()
+            zero = zero.copy()
+            few = np.zeros(sub, dtype=bool)
+            for k0 in range(0, sub[1], step):
+                k1 = min(sub[1], k0 + step)
+                pr, pu, pz, pf = _causal_pairwise(
+                    A, W, S, xa[:, k0:k1], ok_a[:, k0:k1], xb, ok_b,
+                    ref_a[k0:k1], ref_b,
+                )
+                r_group[need, k0:k1] = pr[need]
+                und[need, k0:k1] = pu[need]
+                zero[need, k0:k1] = pz[need]
+                few[need, k0:k1] = pf[need]
+            few_any[g0:g1] = few.reshape(sub[0], -1).any(axis=1)
+        zero_all[g0:g1] = zero.reshape(sub[0], -1).all(axis=1)
+        r[g0:g1] = r_group
+        undefined[g0:g1] = und
     return r, undefined, zero_all, few_any
 
 
@@ -1402,7 +2247,7 @@ def _symmetrize_block(r, undefined, offset):
     r[:, :, offset : offset + c] = (square + square.transpose(0, 2, 1)) / 2
 
 
-def _wcorr_blocks(a, b, rows, autocorrelation):
+def _wcorr_blocks(a, b, rows, autocorrelation, causal=False, min_samples=None):
     """
     Kernel-weighted correlations, computed with matrix products over blocks of
     feature pairs.  NaN samples are excluded pairwise (they carry no weight).
@@ -1414,10 +2259,17 @@ def _wcorr_blocks(a, b, rows, autocorrelation):
     with non-zero weight (NaN samples; those correlations are set to 0, the
     diagonal of an autocorrelation included).  Without NaN samples ``sparse``
     is all False.
+
+    ``causal=True`` selects the causal estimator (``_causal_setup``, with
+    ``min_samples``): the rows it leaves undefined are NaN in ``out``, and
+    their mask is returned as a fourth item (None otherwise).
     """
     T, Ka = a.shape
     Kb = b.shape[1]
-    state = _wcorr_setup(a, b, rows, autocorrelation)
+    if causal:
+        state = _causal_setup(a, b, rows, autocorrelation, min_samples)
+    else:
+        state = _wcorr_setup(a, b, rows, autocorrelation)
     out = np.zeros([Ka, Kb, rows.shape[0]])
     cancelled = state["active"].copy()
     sparse = np.zeros_like(cancelled)
@@ -1439,10 +2291,15 @@ def _wcorr_blocks(a, b, rows, autocorrelation):
 
     # rows without weight (undefined kernel rows) are reported as such
     sparse &= state["active"]
-    return out, cancelled, sparse
+    if causal:
+        warmup = ~state["defined"]
+        out[:, :, warmup] = np.nan
+        return out, cancelled, sparse, warmup
+    return out, cancelled, sparse, None
 
 
-def _corr_row_blocks(a, b, weights, symmetric, rows_per_block=None):
+def _corr_row_blocks(a, b, weights, symmetric, rows_per_block=None, *,
+                     causal=False, min_samples=None):
     """
     The rows of ``_wcorr(a, b, weights)`` in blocks, without the full array.
 
@@ -1471,10 +2328,20 @@ def _corr_row_blocks(a, b, weights, symmetric, rows_per_block=None):
     masks ``_wcorr(..., return_cancelled=True)`` returns (all False for the
     delta case).
 
+    With ``causal=True`` the rows are those of ``_wcorr(..., causal=True,
+    min_samples=min_samples, autocorrelation=symmetric)``: the undefined
+    (warm-up) rows are NaN in every block.
+
     Raises ``ValueError`` as ``_wcorr`` does, and if ``symmetric`` is True but
     ``a`` and ``b`` differ in shape.
     """
-    a, b, rows = _wcorr_inputs(a, b, weights)
+    same = a is b
+    a, b, rows = _wcorr_inputs(a, b, weights, causal)
+    if causal:
+        min_samples = _check_min_samples(min_samples, True)
+        _check_causal_rows(rows)
+        a = _causal_clean(a)
+        b = a if same else _causal_clean(b)
     if symmetric and a.shape != b.shape:
         raise ValueError(
             "symmetric=True requires a and b of the same shape; "
@@ -1485,7 +2352,7 @@ def _corr_row_blocks(a, b, weights, symmetric, rows_per_block=None):
     T, Ka = a.shape
     Kb = b.shape[1]
 
-    if np.all(rows.support == 1):
+    if np.all(rows.support == 1) and not causal:
         za, zb = _delta_zscores(a, b, rows)
         step = int(rows_per_block or _wcorr_block_rows(T, Kb))
 
@@ -1498,8 +2365,13 @@ def _corr_row_blocks(a, b, weights, symmetric, rows_per_block=None):
 
         return delta_blocks()
 
-    rows.zero_rows(rows.support < 3)
-    state = _wcorr_setup(a, b, rows, symmetric)
+    if causal:
+        state = _causal_setup(a, b, rows, symmetric, min_samples)
+        warmup = ~state["defined"]
+    else:
+        rows.zero_rows(rows.support < 3)
+        state = _wcorr_setup(a, b, rows, symmetric)
+        warmup = None
     step = int(rows_per_block or _wcorr_block_rows(T, Kb, state["n_products"]))
     active = state["active"]
 
@@ -1509,12 +2381,14 @@ def _corr_row_blocks(a, b, weights, symmetric, rows_per_block=None):
             r, undefined, zero_all, few_any = _wcorr_block(state, i0, i1, 0)
             if symmetric:
                 _symmetrize_block(r, undefined, i0)
+            if warmup is not None:
+                r[warmup] = np.nan
             yield i0, i1, r.transpose(1, 2, 0), active & zero_all, active & few_any
 
     return blocks()
 
 
-def wcorr(a, b, weights):
+def wcorr(a, b, weights, *, causal=False, min_samples=None):
     """
     Compute kernel-weighted correlations between two sets of observations.
 
@@ -1598,6 +2472,50 @@ def wcorr(a, b, weights):
     kernel also weights the covariance and variance sums.  Numerical results
     therefore differ from 0.2.0.
 
+    With ``causal=True`` nothing computed for timepoint ``t`` reads a sample
+    after ``t``: the correlations at ``t`` are unchanged (to 1e-9) when the
+    samples after ``t`` are replaced by any values, NaN and inf included, or
+    removed (and, when the kernel gives ``t`` itself no weight, when the
+    samples at ``t`` change).  Replacing later samples changes no bit of
+    an earlier timepoint; removing them changes the shapes of the last
+    sums and so their round-off (measured: at most 6e-13, on series with
+    an offset, a random walk, and steps of up to 1e8 standard
+    deviations).  The kernel must give no weight to later timepoints.  The estimate is the same formula, with these differences:
+
+    - Data are centered, a group of 16 timepoints at a time (more for a
+      kernel that weights more than 512 timepoints), on the kernel-weighted
+      mean of each feature at the group's first timepoint (where that
+      timepoint has no weighted sample of the feature: the mean of its
+      samples before the group among those the group weights, or its first
+      sample), not on the mean over all timepoints; the 1e-10 rule above
+      compares the variance with the kernel-weighted mean square about that
+      reference.  A correlation does not depend on the reference; it only
+      conditions the sums.
+    - A feature whose kernel-weighted standard deviation at a timepoint is
+      below 1e-9 times the magnitude of its kernel-weighted mean also
+      counts as having zero variance there: a feature that is constant up
+      to the round-off of whatever computed it.
+    - A timepoint is computed with the sums for complete data when none of the
+      timepoints it weights has a NaN sample, and with pairwise sums
+      otherwise, whatever the later samples are.  A timepoint where ``a``
+      or ``b`` has no sample at all has no weight in any row.
+    - Infinite samples and samples above 1e150 in magnitude are missing
+      data, like NaN.
+    - A timepoint with fewer than 3 observed samples with non-zero weight
+      is undefined: all its correlations are NaN (the diagonal included),
+      not 0; so is, with ``min_samples``, a timepoint whose effective
+      sample size ``(sum |w|)**2 / sum w**2`` over the observed timepoints
+      of its kernel row is below it.  A timepoint counts as observed when
+      ``a`` and ``b`` each have at least one sample there.  Other undefined
+      entries are 0, as without ``causal``: constant features, and pairs of
+      features with fewer than 3 common samples.
+    - ``a`` and ``b`` are an autocorrelation (diagonal set to 1) only when
+      they are the same object; equal values in two arrays are not compared.
+    - A delta kernel raises ``ValueError`` (its z-scores use every
+      timepoint).  A series of one timepoint is not a delta kernel, and a
+      kernel row without weight is an undefined timepoint (NaN), not an
+      error: every prefix of a series can be computed.
+
     Parameters
     ----------
     a : numpy.ndarray
@@ -1607,12 +2525,25 @@ def wcorr(a, b, weights):
     weights : numpy.ndarray
         Kernel matrix with T columns; row ``t`` holds the weights used to
         estimate at timepoint ``t``.  Usually T x T.
+    causal : bool, optional
+        True: the causal estimator described above.  ``weights`` must have
+        no non-zero entry above its diagonal (for example a kernel function
+        called with ``direction='backward'``).  Keyword only.  Default:
+        False.
+    min_samples : float or None, optional
+        With ``causal=True``, the effective sample size
+        ``(sum |w|)**2 / sum w**2`` a timepoint needs (a number >= 1,
+        compared with a relative tolerance of 1e-12, so three equal weights
+        are 3 samples); timepoints below it are NaN too (every timepoint,
+        when no row of the array reaches the number).  Keyword only.
+        Default: None (only the rule of 3 samples).
 
     Returns
     -------
     numpy.ndarray
         Array of shape (Ka, Kb, weights.shape[0]); entry ``[i, j, t]`` is the
         correlation between ``a[:, i]`` and ``b[:, j]`` at timepoint ``t``.
+        With ``causal=True`` the undefined timepoints are NaN.
 
     Warns
     -----
@@ -1625,13 +2556,18 @@ def wcorr(a, b, weights):
         samples, some pairs of features have fewer than 3 observed samples with
         non-zero kernel weight (those correlations are undefined and set to 0);
         and timepoints with zero kernel-weighted variance in every feature
-        (their correlations are set to 0).  Never for a delta kernel.
+        (their correlations are set to 0).  Never for a delta kernel.  With
+        ``causal=True`` the first of these names the undefined timepoints
+        (returned as NaN).
 
     Raises
     ------
     ValueError
-        If the inputs do not have T rows / T kernel columns, or if every row of
-        the kernel is zero.
+        If the inputs do not have T rows / T kernel columns, or (without
+        ``causal``) if every row of the kernel is zero.  With ``causal=True``: if the kernel has weight
+        above its diagonal or is a delta kernel, or if ``min_samples`` is
+        not None or a finite number >= 1.  If ``min_samples`` is given
+        without ``causal=True``.
 
     Examples
     --------
@@ -1646,19 +2582,59 @@ def wcorr(a, b, weights):
     >>> uniform = tc.wcorr(x, x, tc.uniform_weights(100))
     >>> bool(np.allclose(uniform[:, :, 10], np.corrcoef(x.T)))
     True
+
+    The causal estimator: timepoint 60 does not depend on later samples.
+
+    The first 2 timepoints have fewer than 3 samples and are NaN (a
+    ``UserWarning`` says so).
+
+    >>> past = tc.gaussian_weights(100, {"var": 50}, direction="backward")
+    >>> r = tc.wcorr(x, x, past, causal=True)
+    >>> bool(np.isnan(r[:, :, :2]).all()), bool(np.isnan(r[:, :, 2:]).any())
+    (True, False)
+    >>> y = x.copy()
+    >>> y[61:] = 1000.0
+    >>> bool(np.array_equal(tc.wcorr(y, y, past, causal=True)[:, :, 60], r[:, :, 60]))
+    True
     """
-    return _wcorr(a, b, weights)
+    min_samples = _check_min_samples(min_samples, causal)
+    return _wcorr(a, b, weights, causal=causal, min_samples=min_samples)
 
 
-def _wcorr(a, b, weights, warn=True, return_cancelled=False):
+def _wcorr(a, b, weights, warn=True, return_cancelled=False, causal=False,
+           min_samples=None, autocorrelation=None):
     """
     ``wcorr``.  With ``warn=False`` the warning is left to the caller; with
     ``return_cancelled=True`` the masks ``(cancelled, sparse)`` of the
     timepoints whose correlations all cancelled and of those where some pair
     has fewer than 3 observed samples (see ``_wcorr_blocks``) are returned too:
     ``(out, (cancelled, sparse))``.
+
+    ``causal=True`` is the causal estimator (see ``wcorr``): the masks are
+    then ``(cancelled, sparse, warmup)``, ``warmup`` marking the undefined
+    rows (NaN in ``out``).  ``autocorrelation`` says whether ``b`` is ``a``
+    (None: whether they are the same object; comparing their values would
+    read every timepoint).
     """
-    a, b, rows = _wcorr_inputs(a, b, weights)
+    same = a is b
+    a, b, rows = _wcorr_inputs(a, b, weights, causal)
+    if causal:
+        min_samples = _check_min_samples(min_samples, True)
+        _check_causal_rows(rows)
+        a = _causal_clean(a)
+        b = a if same else _causal_clean(b)
+        if autocorrelation is None:
+            autocorrelation = same
+        out, cancelled, sparse, warmup = _wcorr_blocks(
+            a, b, rows, autocorrelation, True, min_samples
+        )
+        del rows
+        if warn:
+            message = _estimator_message(weights, cancelled, sparse, warmup,
+                                         min_samples)
+            if message is not None:
+                _warn_user(message)
+        return (out, (cancelled, sparse, warmup)) if return_cancelled else out
     if np.all(rows.support == 1):
         out = _delta_wcorr(a, b, rows)
         none = np.zeros(rows.shape[0], dtype=bool)
@@ -1668,7 +2644,7 @@ def _wcorr(a, b, weights, warn=True, return_cancelled=False):
     autocorrelation = a is b or (
         a.shape == b.shape and np.array_equal(a, b, equal_nan=True)
     )
-    out, cancelled, sparse = _wcorr_blocks(a, b, rows, autocorrelation)
+    out, cancelled, sparse, _ = _wcorr_blocks(a, b, rows, autocorrelation)
     del rows
     if warn:
         message = _estimator_message(weights, cancelled, sparse)
@@ -1797,7 +2773,8 @@ def _fisher_mean(r, axis):
     return np.where(nan, np.nan, out)
 
 
-def wisfc(data, timepoint_weights, subject_weights=None):
+def wisfc(data, timepoint_weights, subject_weights=None, *, causal=False,
+          min_samples=None):
     """
     Compute weighted inter-subject functional connectivity (ISFC).
 
@@ -1829,6 +2806,23 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         defined (``K <= 2`` features give fewer than 3 matrix entries) or is
         at most 1e-5 in magnitude for every other subject, the other subjects
         are weighted equally.
+    causal : bool, optional
+        True: the causal estimator (see ``wcorr``): row ``t`` of the output
+        is unchanged (to 1e-9) when the samples after ``t`` are replaced by
+        any values, NaN and inf included, or removed.  Every kernel must
+        give no weight to later timepoints (for example a kernel function
+        called with ``direction='backward'``); infinite samples and samples
+        above 1e150 in magnitude are missing data; undefined (warm-up)
+        timepoints are rows of NaN, not 0.  ``subject_weights``
+        must be given: the default weights are computed from every
+        timepoint.  Keyword only.  Default: False.
+    min_samples : float or None, optional
+        With ``causal=True``, a timepoint with fewer than 3 weighted
+        timepoints where the subject and its reference each have a sample
+        is a row of NaN.  A number (>= 1) is also the effective sample size
+        ``(sum |w|)**2 / sum w**2`` a timepoint needs over those timepoints
+        (rows below it are NaN; every row, when no row of the array reaches
+        the number).  Keyword only.  Default: None.
 
     Returns
     -------
@@ -1836,6 +2830,7 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         One (T, K * (K + 1) / 2) array of vectorized correlation matrices per
         subject (see ``mat2vec``); a single array if ``data`` is an array.
         Row ``t`` is estimated with the kernel ``timepoint_weights[t, :]``.
+        With ``causal=True`` the undefined timepoints are rows of NaN.
 
     Warns
     -----
@@ -1854,14 +2849,18 @@ def wisfc(data, timepoint_weights, subject_weights=None):
         an undefined entry ``C[i, j]`` is averaged (in Fisher z space) with
         ``C[j, i]``, which can be defined, so the returned value need not be 0;
         a feature with zero kernel-weighted variance on one side only (subject
-        or reference) is treated the same way.
+        or reference) is treated the same way.  With ``causal=True`` the
+        first of these names the undefined timepoints (returned as NaN).
 
     Raises
     ------
     ValueError
         If the subjects differ in shape, the kernel does not have T columns,
         every row of the kernel is zero, or a list of kernels does not have
-        one kernel per subject.
+        one kernel per subject.  With ``causal=True``: if a
+        kernel has weight above its diagonal or is a delta kernel, if ``subject_weights`` is None, or if
+        ``min_samples`` is not None or a finite number >= 1.  If
+        ``min_samples`` is given without ``causal=True``.
 
     Notes
     -----
@@ -1894,8 +2893,18 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     (3, (50, 10))
     """
     if type(data) != list:
-        return wisfc([data], timepoint_weights, subject_weights=subject_weights)[0]
+        return wisfc([data], timepoint_weights, subject_weights=subject_weights,
+                     causal=causal, min_samples=min_samples)[0]
 
+    min_samples = _check_min_samples(min_samples, causal)
+    if causal:
+        if subject_weights is None:
+            raise ValueError(
+                "causal=True: the default subject_weights of wisfc are computed "
+                "from every timepoint of the recording.  Pass subject_weights (a "
+                "number, or one row of weights per subject), or use isfc."
+            )
+        data = [_causal_clean(d) for d in data]
     S = len(data)
     subject_weights = _subject_weight_matrix(data, subject_weights)
 
@@ -1904,23 +2913,55 @@ def wisfc(data, timepoint_weights, subject_weights=None):
     corrs = []
     cancelled = [False] * len(kernels)
     sparse = [False] * len(kernels)
+    warmup = [False] * len(kernels) if causal else None
     for s, a in enumerate(data):
         g = group_of[s]
         b = _nan_weighted_mean(stacked, subject_weights[s, :])
-        wc, (c, few) = _wcorr(a, b, kernels[g], warn=False, return_cancelled=True)
+        if causal:
+            # whether the reference is the subject's own data is read from
+            # the weights; comparing the samples would read every timepoint
+            own = _own_reference(subject_weights[s, :], s)
+            wc, (c, few, undefined) = _wcorr(
+                a, a if own else b, kernels[g], warn=False, return_cancelled=True,
+                causal=True, min_samples=min_samples, autocorrelation=own,
+            )
+            warmup[g] = warmup[g] | undefined
+            symmetrize = not own
+        else:
+            wc, (c, few) = _wcorr(a, b, kernels[g], warn=False, return_cancelled=True)
+            symmetrize = not np.array_equal(a, b, equal_nan=True)
         cancelled[g] = cancelled[g] | c
         sparse[g] = sparse[g] | few
-        if not np.array_equal(a, b, equal_nan=True):
+        if symmetrize:
             wc = _fisher_symmetrize(wc)
         corrs.append(mat2vec(wc))
+        if causal:
+            # mat2vec sets NaN above the diagonal to 0: undefined rows are NaN
+            corrs[-1][undefined] = np.nan
         # free the (K, K, T) array before the next subject's is allocated
         del wc
 
     # one warning per call, covering every kernel
-    message = _kernels_message(kernels, group_of, cancelled, sparse)
+    message = _kernels_message(kernels, group_of, cancelled, sparse, warmup,
+                               min_samples)
     if message is not None:
         _warn_user(message)
     return corrs
+
+
+def _own_reference(weights, s, tol=1e-5):
+    """
+    True when ``_nan_weighted_mean`` with these subject weights returns
+    subject ``s``'s own data: after its rules (NaN weights 0, weights that
+    sum to 0 replaced by ones, magnitudes at most ``tol`` dropped) only
+    subject ``s`` has weight.
+    """
+    w = np.array(weights, dtype=np.float64, copy=True)
+    w[np.isnan(w)] = 0
+    if np.sum(w) == 0:
+        w = np.ones_like(w)
+    keep = np.abs(w) > tol
+    return bool(keep[s] and keep.sum() == 1)
 
 
 def _static_connectome(d, iu, rows_per_block):
@@ -2028,20 +3069,26 @@ def _subject_kernels(timepoint_weights, S):
     return kernels, group_of
 
 
-def _kernels_message(kernels, group_of, cancelled, sparse=None):
+def _kernels_message(kernels, group_of, cancelled, sparse=None, warmup=None,
+                     min_samples=None):
     """
     The one warning of a correlation call with one or several kernels, or None.
     With one kernel it is ``_estimator_message``; with several, each kernel's
     message is prefixed by the subjects that use it.  ``cancelled`` and ``sparse``
-    hold one mask (see ``_wcorr_blocks``) per kernel.
+    hold one mask (see ``_wcorr_blocks``) per kernel, as does ``warmup`` (the
+    causal estimator's undefined rows, see ``_estimator_message``).
     """
     if sparse is None:
         sparse = [None] * len(kernels)
+    if warmup is None:
+        warmup = [None] * len(kernels)
     if len(kernels) == 1:
-        return _estimator_message(kernels[0], cancelled[0], sparse[0])
+        return _estimator_message(kernels[0], cancelled[0], sparse[0], warmup[0],
+                                  min_samples)
     parts = []
     for g, kernel in enumerate(kernels):
-        message = _estimator_message(kernel, cancelled[g], sparse[g])
+        message = _estimator_message(kernel, cancelled[g], sparse[g], warmup[g],
+                                     min_samples)
         if message is not None:
             subjects = [s for s, k in enumerate(group_of) if k == g]
             label = "Subject" if len(subjects) == 1 else "Subjects"
@@ -2049,7 +3096,7 @@ def _kernels_message(kernels, group_of, cancelled, sparse=None):
     return " ".join(parts) if parts else None
 
 
-def isfc(data, timepoint_weights):
+def isfc(data, timepoint_weights, *, causal=False, min_samples=None):
     """
     Compute Inter-Subject Functional Connectivity (ISFC).
 
@@ -2075,6 +3122,21 @@ def isfc(data, timepoint_weights):
         data and to the reference it is correlated with (see
         ``timecorr(..., events=...)``).  Equal kernels in the list are
         grouped.
+    causal : bool, optional
+        True: the causal estimator (see ``wcorr``): row ``t`` of the output
+        is unchanged (to 1e-9) when the samples after ``t`` are replaced by
+        any values, NaN and inf included, or removed.  Every kernel must
+        give no weight to later timepoints (for example a kernel function
+        called with ``direction='backward'``); infinite samples and samples
+        above 1e150 in magnitude are missing data; undefined (warm-up)
+        timepoints are rows of NaN, not 0.  Keyword only.  Default: False.
+    min_samples : float or None, optional
+        With ``causal=True``, a timepoint with fewer than 3 weighted
+        timepoints where the subject and its reference each have a sample
+        is a row of NaN.  A number (>= 1) is also the effective sample size
+        ``(sum |w|)**2 / sum w**2`` a timepoint needs over those timepoints
+        (rows below it are NaN; every row, when no row of the array reaches
+        the number).  Keyword only.  Default: None.
 
     Returns
     -------
@@ -2083,7 +3145,8 @@ def isfc(data, timepoint_weights):
         array per subject, see ``mat2vec``), each showing correlations between
         that subject and the average of all others; a single array if
         ``data`` is an array.  Row ``t`` is estimated with the kernel
-        ``timepoint_weights[t, :]``.
+        ``timepoint_weights[t, :]``.  With ``causal=True`` the undefined
+        timepoints are rows of NaN.
 
     Warns
     -----
@@ -2109,7 +3172,10 @@ def isfc(data, timepoint_weights):
     ValueError
         If the subjects differ in shape, the kernel does not have T columns,
         every row of the kernel is zero, or a list of kernels does not have
-        one kernel per subject.
+        one kernel per subject.  With ``causal=True``: if a
+        kernel has weight above its diagonal or is a delta kernel, or if
+        ``min_samples`` is not None or a finite number >= 1.  If
+        ``min_samples`` is given without ``causal=True``.
 
     Notes
     -----
@@ -2133,12 +3199,14 @@ def isfc(data, timepoint_weights):
     (5, (100, 55))
     """
     if type(data) != list:
-        return isfc([data], timepoint_weights)[0]
+        return isfc([data], timepoint_weights, causal=causal,
+                    min_samples=min_samples)[0]
 
-    return wisfc(data, timepoint_weights, subject_weights=1 - np.eye(len(data)))
+    return wisfc(data, timepoint_weights, subject_weights=1 - np.eye(len(data)),
+                 causal=causal, min_samples=min_samples)
 
 
-def autofc(data, timepoint_weights):
+def autofc(data, timepoint_weights, *, causal=False, min_samples=None):
     """
     Compute auto-correlations within each subject's data.
 
@@ -2158,6 +3226,21 @@ def autofc(data, timepoint_weights):
         data and to the reference it is correlated with (see
         ``timecorr(..., events=...)``).  Equal kernels in the list are
         grouped.
+    causal : bool, optional
+        True: the causal estimator (see ``wcorr``): row ``t`` of the output
+        is unchanged (to 1e-9) when the samples after ``t`` are replaced by
+        any values, NaN and inf included, or removed.  Every kernel must
+        give no weight to later timepoints (for example a kernel function
+        called with ``direction='backward'``); infinite samples and samples
+        above 1e150 in magnitude are missing data; undefined (warm-up)
+        timepoints are rows of NaN, not 0.  Keyword only.  Default: False.
+    min_samples : float or None, optional
+        With ``causal=True``, a timepoint with fewer than 3 weighted
+        timepoints where the subject and its reference each have a sample
+        is a row of NaN.  A number (>= 1) is also the effective sample size
+        ``(sum |w|)**2 / sum w**2`` a timepoint needs over those timepoints
+        (rows below it are NaN; every row, when no row of the array reaches
+        the number).  Keyword only.  Default: None.
 
     Returns
     -------
@@ -2165,7 +3248,8 @@ def autofc(data, timepoint_weights):
         List of vectorized correlation matrices (one (T, K * (K + 1) / 2)
         array per subject, see ``mat2vec``), each showing within-subject
         correlations; a single array if ``data`` is an array.  Row ``t`` is
-        estimated with the kernel ``timepoint_weights[t, :]``.
+        estimated with the kernel ``timepoint_weights[t, :]``.  With
+        ``causal=True`` the undefined timepoints are rows of NaN.
 
     Warns
     -----
@@ -2187,7 +3271,10 @@ def autofc(data, timepoint_weights):
     ValueError
         If the subjects differ in shape, the kernel does not have T columns,
         every row of the kernel is zero, or a list of kernels does not have
-        one kernel per subject.
+        one kernel per subject.  With ``causal=True``: if a
+        kernel has weight above its diagonal or is a delta kernel, or if
+        ``min_samples`` is not None or a finite number >= 1.  If
+        ``min_samples`` is given without ``causal=True``.
 
     Examples
     --------
@@ -2200,9 +3287,11 @@ def autofc(data, timepoint_weights):
     (3, (100, 55))
     """
     if type(data) != list:
-        return autofc([data], timepoint_weights)[0]
+        return autofc([data], timepoint_weights, causal=causal,
+                      min_samples=min_samples)[0]
 
-    return wisfc(data, timepoint_weights, subject_weights=np.eye(len(data)))
+    return wisfc(data, timepoint_weights, subject_weights=np.eye(len(data)),
+                 causal=causal, min_samples=min_samples)
 
 
 def apply_by_row(corrs, f):
@@ -2333,7 +3422,11 @@ def tstat_combine(corrs, return_pvals=False):
     value in every matrix (zero variance across subjects, for example the
     diagonal of ``autofc`` results, where every value is 1) has t = +inf or
     -inf with the sign of that value (p = 0), or t = 0 (p = 1) when the value
-    is 0, with no warning.
+    is 0, with no warning.  Where the values of the matrices nearly coincide
+    the statistic is ill-conditioned: round-off of the correlations is
+    divided by a spread close to zero (with ``causal=True`` such entries
+    agree to about 1e-9 of their magnitude, not to 1e-9, when later rows
+    are removed; see ``timecorr``).
 
     Parameters
     ----------
@@ -2574,6 +3667,193 @@ def _pagerank_solve(B, b):
     if not _pagerank_solution_ok(B, b, r):
         return None
     return r
+
+
+def _model_reduce(corrs, rfun, ndims, return_model=False):
+    """
+    The model-based reduction of ``reduce`` (``rfun`` a model name or dict,
+    ``ndims`` checked).  ``return_model=True`` returns ``(reduced, fitted)``,
+    ``fitted`` a ``_FittedModel`` that reduces other rows with the model
+    fitted here.
+    """
+    arrays = corrs if isinstance(corrs, list) else [corrs]
+    n_features = arrays[0].shape[1]
+    if ndims is None:
+        # K(K+1)/2 features back to K columns
+        ndims = int(np.divide(np.sqrt(8 * n_features + 1) - 1, 2))
+
+    # a model cannot return more components than there are features or samples
+    n_samples = sum(a.shape[0] for a in arrays)
+    n_fit = min(ndims, n_features, n_samples)
+
+    if isinstance(rfun, dict) and "params" in rfun:
+        # hypertools deprecated 'params' in favor of 'kwargs': merge both
+        params = dict(rfun["params"] or {})
+        kwargs = dict(rfun.get("kwargs") or {})
+        clash = sorted(
+            k for k in set(params) & set(kwargs) if params[k] is not kwargs[k]
+            and params[k] != kwargs[k]
+        )
+        if clash:
+            raise ValueError(
+                f"rfun gives different values for {clash} in 'params' and "
+                "'kwargs'; give each model argument once."
+            )
+        rfun = {
+            **{k: v for k, v in rfun.items() if k not in ("params", "kwargs")},
+            "kwargs": {**kwargs, **params},
+        }
+
+    rfun = _umap_defaults(rfun)
+    model = None
+    if return_model:
+        red_corrs, model = hyp.reduce(corrs, reduce=rfun, ndims=n_fit,
+                                      random_state=0, return_model=True)
+    else:
+        red_corrs = hyp.reduce(corrs, reduce=rfun, ndims=n_fit, random_state=0)
+    if isinstance(corrs, list) and not isinstance(red_corrs, list):
+        # hypertools returns a bare array for a one-element list
+        red_corrs = [red_corrs]
+
+    if n_fit < ndims:
+        # Pad with zeros to match the requested output width
+        pad = ndims - n_fit
+        _warn_user(
+            f"reduce: the data supply at most {n_fit} components ({n_features} "
+            f"features, {n_samples} samples) but {ndims} were requested; the "
+            f"output is padded with {pad} zero column{'s' if pad > 1 else ''}."
+        )
+        if isinstance(red_corrs, list):
+            red_corrs = [
+                np.hstack((arr, np.zeros((arr.shape[0], pad)))) for arr in red_corrs
+            ]
+        else:
+            red_corrs = np.hstack((red_corrs, np.zeros((red_corrs.shape[0], pad))))
+
+    if return_model:
+        return red_corrs, _FittedModel(model, n_features, max(0, ndims - n_fit))
+    return red_corrs
+
+
+class _FitUnusable(ValueError):
+    """
+    A reducer could not be fitted to the training rows of a causal fit, or
+    its fit cannot be used on other rows (no defined row, a clustering
+    without a community of 2 members, a model that does not reproduce its
+    rows).  A ``ValueError`` for the caller; a refit of ``features`` that
+    raises it keeps the previous fit (``refit_every``).
+    """
+
+
+# the hypertools model names whose fitted estimator has ``components_`` (one
+# vector per output column): the models a refit can match to the fit before
+# (``features(..., refit_every=...)``)
+_COMPONENT_MODELS = (
+    "PCA", "IncrementalPCA", "SparsePCA", "MiniBatchSparsePCA", "FastICA",
+    "FactorAnalysis", "TruncatedSVD", "DictionaryLearning",
+    "MiniBatchDictionaryLearning",
+)
+
+
+# an output column of a fitted model is constant on its training rows when
+# its range there is at most this fraction of its largest magnitude, or
+# _FROZEN_ZERO_RTOL of the largest magnitude of the whole output (the
+# tolerances of summaries._Summary._warn_constant)
+_FROZEN_RTOL = 1e-9
+_FROZEN_ZERO_RTOL = 1e-12
+
+
+class _FittedModel:
+    """
+    A hypertools model fitted by ``_model_reduce``: ``model`` (the fitted
+    ``hypertools`` reducer; None when hypertools fitted none: it returns
+    data with no more columns than the components asked for as they are,
+    and ``apply`` is then the identity), the number of input columns
+    ``n_features`` and the number
+    of zero columns ``pad`` that ``reduce`` appends when the data supplied
+    fewer components than requested.  ``apply`` reduces other rows with it.
+
+    ``freeze_constants(outputs)`` (the model's outputs for its training
+    rows) records the output columns that are constant there up to
+    round-off: a range of at most ``_FROZEN_RTOL`` of the column's largest
+    magnitude, or ``_FROZEN_ZERO_RTOL`` of the largest magnitude of the
+    whole output (a component along which the training rows do not vary,
+    for example: its values are round-off of the others).  ``apply`` then
+    returns a value of such a column that lies within that tolerance of
+    the column's training mean as exactly that mean; other values are
+    returned as computed.  The rule reads the training rows and the row it
+    is applied to, nothing else, so it is causal; without it the next
+    order would correlate that round-off, which is not reproducible to
+    1e-9 when later rows are removed.
+    """
+
+    def __init__(self, model, n_features, pad=0):
+        # the model as a pickle restores it: a fitted model's arrays can be
+        # laid out differently in memory after pickling, which changes the
+        # round-off of its products, so a model and its unpickled copy
+        # would differ in the last bit
+        try:
+            model = pickle.loads(pickle.dumps(model))
+        except Exception:  # a model that cannot be pickled is used as it is
+            pass
+        self.model = model
+        self.n_features = int(n_features)
+        self.pad = int(pad)
+        self.constants = None  # (columns, their training means, tolerances)
+
+    @property
+    def estimator(self):
+        """The fitted scikit-learn model (None for the identity)."""
+        return getattr(self.model, "model_", self.model)
+
+    @property
+    def components(self):
+        """``components_`` of the fitted model, one vector per output
+        column, as a 2-D array; None when it has none."""
+        components = getattr(self.estimator, "components_", None)
+        if components is None:
+            return None
+        components = np.asarray(components, dtype=np.float64)
+        if components.ndim != 2 or components.shape[1] != self.n_features:
+            return None
+        return components
+
+    def freeze_constants(self, outputs):
+        stacked = np.vstack([np.asarray(o, dtype=np.float64) for o in outputs])
+        if not stacked.shape[0]:
+            return
+        largest = np.max(np.abs(stacked), axis=0)
+        tol = np.maximum(_FROZEN_RTOL * largest,
+                         _FROZEN_ZERO_RTOL * np.max(largest, initial=0.0))
+        columns = np.flatnonzero(np.ptp(stacked, axis=0) <= tol)
+        if columns.size:
+            self.constants = (columns, np.mean(stacked[:, columns], axis=0),
+                              tol[columns])
+
+    def apply(self, arrays):
+        """The rows of a list of (rows, n_features) arrays, reduced with the
+        fitted model (a list of arrays)."""
+        arrays = [np.asarray(a, dtype=np.float64) for a in arrays]
+        for a in arrays:
+            if a.ndim != 2 or a.shape[1] != self.n_features:
+                raise ValueError(
+                    f"the fitted model takes {self.n_features} columns; got an "
+                    f"array of shape {a.shape}."
+                )
+        if self.model is None:
+            out = [a.copy() for a in arrays]  # the identity
+        else:
+            out = hyp.reduce(arrays, reduce=self.model)
+            out = out if isinstance(out, list) else [out]
+            out = [np.asarray(o, dtype=np.float64) for o in out]
+        if self.pad:
+            out = [np.hstack((o, np.zeros((o.shape[0], self.pad)))) for o in out]
+        if self.constants is not None:
+            columns, means, tol = self.constants
+            for o in out:
+                values = o[:, columns]
+                o[:, columns] = np.where(np.abs(values - means) <= tol, means, values)
+        return out
 
 
 def reduce(corrs, rfun=None, ndims=None):
@@ -2887,56 +4167,7 @@ def reduce(corrs, rfun=None, ndims=None):
             )
         return out
 
-    arrays = corrs if isinstance(corrs, list) else [corrs]
-    n_features = arrays[0].shape[1]
-    if ndims is None:
-        # K(K+1)/2 features back to K columns
-        ndims = int(np.divide(np.sqrt(8 * n_features + 1) - 1, 2))
-
-    # a model cannot return more components than there are features or samples
-    n_samples = sum(a.shape[0] for a in arrays)
-    n_fit = min(ndims, n_features, n_samples)
-
-    if isinstance(rfun, dict) and "params" in rfun:
-        # hypertools deprecated 'params' in favor of 'kwargs': merge both
-        params = dict(rfun["params"] or {})
-        kwargs = dict(rfun.get("kwargs") or {})
-        clash = sorted(
-            k for k in set(params) & set(kwargs) if params[k] is not kwargs[k]
-            and params[k] != kwargs[k]
-        )
-        if clash:
-            raise ValueError(
-                f"rfun gives different values for {clash} in 'params' and "
-                "'kwargs'; give each model argument once."
-            )
-        rfun = {
-            **{k: v for k, v in rfun.items() if k not in ("params", "kwargs")},
-            "kwargs": {**kwargs, **params},
-        }
-
-    rfun = _umap_defaults(rfun)
-    red_corrs = hyp.reduce(corrs, reduce=rfun, ndims=n_fit, random_state=0)
-    if isinstance(corrs, list) and not isinstance(red_corrs, list):
-        # hypertools returns a bare array for a one-element list
-        red_corrs = [red_corrs]
-
-    if n_fit < ndims:
-        # Pad with zeros to match the requested output width
-        pad = ndims - n_fit
-        _warn_user(
-            f"reduce: the data supply at most {n_fit} components ({n_features} "
-            f"features, {n_samples} samples) but {ndims} were requested; the "
-            f"output is padded with {pad} zero column{'s' if pad > 1 else ''}."
-        )
-        if isinstance(red_corrs, list):
-            red_corrs = [
-                np.hstack((arr, np.zeros((arr.shape[0], pad)))) for arr in red_corrs
-            ]
-        else:
-            red_corrs = np.hstack((red_corrs, np.zeros((red_corrs.shape[0], pad))))
-
-    return red_corrs
+    return _model_reduce(corrs, rfun, ndims)
 
 
 def smooth(

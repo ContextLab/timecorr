@@ -147,14 +147,19 @@ class LagKernel:
         between timepoints in different blocks are 0.  The blocks are the
         runs of consecutive equal labels (a label that returns after another
         starts a new block); labels with a single block are stored as None.
+    lag_profile : callable or None
+        The function that gives the weights at any absolute lags (an integer
+        array), beyond ``T - 1`` too, when it is known (the built-in kernel
+        functions); ``helpers._kernel_reach`` reads it.
 
     The values equal those of the T x T matrix that ``timecorr`` builds from
     the kernel function and the same restrictions, entry for entry.
     """
 
     def __init__(self, profile, include="all", include_zero=True, exclude=None,
-                 labels=None):
+                 labels=None, lag_profile=None):
         self.profile = np.asarray(profile, dtype=np.float64)
+        self.lag_profile = lag_profile
         self.T = int(self.profile.shape[0])
         self.shape = (self.T, self.T)
         if include not in ("all", "backward", "forward"):
@@ -216,7 +221,7 @@ class LagKernel:
             else:
                 labels = self.labels
         return LagKernel(self.profile, self.include, self.include_zero, self.exclude,
-                         labels)
+                         labels, self.lag_profile)
 
     def same_as(self, other):
         """True when ``other`` is a LagKernel with the same weights."""

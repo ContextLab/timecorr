@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 
-__version__ = "0.3.1"
+__version__ = "0.4.0"
 
 from . import datasets
 from .helpers import (
@@ -39,6 +39,7 @@ from .helpers import (
 )
 from .events import segment
 from .higher_order import features, two_path_step
+from .model import FeaturesModel
 from .summaries import Communities, WeightedStrength
 from .simulate import (
     carrier_columns,

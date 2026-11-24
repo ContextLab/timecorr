@@ -5,6 +5,39 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `tc.simulate_hierarchy(..., factors="shared")`: one set of module series
+  `f` for every subject (the noise `z` stays private), so nodes of one module
+  are correlated across subjects, by `e_i e_j sqrt(g_a g_b)` for nodes `i`,
+  `j` of subjects `a`, `b`. `truth["factors"]` holds each subject's module
+  series. The default (`"private"`) output is unchanged.
+- Subject weights per feature: `tc.wisfc(subject_weights=W)` accepts `W` of
+  shape (subjects, subjects, features), the weight of each subject in each
+  subject's reference at each feature; in `tc.timecorr` and `tc.features` as
+  `cfun=functools.partial(tc.wisfc, subject_weights=W)`, also with
+  `causal=True` and in streamed steps. A feature of a subject where no
+  subject has weight has no reference: its entries with the other features
+  are the correlations of the subject's series there with the references of
+  those features, its diagonal entry and its entries with other such
+  features are 0, and one `UserWarning` counts the (subject, feature) pairs.
+  Matrix weights are unchanged.
+- `tc.distinct_subject_weights(labels)`: the weights per feature that leave
+  out of each subject's reference the subjects holding one of its own series
+  (labels of shape (subjects, features)), for subjects that can hold the same
+  series; with two or more subjects and no repeated label the result is
+  `tc.isfc`. New section in the
+  "Several subjects" tutorial.
+
+### Fixed
+
+- Docstrings of `tc.wcorr`, `tc.isfc`, `tc.wisfc` and `tc.autofc` still said
+  that causal rows are unchanged "to 1e-9" when later samples are replaced or
+  removed; since 0.4.0 they are unchanged bit for bit (removal: with the
+  built-in kernel functions). No change in behavior.
+
 ## [0.4.0] - 2026-11-24
 
 ### Added

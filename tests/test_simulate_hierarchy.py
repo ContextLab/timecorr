@@ -371,7 +371,9 @@ def test_shared_signs_change_the_private_draws_at_the_same_seed(shared):
 # --- factors: module series shared across subjects ---------------------------
 
 @pytest.mark.parametrize("shared", ["top", "all", "none"])
-def test_private_factors_are_the_default_output(shared):
+def test_private_factors_are_the_default_call(shared):
+    # that the default output is the one of earlier versions is pinned by
+    # test_private_signs_are_the_previous_output (stored values)
     data, truth = small(S=3, shared=shared)
     data_p, truth_p = small(S=3, shared=shared, factors="private")
     for x, y in zip(data, data_p):

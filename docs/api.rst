@@ -22,6 +22,7 @@ Dynamic correlations
    isfc
    wisfc
    autofc
+   distinct_subject_weights
 
 ``timecorr`` builds the kernel, restricts it (``include_timepoints``,
 ``include_zero``, ``exclude_timepoints``, and ``events``: see Events below), applies the correlation function
@@ -44,6 +45,30 @@ results differ from version 0.2.0 and from Eq. 4 of Owen, Chang & Manning
    subjects = [rng.standard_normal((100, 5)) for _ in range(4)]
    isfc = tc.timecorr(subjects, cfun=tc.isfc)               # list of 4 (100, 15) arrays
    group = tc.timecorr(subjects, cfun=tc.isfc, combine=tc.corrmean_combine)  # (100, 15)
+
+``wisfc`` takes the weight of every subject in every subject's reference: a
+subjects-by-subjects matrix or, with one weight per feature as well, an array
+of shape (subjects, subjects, features). ``distinct_subject_weights`` builds
+such an array from labels of what each subject holds at each feature, for
+subjects that can hold the same series (for example subjects drawn with
+replacement from a pool): a subject is left out of another's reference at
+the features where it holds one of that subject's series, so no series is
+correlated with a mean that contains it. In ``timecorr`` and ``features``
+the weights are bound with ``functools.partial`` (also with ``causal=True``);
+they are for data with as many features as the labels have columns, so in
+``features`` they fit the orders whose input has that width.
+
+.. code-block:: python
+
+   import functools
+
+   labels = [["a", "b", "c", "d", "e"],     # what each of the 4 subjects holds
+             ["a", "f", "g", "h", "i"],     # at each of the 5 features
+             ["j", "k", "l", "m", "n"],
+             ["o", "b", "p", "q", "r"]]
+   W = tc.distinct_subject_weights(labels)                  # (4, 4, 5)
+   cfun = functools.partial(tc.wisfc, subject_weights=W)
+   distinct = tc.timecorr(subjects, cfun=cfun)              # list of 4 (100, 15) arrays
 
 Higher-order features
 ---------------------
@@ -580,6 +605,12 @@ Simulation
    sim, truth = tc.simulate_data(datagen="block", K=8, T=200, order=2,
                                  return_corrs=True, set_random_seed=0)
    # truth["corrs"]: (200, 10) correlations among the 4 block products
+
+``simulate_hierarchy`` draws each subject's module series (``f``) and noise
+separately by default, so its subjects share coupling signals and no time
+series; with ``factors="shared"`` every subject has the same module series
+(``truth["factors"]``), and nodes of one module are correlated across
+subjects.
 
 Decoders
 --------

@@ -37,6 +37,9 @@ from .helpers import (
     _kernel_work_elements,
     _kernels_message,
     _nan_weighted_mean,
+    _no_reference_entries,
+    _no_reference_message,
+    _subject_reference,
     _own_reference,
     _subject_kernels,
     _subject_weight_matrix,
@@ -1339,7 +1342,7 @@ def _fisher_rows(R, Rt):
         flat[k0:k1] = _fisher_mean(np.stack([flat[k0:k1], flat_t[k0:k1]]), axis=0)
 
 
-def _unit_row_blocks(a, ref, kernel, symmetric, b, estimator=None):
+def _unit_row_blocks(a, ref, kernel, symmetric, b, estimator=None, empty=None):
     """
     Rows of one subject's (K, K, T') correlations as ``wisfc`` returns them
     (before ``mat2vec``), in blocks of b rows: ``(i0, i1, R, cancelled_all,
@@ -1351,7 +1354,9 @@ def _unit_row_blocks(a, ref, kernel, symmetric, b, estimator=None):
 
     ``estimator``: the keyword arguments of the causal estimator
     (``causal=True``, ``min_samples``), or None.  The timepoints it leaves
-    undefined are NaN in every block.
+    undefined are NaN in every block.  ``empty``: the mask of the nodes
+    without reference (weights per node), or None; their entries are set as
+    ``wisfc`` sets them (``helpers._no_reference_entries``).
     """
     estimator = estimator or {}
     if symmetric:
@@ -1369,6 +1374,8 @@ def _unit_row_blocks(a, ref, kernel, symmetric, b, estimator=None):
             undefined = np.isnan(R[0, 0]) | np.isnan(Rt[0, 0])
             R[:, :, undefined] = 0
             Rt[:, :, undefined] = 0
+        if empty is not None:
+            _no_reference_entries(R, Rt, empty, i0)
         _fisher_rows(R, Rt)
         del Rt
         if undefined is not None:
@@ -1428,7 +1435,6 @@ class _Units:
                     self.subjects, cfun.keywords["subject_weights"]
                 )
             self.stacked = np.stack(self.subjects, axis=2)
-        self._mean = _nan_weighted_mean
 
     def __len__(self):
         return len(self.subjects)
@@ -1444,9 +1450,10 @@ class _Units:
             return _unit_row_blocks(a, a, self.kernel(s), True, b)
         if self.weights is None:
             self.weights = _subject_weight_matrix(self.subjects, None, rows_per_block=b)
-        ref = self._mean(self.stacked, self.weights[s, :])
+        ref, empty = _subject_reference(self.stacked, self.weights[s])
         symmetric = bool(np.array_equal(a, ref, equal_nan=True))
-        return _unit_row_blocks(a, ref, self.kernel(s), symmetric, b)
+        return _unit_row_blocks(a, ref, self.kernel(s), symmetric, b,
+                                empty=empty)
 
     def _defined_blocks(self, s, b):
         """``blocks`` of the causal estimator, as ``wisfc(..., causal=True)``
@@ -1455,9 +1462,10 @@ class _Units:
         samples would read every timepoint)."""
         a = self.subjects[s]
         own = self.kind == "auto" or _own_reference(self.weights[s, :], s)
-        ref = a if own else self._mean(self.stacked, self.weights[s, :])
+        ref, empty = (a, None) if own else _subject_reference(
+            self.stacked, self.weights[s])
         for i0, i1, R, cancelled, sparse in _unit_row_blocks(
-                a, ref, self.kernel(s), own, b, self.estimator):
+                a, ref, self.kernel(s), own, b, self.estimator, empty=empty):
             undefined = np.isnan(R[0, 0])
             if undefined.any():
                 R[:, :, undefined] = 0

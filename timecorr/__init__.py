@@ -8,6 +8,7 @@ from .helpers import (
     boxcar_params,
     boxcar_weights,
     corrmean_combine,
+    distinct_subject_weights,
     eye_params,
     eye_weights,
     format_data,

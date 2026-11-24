@@ -73,6 +73,7 @@ from .helpers import (
     _fisher_workspace,
     _kernel_work_elements,
     _lag_kernel,
+    _no_reference_message,
     _wcorr_block_rows,
     _warn_user,
     _zscore_columns,
@@ -776,6 +777,12 @@ def _run_streamed(subjects, summary, cfun, kernels, *, max_memory_gb, order, pat
         record[path] = frozen
     if message is not None:
         _warn_user(message)
+    if _fixed_weights_wisfc(cfun):
+        # as wisfc warns: nodes of subjects that the weights leave without
+        # reference
+        message = _no_reference_message(cfun.keywords["subject_weights"])
+        if message is not None:
+            _warn_user(message)
     return out
 
 

@@ -455,3 +455,105 @@ def test_data_are_the_documented_mixture_of_the_returned_factors():
 def test_factors_validation():
     with pytest.raises(ValueError, match="factors must be 'private' or 'shared'"):
         small(factors="all")
+
+
+# --- volatility: one multiplier common to every subject and node -------------
+
+COMBOS = [(sh, sg, fa) for sh in ("top", "all", "none")
+          for sg in ("private", "shared") for fa in ("private", "shared")]
+
+
+def test_no_volatility_is_the_default_call():
+    data, truth = small(S=3)
+    data_n, truth_n = small(S=3, volatility=None)
+    for a, b in zip(data, data_n):
+        assert np.array_equal(a, b)
+    assert np.array_equal(truth["volatility"], np.ones(len(data[0])))
+    assert np.array_equal(truth_n["volatility"], np.ones(len(data[0])))
+
+
+@pytest.mark.parametrize("shared,signs,factors", COMBOS)
+def test_volatility_multiplies_the_output_without_it(shared, signs, factors):
+    """Same seed: every other draw is unchanged, the data are multiplied."""
+    kw = dict(S=3, shared=shared, signs=signs, factors=factors)
+    data, truth = small(**kw)
+    data_v, truth_v = small(volatility=0.5, volatility_tau=10, **kw)
+    v = truth_v["volatility"]
+    assert v.shape == (len(data[0]),)
+    assert np.all(v > 0) and np.ptp(v) > 0
+    for a, b in zip(data, data_v):
+        assert np.array_equal(b, a * v[:, None])
+    assert np.array_equal(truth["signs"], truth_v["signs"])
+    for a, b in zip(truth["factors"], truth_v["factors"]):
+        assert np.array_equal(a, b)
+    for sa, sb in zip(truth["signals"], truth_v["signals"]):
+        for a, b in zip(sa, sb):
+            assert np.array_equal(a, b)
+
+
+@pytest.mark.parametrize("sd", [0.1, 0.5, 1.5])
+def test_volatility_scale(sd):
+    """log v has standard deviation `volatility`; mean(v**2) is 1."""
+    _, truth = small(T=4000, volatility=sd, volatility_tau=25)
+    v = truth["volatility"]
+    assert abs(np.log(v).std() - sd) < 1e-12
+    assert abs(np.mean(v ** 2) - 1) < 1e-12
+
+
+def test_volatility_timescale():
+    """Autocorrelation of log v at lag k is exp(-k**2 / (4 tau**2))."""
+    tau = 20
+    _, truth = tc.simulate_hierarchy(
+        S=1, T=200000, nodes_per_module=2, branching=(), n_top=2, taus=(5,),
+        set_random_seed=4, volatility=0.5, volatility_tau=tau)
+    h = np.log(truth["volatility"])
+    h = h - h.mean()
+    for k in (tau // 2, tau, 2 * tau):
+        r = np.mean(h[:-k] * h[k:]) / np.mean(h * h)
+        assert abs(r - np.exp(-k ** 2 / (4 * tau ** 2))) < 0.05
+
+
+def test_volatility_clusters_squared_values():
+    """Squared values are autocorrelated with the multiplier and not without."""
+    kw = dict(S=2, T=40000, nodes_per_module=3, branching=(2,), n_top=2,
+              taus=(5, 50), set_random_seed=9)
+
+    def lag1(data):
+        out = []
+        for x in data:
+            q = x ** 2 - (x ** 2).mean(0)
+            out.append(np.mean(np.sum(q[:-1] * q[1:], 0) / np.sum(q * q, 0)))
+        return np.mean(out)
+
+    plain = lag1(tc.simulate_hierarchy(**kw)[0])
+    clustered = lag1(tc.simulate_hierarchy(volatility=0.5, volatility_tau=50, **kw)[0])
+    assert abs(plain) < 0.01
+    assert clustered > 0.2
+
+
+def test_volatility_is_reproducible_and_a_copy():
+    a, ta = small(volatility=0.3)
+    b, tb = small(volatility=0.3)
+    assert np.array_equal(ta["volatility"], tb["volatility"])
+    before = a[0].copy()
+    ta["volatility"][:] = 7
+    assert np.array_equal(a[0], before)
+
+
+@pytest.mark.parametrize("bad", [0, -0.5, np.nan, np.inf, True, "0.5", (0.5, 10)])
+def test_volatility_validation(bad):
+    with pytest.raises(ValueError, match="volatility must be None or a positive"):
+        small(volatility=bad)
+
+
+@pytest.mark.parametrize("bad", [0, -3, 2.5, "10", True])
+def test_volatility_tau_validation(bad):
+    with pytest.raises(ValueError, match="volatility_tau"):
+        small(volatility=0.5, volatility_tau=bad)
+
+
+def test_volatility_tau_needs_enough_timepoints():
+    with pytest.raises(ValueError, match="8 \\* volatility_tau"):
+        small(T=400, volatility=0.5, volatility_tau=51)
+    small(T=400, volatility=0.5, volatility_tau=50)
+    small(T=400, volatility_tau=51)  # not used without volatility

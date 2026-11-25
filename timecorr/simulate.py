@@ -1244,6 +1244,8 @@ def simulate_hierarchy(
     set_random_seed=None,
     signs="private",
     factors="private",
+    volatility=None,
+    volatility_tau=50,
 ):
     """
     Simulate nodes in nested groups of any depth with time-varying coupling.
@@ -1268,11 +1270,17 @@ def simulate_hierarchy(
       subject, or once for every subject with ``signs="shared"``).  ``f``
       (one series per module) is drawn per subject, or once for every
       subject with ``factors="shared"``; ``z`` is always private.
+    - With ``volatility`` given, every ``x_i(t)`` of every subject is
+      multiplied by one positive series ``v(t)``, with ``log v(t)`` a
+      ``smooth(volatility_tau)`` series times ``volatility`` plus a constant
+      that makes the mean of ``v**2`` equal to 1.
 
     Siblings at level ``l`` share ``u`` of their parent with weight
     ``sqrt(s_{l+1})``, so their latent series ``a`` are correlated by about
     ``s_{l+1}`` over windows short compared with ``s_{l+1}``'s timescale;
-    each node has variance 1 whatever the signals.  With ``n = 2`` this is the
+    each node has variance 1 whatever the signals (without ``volatility``;
+    with it, variance ``v(t)**2`` at time ``t``, 1 on average, and the
+    correlations between nodes at each time are unchanged).  With ``n = 2`` this is the
     sustained coupling of ``simulate_nested`` (``s_2`` is ``h``, ``s_1`` is
     ``g``).  The model assumes that higher levels vary more slowly
     (increasing ``taus``); this is not checked.
@@ -1330,6 +1338,19 @@ def simulate_hierarchy(
         ``signs="shared"`` for the same sign in every subject).  As for
         ``signs``, every draw after the shared series differs from the
         ``"private"`` output at the same seed.  Default: ``"private"``.
+    volatility : float or None
+        ``None``: no multiplier (the output is the same as without this
+        option).  A positive number: the standard deviation of the
+        logarithm of a multiplier ``v(t)`` common to every subject and
+        node (volatility clustering shared by all series).  ``v`` is drawn
+        after everything else, so at the same seed the data are exactly
+        those without ``volatility`` times ``v`` and every other entry of
+        ``truth`` is the same.  Default: ``None``.
+    volatility_tau : int
+        Standard deviation, in samples, of the Gaussian smoothing of
+        ``log v``: its autocorrelation at lag ``k`` is
+        ``exp(-k**2 / (4 * volatility_tau**2))``.  With ``volatility``
+        given, ``T`` must be at least ``8 * volatility_tau``.  Default: 50.
 
     Returns
     -------
@@ -1345,7 +1366,9 @@ def simulate_hierarchy(
         ``s`` holds the node signs ``e`` of subject ``s`` (equal rows with
         ``signs="shared"``).  ``"factors"``: a list over subjects of
         ``(T, number of modules)`` arrays, the module series ``f`` of each
-        subject (equal arrays with ``factors="shared"``).  Every array is a
+        subject (equal arrays with ``factors="shared"``).  ``"volatility"``:
+        the multiplier ``v``, shape ``(T,)`` (ones without ``volatility``).
+        Every array is a
         separate copy, so
         changing one subject's signals (or ``"top"``) leaves the others
         unchanged.  ``"taus"`` and ``"branching"``: tuples.
@@ -1356,7 +1379,10 @@ def simulate_hierarchy(
         For a size that is not a positive integer, ``taus`` or
         ``branching`` that is not a sequence of positive integers, an empty
         ``taus``, ``len(branching) != len(taus) - 1``, ``T < 8 * max(taus)``,
-        or an unknown ``shared``, ``signs`` or ``factors``.
+        an unknown ``shared``, ``signs`` or ``factors``, a ``volatility``
+        that is not None or a positive finite number, a ``volatility_tau``
+        that is not a positive integer, or, with ``volatility`` given,
+        ``T < 8 * volatility_tau``.
     TypeError
         For a ``set_random_seed`` that is not None, a bool or an integer.
 
@@ -1400,6 +1426,23 @@ def simulate_hierarchy(
         raise ValueError(
             f"factors must be 'private' or 'shared'; got {factors!r}."
         )
+    volatility_tau = _check_positive_int("volatility_tau", volatility_tau)
+    if volatility is not None:
+        if (
+            not isinstance(volatility, numbers.Real)
+            or isinstance(volatility, bool)
+            or not np.isfinite(volatility)
+            or volatility <= 0
+        ):
+            raise ValueError(
+                "volatility must be None or a positive finite number; "
+                f"got {volatility!r}."
+            )
+        if T < 8 * volatility_tau:
+            raise ValueError(
+                f"T must be at least 8 * volatility_tau = {8 * volatility_tau} "
+                f"for the smoothing; got T={T}."
+            )
     rng = _make_rng(set_random_seed)
 
     counts = [n_top]  # counts[l-1]: number of level-l groups
@@ -1441,6 +1484,12 @@ def simulate_hierarchy(
         signals.append(s)
         node_signs.append(e.copy())
         series.append(f)
+    if volatility is None:
+        v = np.ones(T)
+    else:  # drawn last: every other draw is that of the call without it
+        v = np.exp(float(volatility) * _smooth(rng, T, 1, volatility_tau)[:, 0])
+        v /= np.sqrt(np.mean(v ** 2))
+        data = [x * v[:, None] for x in data]
     truth = {
         "groups": groups,
         "signals": signals,
@@ -1449,5 +1498,6 @@ def simulate_hierarchy(
         "branching": branching,
         "signs": np.array(node_signs),
         "factors": series,
+        "volatility": v,
     }
     return data, truth

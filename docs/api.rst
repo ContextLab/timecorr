@@ -610,7 +610,11 @@ Simulation
 separately by default, so its subjects share coupling signals and no time
 series; with ``factors="shared"`` every subject has the same module series
 (``truth["factors"]``), and nodes of one module are correlated across
-subjects.
+subjects.  ``volatility=0.5`` multiplies every series of every subject by one
+positive series ``v(t)`` (``truth["volatility"]``) whose logarithm has
+standard deviation 0.5 and varies over about ``volatility_tau`` samples:
+volatility clustering common to all series, which leaves the correlations
+between nodes at each time unchanged.
 
 Decoders
 --------

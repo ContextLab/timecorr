@@ -14,6 +14,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   are correlated across subjects, by `e_i e_j sqrt(g_a g_b)` for nodes `i`,
   `j` of subjects `a`, `b`. `truth["factors"]` holds each subject's module
   series. The default (`"private"`) output is unchanged.
+- `tc.simulate_hierarchy(..., volatility=sd, volatility_tau=50)`: every
+  series of every subject is multiplied by one positive series `v(t)`
+  (volatility clustering common to all series). `log v` is Gaussian-smoothed
+  white noise (standard deviation `volatility_tau` samples) with standard
+  deviation `sd`, and the mean of `v**2` is 1. `v` is drawn last, so at the
+  same seed the data are exactly those without `volatility` times `v`.
+  `truth["volatility"]` holds `v` (ones by default). The default (`None`)
+  output is unchanged.
 - Subject weights per feature: `tc.wisfc(subject_weights=W)` accepts `W` of
   shape (subjects, subjects, features), the weight of each subject in each
   subject's reference at each feature; in `tc.timecorr` and `tc.features` as
